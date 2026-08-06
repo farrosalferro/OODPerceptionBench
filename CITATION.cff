@@ -1,0 +1,119 @@
+cff-version: 1.2.0
+message: "If you use OOD-PerceptionBench, please cite both the software and the paper."
+title: "OOD-PerceptionBench"
+abstract: >-
+  A closed-loop CARLA benchmark that separates visual (appearance) from
+  geometric (shape/size) out-of-distribution shifts for end-to-end driving
+  policies, over 475 routes in three interaction categories, with per-route
+  baseline records for 17 published models.
+type: software
+version: "0.9.0"
+date-released: "2026-08-03"
+license: MIT
+repository-code: "https://github.com/farrosalferro/OODPerceptionBench"
+url: "https://github.com/farrosalferro/OODPerceptionBench"
+
+# ---------------------------------------------------------------------------
+# VERSION STAMP (coordinator standing rule 1)
+# v0.9.0 corresponds to arXiv v1 of the paper below. v1.0.0 will correspond to
+# arXiv v2, after the non-redistributable props are replaced and the affected
+# routes re-run. Scores from the two versions are not comparable on those props.
+# ---------------------------------------------------------------------------
+
+authors:
+  - family-names: "Alferro"
+    given-names: "Farros"
+    affiliation: "Tohoku University"
+  - family-names: "Hosoya"
+    given-names: "Yusuke"
+    affiliation: "Tohoku University"
+  - family-names: "Okatani"
+    given-names: "Takayuki"
+    affiliation: "Tohoku University; RIKEN Center for Advanced Intelligence Project"
+
+keywords:
+  - autonomous-driving
+  - out-of-distribution
+  - closed-loop-evaluation
+  - CARLA
+  - benchmark
+  - end-to-end-driving
+
+preferred-citation:
+  type: article
+  # PROVISIONAL — title is the working title and is pending final sign-off.
+  title: >-
+    Texture-Robust, Geometry-Fragile: A Hierarchical Out-of-Distribution
+    Perception Benchmark for End-to-End Driving
+  authors:
+    - family-names: "Alferro"
+      given-names: "Farros"
+      affiliation: "Tohoku University"
+    - family-names: "Hosoya"
+      given-names: "Yusuke"
+      affiliation: "Tohoku University"
+    - family-names: "Okatani"
+      given-names: "Takayuki"
+      affiliation: "Tohoku University; RIKEN Center for Advanced Intelligence Project"
+  year: 2026
+  journal: "arXiv preprint"
+  # ---------------------------------------------------------------------------
+  # PLACEHOLDER — replace both lines below with the real arXiv ID at submission
+  # time, and bump `version:` above only if the record set itself changed.
+  #   identifiers:
+  #     - type: other
+  #       value: "arXiv:XXXX.XXXXX"
+  #   url: "https://arxiv.org/abs/XXXX.XXXXX"
+  # ---------------------------------------------------------------------------
+  notes: "arXiv identifier not yet assigned; see PLACEHOLDER note in CITATION.cff."
+
+references:
+  - type: conference-paper
+    title: >-
+      Bench2Drive: Towards Multi-Ability Benchmarking of Closed-Loop
+      End-To-End Autonomous Driving
+    authors:
+      - family-names: "Jia"
+        given-names: "Xiaosong"
+      - family-names: "Yang"
+        given-names: "Zhenjie"
+      - family-names: "Li"
+        given-names: "Qifeng"
+      - family-names: "Zhang"
+        given-names: "Zhiyuan"
+      - family-names: "Yan"
+        given-names: "Junchi"
+    collection-title: >-
+      Advances in Neural Information Processing Systems,
+      Datasets and Benchmarks Track
+    year: 2024
+    url: "https://arxiv.org/abs/2406.03877"
+  - type: conference-paper
+    title: "CARLA: An Open Urban Driving Simulator"
+    authors:
+      - family-names: "Dosovitskiy"
+        given-names: "Alexey"
+      - family-names: "Ros"
+        given-names: "German"
+      - family-names: "Codevilla"
+        given-names: "Felipe"
+      - family-names: "Lopez"
+        given-names: "Antonio"
+      - family-names: "Koltun"
+        given-names: "Vladlen"
+    collection-title: "Proceedings of the 1st Annual Conference on Robot Learning"
+    year: 2017
+    url: "https://arxiv.org/abs/1711.03938"
+  - type: conference-paper
+    title: "Hidden Biases of End-to-End Driving Models"
+    authors:
+      - family-names: "Jaeger"
+        given-names: "Bernhard"
+      - family-names: "Chitta"
+        given-names: "Kashyap"
+      - family-names: "Geiger"
+        given-names: "Andreas"
+    collection-title: >-
+      Proceedings of the IEEE/CVF International Conference on Computer Vision (ICCV)
+    year: 2023
+    url: "https://arxiv.org/abs/2306.07957"

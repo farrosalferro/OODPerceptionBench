@@ -1,0 +1,43 @@
+diff --git a/Bench2Drive/scenario_runner/srunner/tools/scenario_helper.py b/Bench2Drive/scenario_runner/srunner/tools/scenario_helper.py
+index 4aa03b6..123b8e7 100644
+--- a/Bench2Drive/scenario_runner/srunner/tools/scenario_helper.py
++++ b/Bench2Drive/scenario_runner/srunner/tools/scenario_helper.py
+@@ -802,6 +802,38 @@ def get_opposite_dir_lanes(waypoint):
+     return other_dir_wps
+ 
+ 
++DEFAULT_WALKER_EXTENT_X = 0.1877  # half-length of standard adult walker capsule (0.3754 / 2)
++
++
++def apply_leading_edge_offset(spawn_transform, actor_extent_x, reference_extent_x=DEFAULT_WALKER_EXTENT_X):
++    """
++    Shifts *spawn_transform* forward so that the OOD actor's leading edge
++    enters the lane at the same time as the reference (base) actor.
++
++    The offset pushes the actor forward (along spawn_transform's facing
++    direction) by the difference in bounding-box half-extents:
++
++        offset = actor_extent_x - reference_extent_x
++
++    A positive offset (OOD actor larger than base) moves the spawn point
++    toward the road, compensating for the observed start-lag of imported
++    blueprints whose pivot / physics origin sits further from the leading edge.
++
++    Args:
++        spawn_transform: carla.Transform to adjust (modified in-place).
++        actor_extent_x:  bounding_box.extent.x of the spawned OOD actor.
++        reference_extent_x: bounding_box.extent.x of the base actor
++                            (default: standard adult walker).
++    """
++    offset = actor_extent_x - reference_extent_x
++    if abs(offset) < 0.01:
++        return
++
++    fwd = spawn_transform.get_forward_vector()
++    spawn_transform.location.x += offset * fwd.x
++    spawn_transform.location.y += offset * fwd.y
++
++
+ class RotatedRectangle(object):
+ 
+     """

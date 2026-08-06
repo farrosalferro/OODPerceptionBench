@@ -1,0 +1,61 @@
+diff --git a/Bench2Drive/leaderboard/leaderboard/leaderboard_evaluator.py b/Bench2Drive/leaderboard/leaderboard/leaderboard_evaluator.py
+index 0aa615e..d00982f 100644
+--- a/Bench2Drive/leaderboard/leaderboard/leaderboard_evaluator.py
++++ b/Bench2Drive/leaderboard/leaderboard/leaderboard_evaluator.py
+@@ -207,9 +207,21 @@ class LeaderboardEvaluator(object):
+         self.carla_path = os.environ["CARLA_ROOT"]
+         args.port = find_free_port(args.port)
+         cmd1 = f"{os.path.join(self.carla_path, 'CarlaUE4.sh')} -RenderOffScreen -nosound -carla-rpc-port={args.port} -graphicsadapter={args.gpu_rank}"
+-        self.server = subprocess.Popen(cmd1, shell=True, preexec_fn=os.setsid)
++        # cmd1 = f"{os.path.join(self.carla_path, 'CarlaUE4.sh')} -nosound -carla-rpc-port={args.port} -graphicsadapter={args.gpu_rank}"
++        # Orphan-fix: removed preexec_fn=os.setsid so the CARLA subprocess
++        # inherits this Python process's PGID. When an outer orchestrator
++        # SIGKILLs the per-route bash wrapper's PGID, CARLA dies with it
++        # instead of orphaning (which previously caused VRAM pile-up on
++        # timeout-resubmit cycles). atexit now uses os.kill (by PID) since
++        # self.server.pid is no longer a PGID leader.
++        self.server = subprocess.Popen(cmd1, shell=True)
+         print(cmd1, self.server.returncode, flush=True)
+-        atexit.register(os.killpg, self.server.pid, signal.SIGKILL)
++        def _kill_carla_pid(_pid):
++            try:
++                os.kill(_pid, signal.SIGKILL)
++            except (ProcessLookupError, OSError):
++                pass
++        atexit.register(_kill_carla_pid, self.server.pid)
+         time.sleep(60)
+             
+         attempts = 0
+@@ -364,10 +376,13 @@ class LeaderboardEvaluator(object):
+                 self._ros1_server = ROS1Server()
+                 self._ros1_server.start()
+ 
+-            self.agent_instance = agent_class_obj(args.host, args.port, args.debug)
++            # self.agent_instance = agent_class_obj(args.host, args.port, args.debug)
++            # for agent_data, can only input 2 args
++            self.agent_instance = agent_class_obj(args.agent_config, save_name)
+             self.agent_instance.set_global_plan(self.route_scenario.gps_route, self.route_scenario.route)
+             args.agent_config = args.agent_config + '+' + save_name
+-            self.agent_instance.setup(args.agent_config)
++            # self.agent_instance.setup(args.agent_config)
++            self.agent_instance.setup(args.agent_config, save_name)
+ 
+             # Check and store the sensors
+             if not self.sensors:
+@@ -504,9 +519,13 @@ class LeaderboardEvaluator(object):
+             self.statistics_manager.validate_and_write_statistics(self.sensors_initialized, crashed)
+         
+         if crashed:
+-            cmd2 = "ps -ef | grep '-graphicsadapter="+ str(args.gpu_rank) + "' | grep -v grep | awk '{print $2}' | xargs -r kill -9"
+-            server = subprocess.Popen(cmd2, shell=True, preexec_fn=os.setsid)
+-            atexit.register(os.killpg, server.pid, signal.SIGKILL)
++            # Stacking-safe crash cleanup: kill OUR CARLA by PID instead of
++            # greping by -graphicsadapter (which would also kill any co-tenant
++            # CARLA on the same physical GPU when multiple routes share a GPU).
++            try:
++                os.kill(self.server.pid, signal.SIGKILL)
++            except (ProcessLookupError, OSError):
++                pass
+ 
+         return crashed
+ 

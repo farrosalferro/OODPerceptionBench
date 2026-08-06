@@ -1,0 +1,178 @@
+name: overlay-setup
+
+# The overlay architecture (patches, not a fork) has exactly one failure mode:
+# patch rot. Upstream moves, a hunk stops applying, and every new user's setup
+# silently breaks. This workflow is the guard against that, so it is not
+# optional and must stay green.
+#
+# Default branch of this repository is `master`.
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+  schedule:
+    # Weekly: upstream can drift without anyone touching this repo.
+    - cron: "17 4 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: overlay-setup-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apply-patches:
+    name: setup.sh applies cleanly to the pinned upstream
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Check out OOD-PerceptionBench
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Show the pin
+        run: cat patches/UPSTREAM.txt
+
+      - name: Pinned SHA must still be reachable upstream
+        # If the upstream branch is ever force-pushed or rewritten, the pin
+        # becomes unfetchable and setup.sh breaks for every new user — with a
+        # clone error rather than a patch error, so it would otherwise look
+        # like an unrelated network problem.
+        run: |
+          set -euo pipefail
+          REPO=$(awk -F'= *' '/^CARLA_GARAGE_REPO/   {print $2}' patches/UPSTREAM.txt | tr -d '[:space:]')
+          BR=$(  awk -F'= *' '/^CARLA_GARAGE_BRANCH/ {print $2}' patches/UPSTREAM.txt | tr -d '[:space:]')
+          SHA=$( awk -F'= *' '/^CARLA_GARAGE_SHA/    {print $2}' patches/UPSTREAM.txt | tr -d '[:space:]')
+          git init -q "${RUNNER_TEMP}/pinprobe"
+          git -C "${RUNNER_TEMP}/pinprobe" remote add origin "$REPO"
+          git -C "${RUNNER_TEMP}/pinprobe" fetch -q --filter=blob:none origin "$BR"
+          git -C "${RUNNER_TEMP}/pinprobe" cat-file -e "${SHA}^{commit}" \
+            || { echo "::error::pinned SHA $SHA is not present upstream"; exit 1; }
+          git -C "${RUNNER_TEMP}/pinprobe" merge-base --is-ancestor "$SHA" FETCH_HEAD \
+            || { echo "::error::pinned SHA $SHA is no longer an ancestor of $BR (force-push?)"; exit 1; }
+          echo "pin $SHA is reachable and is an ancestor of $BR"
+
+      - name: Run setup.sh (clone pinned upstream + apply patches + post-conditions)
+        run: |
+          set -euo pipefail
+          ./setup.sh --upstream-dir "${RUNNER_TEMP}/carla_garage"
+
+      - name: Re-run setup.sh — must be idempotent and exit 0
+        run: ./setup.sh --upstream-dir "${RUNNER_TEMP}/carla_garage" --existing-checkout
+
+      - name: Verify-only must pass on the patched tree
+        run: ./setup.sh --upstream-dir "${RUNNER_TEMP}/carla_garage" --verify-only
+
+      - name: Every patch must reverse cleanly (proves nothing was fuzzed in)
+        run: |
+          set -euo pipefail
+          cd "${RUNNER_TEMP}/carla_garage"
+          for p in "${GITHUB_WORKSPACE}"/patches/*.patch; do
+            git apply --reverse --check --whitespace=nowarn "$p" \
+              || { echo "::error file=$p::patch does not reverse cleanly"; exit 1; }
+          done
+          echo "all patches reverse cleanly"
+
+      - name: Route set must be exactly 475 and fully covered by the patched scenarios
+        run: python3 tools/check_route_coverage.py --upstream-dir "${RUNNER_TEMP}/carla_garage"
+
+  repo-hygiene:
+    name: no cluster-specific paths, no secrets, metadata parses
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: No absolute cluster paths, hostnames, or private env names
+        run: python3 tools/check_no_cluster_paths.py
+
+      - name: CITATION.cff and VERSION parse
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 - <<'PY'
+          import yaml, sys
+          c = yaml.safe_load(open("CITATION.cff"))
+          assert c["cff-version"].startswith("1.2"), c["cff-version"]
+          assert c["title"] == "OOD-PerceptionBench", c["title"]
+          assert c["version"], "no version in CITATION.cff"
+          v = yaml.safe_load(open("VERSION"))
+          assert str(v["version"]) == str(c["version"]), (v["version"], c["version"])
+          assert v["corresponds_to"], "VERSION must name the arXiv version it binds to"
+          print("CITATION.cff and VERSION agree on version", c["version"])
+          PY
+
+      - name: NOTICE lists all six shipped assets, and flags the NonCommercial one
+        run: |
+          set -euo pipefail
+          for a in astronaut deliveryrobot boar concreteroadbarrier roadclosedbarricade firefighter; do
+            grep -q "$a" NOTICE || { echo "::error::NOTICE is missing asset $a"; exit 1; }
+          done
+          grep -q "CC BY-NC 4.0" NOTICE || { echo "::error::NOTICE must state the NonCommercial term"; exit 1; }
+          grep -q "NON-COMMERCIAL COMPONENT" NOTICE || { echo "::error::NOTICE must flag NC prominently, not only in the table"; exit 1; }
+          echo "NOTICE OK"
+
+      - name: No marketplace purchase recipe
+        # The rule is "do not send users to buy the twelve props we cannot ship" — ten of them
+        # additionally carry an AI-use prohibition, so pointing an AI benchmark's users at those
+        # listings walks them into the same restriction that closed the path for us.
+        #
+        # It is NOT "no source links anywhere": CC BY 4.0 *requires* attribution with a link to
+        # the source, and all six shipped assets are free Sketchfab downloads. Those six links
+        # live in assets/ATTRIBUTION.md and are checked separately, by name, below.
+        run: |
+          set -euo pipefail
+          if grep -rniE 'fab\.com/listings|cgtrader\.com/3d-models|buy (the|this) asset|purchase (the|this) asset' \
+               --exclude-dir=.git . ; then
+            echo "::error::a marketplace purchase recipe leaked into the repo"
+            exit 1
+          fi
+          # Sketchfab links are permitted ONLY as licence attribution for shipped assets.
+          # (`grep -rn` may or may not prefix "./" depending on how the path is given, so the
+          # filter tolerates both forms.)
+          if grep -rn 'sketchfab\.com/3d-models' --exclude-dir=.git . \
+               | grep -vE '^(\./)?assets/ATTRIBUTION\.md:' ; then
+            echo "::error::a Sketchfab source link appears outside assets/ATTRIBUTION.md"
+            exit 1
+          fi
+          n=$(grep -c 'sketchfab\.com/3d-models' assets/ATTRIBUTION.md)
+          if [ "$n" -ne 6 ]; then
+            echo "::error file=assets/ATTRIBUTION.md::expected exactly 6 source links (one per shipped asset), found $n"
+            exit 1
+          fi
+          echo "no purchase recipe found; 6 attribution links, all in assets/ATTRIBUTION.md"
+
+      - name: No source token for a non-redistributable prop
+        # Belt and braces on the check above: the two unlicensable walkers are free Sketchfab
+        # downloads too, so a "free asset" carve-out must not become a hole for them.
+        #
+        # The earlier version of this step spelled the upstream source slugs out in cleartext
+        # in order to grep for them. That published, in a file anyone can read, the exact
+        # association removing those assets was meant to suppress — which prop was a copy of
+        # what — and it had to exclude itself from its own scan, which is a hole.
+        #
+        # tools/check_forbidden_tokens.py does the same job from salted digests: no slug
+        # appears in the denylist, in the checker, or in this log. A hit is reported as a file
+        # and a line number only. It scans itself and its own denylist, so there is no
+        # exclusion to walk through, and it hard-fails (exit 2) rather than passing quietly if
+        # the denylist is missing, truncated or mis-salted.
+        run: python3 tools/check_forbidden_tokens.py
+
+      - name: Shell scripts pass syntax check
+        run: |
+          set -euo pipefail
+          find . -name '*.sh' -not -path './.git/*' -print0 | xargs -0 -r -n1 bash -n
+          echo "shell syntax OK"

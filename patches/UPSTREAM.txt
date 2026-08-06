@@ -1,0 +1,59 @@
+# Pinned upstream — OOD-PerceptionBench v0.9
+#
+# The overlay applies patches/*.patch on top of exactly ONE upstream checkout.
+# Bench2Drive is VENDORED inside carla_garage (2015 tracked files under
+# Bench2Drive/ at the pinned commit); it is NOT a git submodule, and there is no
+# .gitmodules. So there is nothing else to pin and nothing else to clone.
+
+CARLA_GARAGE_REPO   = https://github.com/autonomousvision/carla_garage.git
+CARLA_GARAGE_BRANCH = leaderboard_2
+CARLA_GARAGE_SHA    = beb3433407f42c1adced312b877a61fe04f338ba
+CARLA_GARAGE_DATE   = 2025-12-28   # commit date of the pinned SHA ("Added TFv6")
+
+PINNED_ON           = 2026-08-03
+PINNED_BY           = OOD-PerceptionBench release v0.9
+
+# Provenance of the delta these patches encode
+# --------------------------------------------
+# Fork point (merge-base of our private branch and origin/leaderboard_2):
+#   1a51f3a52ca1663f12a24f9738cfae631bdc53fb  2025-08-26  "Merge pull request #85 ..."
+# The pinned SHA beb3433 is the branch tip and the only commit ahead of the fork
+# point. Its sole change is docs/history.md, which no patch in this set touches,
+# so every patch here is byte-identical whether diffed against 1a51f3a or beb3433.
+#
+# CARLA: all results were produced with CARLA 0.9.15 (git tag 0.9.15). The
+# packaged build used for evaluation is stock at runtime; only build tooling was
+# modified upstream-side, and none of it affects simulation.
+#
+# ---------------------------------------------------------------------------
+# WHY THE PIN IS NOT THE CURRENT UPSTREAM TIP        (checked 2026-08-03)
+# ---------------------------------------------------------------------------
+# origin/leaderboard_2 has since advanced two commits past the pin:
+#
+#   cc28a50  Fix Bench2Drive integration for numpy>=1.24
+#            (removes deprecated np.float / np.int / np.bool / np.object aliases)
+#   72f39a6  Merge pull request #117 from lloitesa013/fix/numpy-1.24-compat-bench2drive
+#
+# Verified against GitHub on 2026-08-03:
+#   * the pinned SHA beb3433 is an ANCESTOR of the current tip, so an ordinary
+#     `git clone` still contains it and setup.sh works;
+#   * those two commits touch only
+#       Bench2Drive/leaderboard/team_code/birds_eye_view/chauffeurnet.py
+#       Bench2Drive/leaderboard/team_code/privileged_route_planner.py
+#       Bench2Drive/leaderboard/team_code/transfuser_utils.py
+#       Bench2Drive/scenario_runner/manual_control.py
+#     none of which this patch set touches — the two sets are file-disjoint;
+#   * all 26 patches apply cleanly to the newer tip 72f39a6 as well.
+#
+# We nonetheless pin the OLDER commit, deliberately. The published baseline
+# records were produced against this tree, and two of the four changed files
+# (chauffeurnet.py, privileged_route_planner.py) are PDM-Lite internals — and
+# PDM-Lite is the reference agent that generates the acceptance goldens.
+# Reproducibility of the published numbers outranks currency of the pin.
+#
+# CONSEQUENCE FOR USERS ON MODERN NUMPY: at this pin, Bench2Drive still uses
+# numpy aliases removed in numpy 1.24. Pin numpy < 1.24 in the evaluation
+# environment, or advance the pin to 72f39a6 (patches apply either way) and
+# accept that your run is then not bit-identical to the published baselines.
+# This is a real trade-off, recorded here rather than hidden.
+# ---------------------------------------------------------------------------

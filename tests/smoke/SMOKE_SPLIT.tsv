@@ -1,0 +1,31 @@
+# OOD-PerceptionBench -- smoke split (acceptance test route selection)
+# bundle_version: v0.9
+# binds_to: arXiv v1
+# routes: 9   (tier core = 6, tier core+extended = 9)
+# selected_from: routes/MANIFEST.tsv (475 canonical routes)
+# paths are relative to the canonical routes root; separator is a single TAB
+#
+# NOT REPORTABLE. Six-to-nine routes cannot approximate a claim computed over 55 base
+# routes. The value of this split is its goldens, never its scores. See ../README.md.
+#
+# columns
+#   path                 route XML, relative to the canonical routes root
+#   sha256               digest of that XML, copied from routes/MANIFEST.tsv
+#   category             static / pedestrian / vehicle
+#   scenario             scenario directory name
+#   level                base / visual_shift / geometric_shift
+#   base_route_id        numeric id shared by all variants of the route
+#   prop_blueprint_id    the CARLA blueprint the scenario asks for -- assertion A1's expectation
+#   tier                 core (6 routes) | extended (3 further routes)
+#   asset_class          native (stock CARLA 0.9.15) | shipped_v0.9 (in the v0.9 content pack)
+#   covers               why this route is in the split
+path	sha256	category	scenario	level	base_route_id	prop_blueprint_id	tier	asset_class	covers
+static/construction_obstacle/base/route_24795_trafficwarning.xml	e7f89d918efc95291d2a1d71bf2e9c3cbcb3333a673dfbf4c425b51a0bf8095d	static	construction_obstacle	base	24795	static.prop.trafficwarning	core	native	static category anchor; obstacle_blueprint tag; stock reference prop
+static/construction_obstacle/geometric_shift/route_24795_concreteroadbarrier.xml	7acc950c1d349ac20d9497e0ce5a5811ca517fa550d976d574eeff31ea239429	static	construction_obstacle	geometric_shift	24795	static.prop.concreteroadbarrier	core	shipped_v0.9	shipped asset 1/6; static geometric shift on the same ego route as the base anchor
+static/construction_obstacle/geometric_shift/route_24795_roadclosedbarricade.xml	1b015b9d2d7193c431c2ef9659b9186b3dfab94453022ab6a8e6faa1d109c0d8	static	construction_obstacle	geometric_shift	24795	static.prop.roadclosedbarricade	extended	shipped_v0.9	shipped asset 2/6
+pedestrian/dynamic_object_crossing/base/route_24224_0001.xml	89139f08bcc450439c6b679203b1f8d301a11ccba85a143b02e84b7ad26af4f1	pedestrian	dynamic_object_crossing	base	24224	walker.pedestrian.0001	core	native	pedestrian category anchor; pedestrian_blueprint tag; stock reference walker
+pedestrian/dynamic_object_crossing/visual_shift/route_24224_astronaut.xml	b1b5b4c10554fc39cedecb06cfd9582f4a9b1da9d5fe88a79badca656e35a83c	pedestrian	dynamic_object_crossing	visual_shift	24224	walker.pedestrian.astronaut	core	shipped_v0.9	shipped asset 3/6; the only visual_shift level any v0.9 user can run
+pedestrian/dynamic_object_crossing/visual_shift/route_24224_firefighter.xml	29e225365400ce69bfb2925679513d18e5359fe7d999ef3b522c78bfb21bd1f2	pedestrian	dynamic_object_crossing	visual_shift	24224	walker.pedestrian.firefighter	extended	shipped_v0.9	shipped asset 4/6; the CC BY-NC asset -- its absence in a pack is a licensing outcome, not a bug, so it must be checked explicitly
+pedestrian/dynamic_object_crossing/geometric_shift/route_24224_boar.xml	7a9071fb86a6a62913dea1318af3d0aad0ec03db04234971e7a7304a73cfc7b1	pedestrian	dynamic_object_crossing	geometric_shift	24224	walker.pedestrian.boar	core	shipped_v0.9	shipped asset 5/6; non-humanoid walker rig
+pedestrian/dynamic_object_crossing/geometric_shift/route_24224_deliveryrobot.xml	d2a5a00e667da18589d0012658a731f32a7a504cff86f1f5becbde6f15c190e1	pedestrian	dynamic_object_crossing	geometric_shift	24224	walker.pedestrian.deliveryrobot	extended	shipped_v0.9	shipped asset 6/6
+vehicle/hard_break/base/route_26456_mkz_2020.xml	f016ffac65681c6b3099254a993a97dfb301497159463423e311869423753d57	vehicle	hard_break	base	26456	vehicle.lincoln.mkz_2020	core	native	vehicle category anchor; front_vehicle_model tag; the attribute_filter path where a registered blueprint can still resolve to a Tesla

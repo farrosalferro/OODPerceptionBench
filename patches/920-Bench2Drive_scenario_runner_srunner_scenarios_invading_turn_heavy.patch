@@ -1,0 +1,303 @@
+diff --git a/Bench2Drive/scenario_runner/srunner/scenarios/invading_turn_heavy.py b/Bench2Drive/scenario_runner/srunner/scenarios/invading_turn_heavy.py
+new file mode 100644
+index 0000000..f91c319
+--- /dev/null
++++ b/Bench2Drive/scenario_runner/srunner/scenarios/invading_turn_heavy.py
+@@ -0,0 +1,297 @@
++#!/usr/bin/env python
++
++# Copyright (c) 2018-2020 Intel Corporation
++#
++# This work is licensed under the terms of the MIT license.
++# For a copy, see <https://opensource.org/licenses/MIT>.
++
++"""
++Scenario in which the ego is about to turn right
++when a vehicle coming from the opposite lane invades the ego's lane, forcing the ego to move right to avoid a possible collision.
++"""
++
++from __future__ import print_function
++from math import inf
++
++import py_trees
++import carla
++
++from srunner.scenariomanager.carla_data_provider import CarlaDataProvider
++from srunner.scenariomanager.scenarioatomics.atomic_behaviors import (
++    SingleInvadingActor,
++    ScenarioTimeout,
++    ActorDestroy,
++    BatchActorTransformSetter,
++    WaitForever,
++)
++from srunner.scenariomanager.scenarioatomics.atomic_trigger_conditions import (
++    WaitUntilInFrontPosition,
++    InTimeToArrivalToLocation,
++)
++from srunner.scenariomanager.scenarioatomics.atomic_criteria import (
++    CollisionTest,
++    ScenarioTimeoutTest,
++    TTRDARCriterionLazy,
++)
++try:
++    from srunner.scenariomanager.scenarioatomics.atomic_criteria import ICMandatoryStopGap
++except ImportError:
++    ICMandatoryStopGap = None
++from srunner.scenarios.basic_scenario import BasicScenario
++from srunner.tools.background_manager import (
++    RemoveRoadLane,
++    ChangeOppositeBehavior,
++    ReAddRoadLane,
++    LeaveSpaceInFront,
++)
++
++
++def convert_dict_to_location(actor_dict):
++    """
++    Convert a JSON string to a Carla.Location
++    """
++    location = carla.Location(
++        x=float(actor_dict["x"]), y=float(actor_dict["y"]), z=float(actor_dict["z"])
++    )
++    return location
++
++
++def get_value_parameter(config, name, p_type, default):
++    if name in config.other_parameters:
++        return p_type(config.other_parameters[name]["value"])
++    else:
++        return default
++
++
++class InvadingTurnHeavy(BasicScenario):
++    """
++    This class holds everything required for a scenario in which the ego is about to turn right
++    when a vehicle coming from the opposite lane invades the ego's lane,
++    forcing the ego to move right to avoid a possible collision.
++
++    This scenario is expected to take place on a road that has only one lane in each direction.
++    """
++
++    def __init__(
++        self,
++        world,
++        ego_vehicles,
++        config,
++        debug_mode=False,
++        criteria_enable=True,
++        timeout=180,
++    ):
++        """
++        Setup all relevant parameters and create scenario
++        and instantiate scenario manager
++        """
++        self._map = CarlaDataProvider.get_map()
++        self.timeout = timeout
++
++        self._trigger_location = config.trigger_points[0].location
++        self._reference_waypoint = self._map.get_waypoint(self._trigger_location)
++
++        self._distance = 60
++        self._time_to_arrival = 4.5
++        self._merging_distance = 5
++        self._obstacle_to_invading_car = 12
++        self._cone_interval = 5
++        self._invading_speed = get_value_parameter(
++            config, "invading_speed", float, 25
++        )  # 25, 30, 35
++        self._obstacle_length = get_value_parameter(
++            config, "obstacle_length", float, 20
++        )  # 20, 25, 30
++        self._blueprint_name = get_value_parameter(
++            config, "blueprint_name", str, "vehicle.tesla.model3"
++        )
++
++        self._ego_end_distance = 30
++        self._scenario_timeout = 240
++
++        self._obstacle_transforms = []
++
++        super().__init__(
++            "InvadingTurnHeavy",
++            ego_vehicles,
++            config,
++            world,
++            debug_mode,
++            criteria_enable=criteria_enable,
++        )
++
++    def _initialize_actors(self, config):
++        """
++        Custom initialization
++        """
++        # Compute adversary trigger waypoint (where adversary spawns when ego approaches)
++        trigger_wps = self._reference_waypoint.next(self._distance)
++        if not trigger_wps:
++            raise ValueError("Couldn't find the trigger location for the scenario")
++        self._adversary_trigger_wp = trigger_wps[0]
++
++        # Compute obstacle start waypoint for IC criterion
++        # The obstacle starts at _distance + _merging_distance from the trigger point
++        obstacle_start_wps = self._reference_waypoint.next(self._distance + self._merging_distance)
++        if not obstacle_start_wps:
++            raise ValueError("Couldn't find the obstacle start location for the scenario")
++        self._obstacle_start_wp = obstacle_start_wps[0]
++
++        next_wps = self._reference_waypoint.next(
++            self._distance
++            + self._merging_distance
++            + self._obstacle_length
++            + self._obstacle_to_invading_car
++        )
++        if not next_wps:
++            raise ValueError("Couldn't find the source location for the actor flow")
++        self._forward_wp = next_wps[0]
++        self._invading_car_wp = (
++            self._forward_wp.get_left_lane()
++        )  # where invading car will be spawned
++        if not self._invading_car_wp:
++            raise ValueError("Couldn't find the source location for the actor flow")
++        self._sink_wp = self._reference_waypoint.get_left_lane()
++        if not self._sink_wp:
++            raise ValueError("Couldn't find the sink location for the actor flow")
++
++        self._offset = self._sink_wp.lane_width
++
++        self._create_obstacle()
++
++    def _create_obstacle(self):
++        next_wp = self._invading_car_wp.next(self._obstacle_to_invading_car)[0]
++        dist = 0
++        while dist <= self._obstacle_length:
++
++            displacement = next_wp.lane_width / 2
++            r_vec = next_wp.transform.get_right_vector() * -1
++            spawn_transform = next_wp.transform
++            # spawn cone at the middle of the road in the beginning and end
++            if dist == 0 or dist == self._obstacle_length:
++                self.other_actors.append(
++                    CarlaDataProvider.request_new_actor(
++                        "*constructioncone*", spawn_transform
++                    )
++                )
++
++            spawn_transform.location += carla.Location(
++                x=displacement * r_vec.x, y=displacement * r_vec.y, z=0.3
++            )
++            cone = CarlaDataProvider.request_new_actor(
++                "*constructioncone*", spawn_transform
++            )
++            self.other_actors.append(cone)
++
++            self._obstacle_transforms.append([cone, spawn_transform])
++
++            transform = carla.Transform(
++                spawn_transform.location, spawn_transform.rotation
++            )
++            transform.location.z -= 200
++            cone.set_transform(transform)
++            cone.set_simulate_physics(False)
++            next_wp = next_wp.next(self._cone_interval)[0]
++            dist += self._cone_interval
++
++        self._obstacle_transforms.reverse()
++
++    def _create_behavior(self):
++        """
++        The adversary vehicle will go to the target place while invading another lane.
++        """
++        sequence = py_trees.composites.Sequence("InvadingTurnHeavy")
++
++        if self.route_mode:
++            sequence.add_child(RemoveRoadLane(self._invading_car_wp))
++            sequence.add_child(ChangeOppositeBehavior(active=False))
++
++        sequence.add_child(BatchActorTransformSetter(self._obstacle_transforms))
++
++        trigger_adversary = InTimeToArrivalToLocation(
++            self.ego_vehicles[0], self._time_to_arrival, self._adversary_trigger_wp.transform.location
++        )
++        sequence.add_child(trigger_adversary)
++
++        merge_start_wp = self._invading_car_wp.next(self._obstacle_to_invading_car / 2)[
++            0
++        ]
++        merge_end_dist = (
++            self._obstacle_to_invading_car + self._obstacle_length + self._merging_distance
++        )  # minus 5 meters to avoid collision with the obstacle
++        merge_end_wp = self._invading_car_wp.next(merge_end_dist)[0]
++
++        main_behavior = py_trees.composites.Sequence()
++        main_behavior.add_child(
++            SingleInvadingActor(
++                source_wp=self._invading_car_wp,
++                merge_start_wp=merge_start_wp,
++                merge_end_wp=merge_end_wp,
++                sink_wp=self._sink_wp,
++                speed=self._invading_speed,
++                offset=self._offset,
++                blueprint_name=self._blueprint_name,
++                attribute_filter={},
++                z_offset=0.3,
++                name="InvadingTurnHeavy",
++            )
++        )
++        main_behavior.add_child(WaitForever())
++
++        stopping_condition = py_trees.composites.Parallel(
++            policy=py_trees.common.ParallelPolicy.SUCCESS_ON_ONE
++        )
++        stopping_condition.add_child(main_behavior)
++        ego_end_wp = self._forward_wp.next(self._ego_end_distance)[0]
++        stopping_condition.add_child(
++            WaitUntilInFrontPosition(
++                self.ego_vehicles[0],
++                ego_end_wp.transform,
++                check_distance=False,
++            )
++        )
++        stopping_condition.add_child(
++            ScenarioTimeout(self._scenario_timeout, self.config.name)
++        )
++
++        sequence.add_child(stopping_condition)
++        if self.route_mode:
++            sequence.add_child(ReAddRoadLane(0))
++            sequence.add_child(ChangeOppositeBehavior(active=True))
++
++        for actor in self.other_actors:
++            sequence.add_child(ActorDestroy(actor))
++
++        return sequence
++
++    def _create_test_criteria(self):
++        """
++        A list of all test criteria will be created that is later used
++        in parallel behavior tree.
++        """
++        criteria = [ScenarioTimeoutTest(self.ego_vehicles[0], self.config.name)]
++        criteria.append(
++            TTRDARCriterionLazy(
++                self.ego_vehicles[0],
++                blackboard_key="TTR_DAR_agent_InvadingTurnHeavy",
++                name="TTRDARInvadingTurnHeavy",
++            )
++        )
++        criteria.append(
++            ICMandatoryStopGap(
++                self.ego_vehicles[0],
++                obstacle_wp=self._obstacle_start_wp,
++                blackboard_key="TTR_DAR_agent_InvadingTurnHeavy",
++                stop_distance_from_obstacle=10.0,
++                name="ICMandatoryStopGapInvadingTurnHeavy",
++            )
++        )
++        if not self.route_mode:
++            criteria.append(CollisionTest(self.ego_vehicles[0]))
++        return criteria
++
++    def __del__(self):
++        """
++        Remove all actors and traffic lights upon deletion
++        """
++        self.remove_all_actors()

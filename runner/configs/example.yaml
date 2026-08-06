@@ -1,0 +1,147 @@
+# OOD-PerceptionBench runner — example configuration
+#
+# Benchmark release: v0.9 (binds to arXiv v1 of the paper).
+# Scores produced under a different release are NOT comparable; see DESIGN.md.
+#
+# Copy this file, replace every <...> placeholder, and run:
+#
+#     python run_benchmark.py --config my_config.yaml
+#
+# There are deliberately NO defaults for any path, host, queue or environment. If a required
+# field is missing, the runner names it and exits 2 rather than falling back to somebody
+# else's filesystem.
+#
+# TOML and JSON are also accepted (chosen by file extension). YAML needs PyYAML; TOML and JSON
+# need nothing beyond the standard library.
+
+version: 1
+
+benchmark:
+  release: v0.9
+  arxiv_version: v1
+  # The published protocol is seed 42. Changing it makes results incomparable to the released
+  # baselines and stamps protocol_seed_deviation=true into the report.
+  seed: 42
+  repetitions: 1
+
+carla:
+  # Root of a CARLA 0.9.15 distribution. Must contain CarlaUE4.sh.
+  root: <path-to-carla-0.9.15>
+  client_timeout_s: 900
+
+leaderboard:
+  # Checkout root of the Bench2Drive leaderboard + scenario_runner that setup.sh prepared.
+  work_dir: <path-to-bench2drive-checkout>
+  root: <path-to-bench2drive-checkout>/leaderboard
+  scenario_runner_root: <path-to-bench2drive-checkout>/scenario_runner
+  evaluator: leaderboard/leaderboard_evaluator.py
+
+agent:
+  # A stock CARLA Leaderboard 2.0 AutonomousAgent. No runner-specific API.
+  entrypoint: <path-to-your-agent>.py
+  # Passed verbatim to --agent-config. Its meaning is entirely up to your agent; several
+  # models in the paper use a "<config>+<checkpoint>" convention, which works unchanged.
+  config: ""
+  track: SENSORS          # SENSORS | MAP
+  # Prepended to PYTHONPATH, in order, ahead of scenario_runner and leaderboard. This is how a
+  # model that bundles its own leaderboard/ or team_code/ makes its imports win.
+  pythonpath: []
+  # Extra environment variables, written verbatim into the per-route script. This is the whole
+  # mechanism by which model-specific settings reach the agent — the runner contains zero
+  # model-specific code.
+  #
+  # It may NOT set a variable the runner owns — PORT, TM_PORT, SEED, PYTHONHASHSEED,
+  # CUDA_VISIBLE_DEVICES, GPU_RANK, CARLA_ROOT, CHECKPOINT_ENDPOINT and friends. Each has its
+  # own field above or below, and a value here would be fighting the runner for control of
+  # worker isolation or the protocol seed. The runner rejects those names at startup and names
+  # the field to use instead. PYTHONPATH and LD_LIBRARY_PATH are fine: they are appended to,
+  # not replaced.
+  env: {}
+  # Some models must run from their own repository root (relative asset/config paths).
+  # null (the default) inherits the runner's working directory.
+  working_dir: null
+
+environment:
+  # Shell lines executed before python, e.g. activating a virtualenv or a conda environment.
+  # Empty by default; the runner never assumes an environment manager.
+  activate: []
+  #   - source <path-to-your-env-manager>/etc/profile.d/conda.sh
+  #   - conda activate <your-env-name>
+  ld_library_path_prepend: []
+  python: python3
+
+execution:
+  backend: local          # local | slurm
+  workers: 1              # concurrent routes; each gets its own CARLA server.
+                          # LOCAL BACKEND ONLY — under slurm, concurrency is
+                          # slurm.max_parallel and this value is ignored.
+  route_timeout_s: 3600   # wall clock per attempt; exceeded attempts are killed and retried
+  poll_interval_s: 10
+  post_kill_cooldown_s: 10
+  allow_gpu_stacking: false   # true to permit workers > GPUs (throughput and VRAM hazard)
+
+# One entry per GPU the runner may use. Worker i uses gpus[i % len(gpus)].
+#
+#   cuda   -> CUDA_VISIBLE_DEVICES for the AGENT
+#   vulkan -> CARLA's -graphicsadapter for the SIMULATOR
+#
+# These are two independent enumerations and are not guaranteed equal on a multi-GPU host.
+# Run `python run_benchmark.py --check-gpus` and record the real mapping. Omitting `vulkan`
+# assumes it equals `cuda` and prints a warning.
+#
+# Both indices must be unique across the list. A repeated `vulkan` would put two CARLA servers
+# on ONE physical GPU while their agents run on different ones — nothing errors, throughput just
+# collapses. To run several workers per GPU, list the GPU once and set allow_gpu_stacking above.
+gpus:
+  - {cuda: 0, vulkan: 0}
+
+ports:
+  # Deterministic allocation: worker i gets rpc_base + i*stride and tm_base + i*stride.
+  # A CARLA instance occupies 3 consecutive ports from its RPC port (rpc, streaming, secondary),
+  # so stride must be >= 4. The whole block is probed at startup and the runner refuses to run
+  # if any of it is busy — it will not relocate silently, because that is how two concurrent
+  # runs end up sharing a simulator.
+  rpc_base: 20000
+  tm_base: 30000
+  stride: 10
+  probe: true
+
+retry:
+  record_budget: 3        # attempts after the simulator wrote a retryable record
+  infra_budget: 3         # attempts that died without writing any record (timeout, segfault)
+  tickruntime_budget: 0   # 0 matches the reference sweeps: TickRuntime is model-side
+  worker_quarantine_after: 3   # consecutive infra failures before a worker is pulled
+
+resume:
+  # skip_terminal  (default) skip a route only when its record is a legitimate outcome
+  # skip_any_final           skip any finalized record, matching the internal orchestrator
+  #                          exactly — including one left by a crash, which is then never retried
+  # none                     re-run everything (requires --force)
+  mode: skip_terminal
+
+output:
+  root: <path-to-output-dir>
+  record_carla: false     # CARLA .log recordings are large; off by default
+
+routes:
+  root: <path-to-repo>/routes
+  # Strongly recommended: the frozen manifest with per-route sha256. Catches an edited or
+  # missing route XML, which no directory-name heuristic would.
+  manifest: <path-to-repo>/routes/MANIFEST.tsv
+  strict_manifest: false
+
+# Only read when execution.backend == slurm. FIRST CUT, never run against a real scheduler.
+slurm:
+  partition: null
+  account: null
+  qos: null
+  nodelist: null
+  exclude: null
+  time: "02:00:00"
+  cpus_per_task: 4
+  mem: 24G
+  gres: "gpu:1"
+  max_parallel: 8         # jobs in flight at once. This — not execution.workers — is the
+                          # concurrency under this backend, and it sizes the reserved port block.
+  submit_interval_s: 1.0
+  extra_directives: []

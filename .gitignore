@@ -1,0 +1,31 @@
+# --- Local machine configuration ---------------------------------------------
+# config/example.yaml is tracked. Your own config is not: it names real paths on
+# a real machine, and committing it is how cluster-specific defaults leak into a
+# public repository.
+config/*.yaml
+!config/example.yaml
+
+# --- Fetched / generated -----------------------------------------------------
+third_party/
+results/
+*.log
+
+# --- Python ------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# --- CARLA / asset build leftovers -------------------------------------------
+Import/
+*.tar.gz
+Saved/
+Intermediate/
+
+# --- OS ----------------------------------------------------------------------
+.DS_Store
+Thumbs.db

@@ -1,0 +1,37 @@
+#	OOD-PerceptionBench — patch selection manifest (v0.9)
+#	Machine-readable input to tools/dev/regenerate_patches.sh
+#
+#	order   = numeric prefix of the emitted .patch file; also the apply order
+#	path    = path relative to the carla_garage repo root
+#	tier    = REQUIRED  -> in the dependency closure of the 475 canonical routes
+#	          INCLUDED  -> our benchmark code, shipped, but NOT exercised by the 475
+#	git     = tracked-modified | tracked-new | untracked-new  (state in the private worktree)
+#	reason  = one line, why this file is in the patch set
+#
+order	path	tier	git	reason
+010	Bench2Drive/scenario_runner/srunner/scenariomanager/traffic_events.py	REQUIRED	tracked-modified	Declares TrafficEventType.TTR_DAR_MEASUREMENT (+3 planning event types). statistics_manager.py references all four at import time; omitting this file is an immediate AttributeError.
+020	Bench2Drive/scenario_runner/srunner/scenariomanager/scenarioatomics/atomic_criteria.py	REQUIRED	tracked-modified	TTRDARCriterion and the OOD-collision criteria. Largest hunk in the set (~3.8k lines).
+030	Bench2Drive/scenario_runner/srunner/scenariomanager/scenarioatomics/atomic_behaviors.py	REQUIRED	tracked-modified	Behaviours the *_modified scenarios build on (OOD actor spawn, door/brake behaviours).
+040	Bench2Drive/scenario_runner/srunner/tools/scenario_helper.py	REQUIRED	tracked-modified	apply_leading_edge_offset() — spawn parity for pedestrian scenarios. Imported by pedestrian_crossing_modified, parking_crossing_pedestrian_modified, vehicle_turning_route_pedestrian_modified.
+110	Bench2Drive/scenario_runner/srunner/scenarios/construction_obstacle_two_ways_modified.py	REQUIRED	tracked-modified	Defines ConstructionObstacleModified + ConstructionObstacleTwoWaysModified (70 route uses).
+120	Bench2Drive/scenario_runner/srunner/scenarios/dynamic_object_crossing_modified.py	REQUIRED	tracked-modified	Defines DynamicObjectCrossingModified (36 route uses).
+130	Bench2Drive/scenario_runner/srunner/scenarios/invading_turn_modified.py	REQUIRED	tracked-modified	Defines InvadingTurnModified (36 route uses).
+140	Bench2Drive/scenario_runner/srunner/scenarios/hard_break_modified.py	REQUIRED	untracked-new	Defines HardBreakRouteModified (45 route uses). NOT VISIBLE TO git diff — untracked in the private worktree.
+150	Bench2Drive/scenario_runner/srunner/scenarios/parked_obstacle_modified.py	REQUIRED	untracked-new	Defines ParkedObstacleModified + ParkedObstacleTwoWaysModified (72 route uses). NOT VISIBLE TO git diff.
+160	Bench2Drive/scenario_runner/srunner/scenarios/parking_crossing_pedestrian_modified.py	REQUIRED	untracked-new	Defines ParkingCrossingPedestrianModified (45 route uses). NOT VISIBLE TO git diff.
+170	Bench2Drive/scenario_runner/srunner/scenarios/parking_cut_in_modified.py	REQUIRED	untracked-new	Defines ParkingCutInModified (45 route uses). NOT VISIBLE TO git diff.
+180	Bench2Drive/scenario_runner/srunner/scenarios/pedestrian_crossing_modified.py	REQUIRED	untracked-new	Defines PedestrianCrossingModified (45 route uses). NOT VISIBLE TO git diff.
+190	Bench2Drive/scenario_runner/srunner/scenarios/vehicle_opens_door_modified.py	REQUIRED	untracked-new	Defines VehicleOpensDoorTwoWaysModified (45 route uses). NOT VISIBLE TO git diff.
+200	Bench2Drive/scenario_runner/srunner/scenarios/vehicle_turning_route_pedestrian_modified.py	REQUIRED	untracked-new	Defines VehicleTurningRoutePedestrianModified (36 route uses). NOT VISIBLE TO git diff.
+310	Bench2Drive/leaderboard/leaderboard/utils/statistics_manager.py	REQUIRED	tracked-modified	Consumes TTR_DAR_MEASUREMENT and the OOD-collision events into the result JSON. Committed locally in fa5f799, so it is absent from the uncommitted diff (brief asked this be verified — it IS in scope).
+320	Bench2Drive/leaderboard/leaderboard/utils/checkpoint_tools.py	REQUIRED	tracked-modified	_sanitize_floats(): TTR/DAR emits float('inf'); without this the result JSON truncates mid-write.
+330	Bench2Drive/leaderboard/leaderboard/leaderboard_evaluator.py	REQUIRED	tracked-modified	Agent-construction signature used by every model wrapper, CARLA orphan-fix, and stacking-safe crash cleanup (kill by PID, not by -graphicsadapter grep).
+340	Bench2Drive/leaderboard/leaderboard/autoagents/autonomous_agent_local.py	REQUIRED	tracked-new	Base class that carla_garage's team_code/autopilot.py imports (`from leaderboard.autoagents import autonomous_agent_local`). Upstream Bench2Drive does not have it, so PDM-Lite — the reference agent for the acceptance goldens — cannot import without it.
+410	Bench2Drive/leaderboard/team_code/config.py	REQUIRED	tracked-modified	Adds GlobalConfig.shuffle_weather (default False) so route-XML weather is respected. Weather is part of the OOD route definition; randomising it breaks comparability.
+420	Bench2Drive/leaderboard/team_code/config_report.py	REQUIRED	tracked-modified	Same one-line shuffle_weather flag in the report config.
+430	Bench2Drive/leaderboard/team_code/data_agent.py	REQUIRED	tracked-modified	Gates the weather shuffle on the new flag. Three lines; the enforcement half of 410/420.
+910	Bench2Drive/scenario_runner/srunner/scenarios/accident_two_ways_modified.py	INCLUDED	tracked-modified	Named in the release plan as one of our scenario patches. Referenced only by the v1 ood_benchmark/family_* tree; no class of its appears in the 475 canonical routes.
+920	Bench2Drive/scenario_runner/srunner/scenarios/invading_turn_heavy.py	INCLUDED	tracked-modified	Named in the release plan. v1-era scenario; not used by the 475.
+930	Bench2Drive/scenario_runner/srunner/scenarios/obstacle_approaching_ego.py	INCLUDED	tracked-modified	Named in the release plan. v1-era scenario; not used by the 475.
+940	Bench2Drive/scenario_runner/srunner/scenarios/pedestrian_crossing_stop.py	INCLUDED	tracked-modified	Named in the release plan. v1-era scenario; not used by the 475.
+950	Bench2Drive/scenario_runner/srunner/scenarios/reverse_vehicle.py	INCLUDED	tracked-modified	Named in the release plan. v1-era scenario; not used by the 475.

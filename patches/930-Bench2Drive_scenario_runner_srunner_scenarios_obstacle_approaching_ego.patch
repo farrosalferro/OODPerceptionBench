@@ -1,0 +1,239 @@
+diff --git a/Bench2Drive/scenario_runner/srunner/scenarios/obstacle_approaching_ego.py b/Bench2Drive/scenario_runner/srunner/scenarios/obstacle_approaching_ego.py
+new file mode 100644
+index 0000000..f6c20c7
+--- /dev/null
++++ b/Bench2Drive/scenario_runner/srunner/scenarios/obstacle_approaching_ego.py
+@@ -0,0 +1,233 @@
++#!/usr/bin/env python
++# This work is licensed under the terms of the MIT license.
++# For a copy, see <https://opensource.org/licenses/MIT>.
++"""
++Object crash without prior vehicle action scenario:
++The scenario realizes the user controlled ego vehicle
++moving along the road and encountering a construction setup.
++"""
++
++from __future__ import print_function
++
++import py_trees
++import carla
++
++from srunner.scenariomanager.carla_data_provider import CarlaDataProvider
++from srunner.scenariomanager.scenarioatomics.atomic_behaviors import (
++    ActorDestroy,
++    ActorTransformSetter,
++    KeepVelocity,
++    ScenarioTimeout,
++)
++from srunner.scenariomanager.scenarioatomics.atomic_trigger_conditions import (
++    WaitUntilInFrontPosition,
++)
++from srunner.scenariomanager.scenarioatomics.atomic_criteria import (
++    CollisionTest,
++    ScenarioTimeoutTest,
++    TTRDARCriterion,
++)
++try:
++    from srunner.scenariomanager.scenarioatomics.atomic_criteria import ICImmediateLateral
++except ImportError:
++    ICImmediateLateral = None
++from srunner.scenarios.basic_scenario import BasicScenario
++from srunner.tools.background_manager import (
++    RemoveRoadLane,
++    ReAddRoadLane,
++    ChangeOppositeBehavior,
++)
++
++
++def get_value_parameter(config, name, p_type, default):
++    if name in config.other_parameters:
++        return p_type(config.other_parameters[name]["value"])
++    else:
++        return default
++
++
++def get_interval_parameter(config, name, p_type, default):
++    if name in config.other_parameters:
++        return [
++            p_type(config.other_parameters[name]["from"]),
++            p_type(config.other_parameters[name]["to"]),
++        ]
++    else:
++        return default
++
++
++def convert_string_to_int(dictionary):
++    if dictionary is None:
++        return {}
++    for key, value in dictionary.items():
++        try:
++            # Try to convert to int first, then float if that fails
++            dictionary[key] = int(value)
++        except ValueError:
++            try:
++                dictionary[key] = float(value)
++            except ValueError:
++                # Keep as string if conversion fails
++                pass
++    return dictionary
++
++
++class ObstacleApproachingEgo(BasicScenario):
++    """
++    This class holds everything required for a construction scenario
++    The ego vehicle is passing through a road and encounters
++    a stationary rectangular construction cones setup and traffic warning,
++    forcing it to lane change.
++
++    This is a single ego vehicle scenario
++    """
++
++    def __init__(
++        self,
++        world,
++        ego_vehicles,
++        config,
++        randomize=False,
++        debug_mode=False,
++        criteria_enable=True,
++        timeout=60,
++    ):
++        """
++        Setup all relevant parameters and create scenario
++        and instantiate scenario manager
++        """
++        self._world = world
++        self._map = CarlaDataProvider.get_map()
++        self.timeout = timeout
++
++        self._reference_waypoint = self._map.get_waypoint(
++            config.trigger_points[0].location
++        )
++
++        self._obstacle_distance = get_value_parameter(
++            config, "obstacle_distance", float, 60
++        )
++        self._obstacle_speed = get_value_parameter(config, "obstacle_speed", float, 10)
++        self._obstacle_blueprint = get_value_parameter(
++            config, "obstacle_blueprint", str, "walker.pedestrian.deliveryrobot"
++        )
++        self.other_actors = []
++
++        self._end_distance = 60
++        self._scenario_timeout = 240
++
++        super().__init__(
++            "ObstacleApproachingEgo",
++            ego_vehicles,
++            config,
++            world,
++            debug_mode,
++            False,
++            criteria_enable,
++        )
++
++    def _initialize_actors(self, config):
++        """Creates all props part of the construction"""
++
++        wps = self._reference_waypoint.next(self._obstacle_distance)
++        if not wps:
++            raise ValueError(
++                "Couldn't find a viable position to set up the construction actors"
++            )
++        self._obstacle_wp = wps[0]
++        self._spawn_obstacle(self._obstacle_wp.transform)
++
++        self._end_wp = self._obstacle_wp.next(self._end_distance)[0]
++
++    def _spawn_obstacle(self, obstacle_transform):
++        """Spawning the obstacle"""
++
++        transform = carla.Transform(
++            obstacle_transform.location, obstacle_transform.rotation
++        )
++        transform.rotation.yaw += 180
++        transform.location.z += 0.3
++        dynamic = CarlaDataProvider.request_new_actor(
++            self._obstacle_blueprint,
++            transform,
++        )
++        dynamic.set_simulate_physics(True)
++        self._obstacle_actor, self._obstacle_transform = dynamic, transform
++        self.other_actors.append(dynamic)
++
++    def _create_behavior(self):
++        """
++        Remove the lane that would collide with the construction and add the construction props.
++        Wait until the ego is close to the construction (and a bit more) before changing the opposite traffic
++        Readd the traffic at the end, and allow the ego to invade the opposite lane by deactivating the criteria
++        """
++        reference_wp = self._obstacle_wp.get_left_lane()
++        if not reference_wp:
++            raise ValueError("Couldnt find a left lane to spawn the opposite traffic")
++
++        sequence = py_trees.composites.Sequence(name="ObstacleApproachingEgo")
++        if self.route_mode:
++            sequence.add_child(RemoveRoadLane(reference_wp))
++            sequence.add_child(ChangeOppositeBehavior(active=False))
++
++        main_behavior = py_trees.composites.Parallel(
++            policy=py_trees.common.ParallelPolicy.SUCCESS_ON_ONE
++        )
++        main_behavior.add_child(
++            KeepVelocity(self._obstacle_actor, self._obstacle_speed)
++        )
++
++        main_behavior.add_child(
++            WaitUntilInFrontPosition(
++                self.ego_vehicles[0], self._end_wp.transform, False
++            )
++        )
++        main_behavior.add_child(
++            ScenarioTimeout(self._scenario_timeout, self.config.name)
++        )
++
++        sequence.add_child(main_behavior)
++
++        if self.route_mode:
++            sequence.add_child(ReAddRoadLane(0))
++            sequence.add_child(ChangeOppositeBehavior(active=True))
++
++        sequence.add_child(ActorDestroy(self._obstacle_actor))
++
++        return sequence
++
++    def _create_test_criteria(self):
++        """
++        A list of all test criteria will be created that is later used
++        in parallel behavior tree.
++        """
++        criteria = [ScenarioTimeoutTest(self.ego_vehicles[0], self.config.name)]
++        if hasattr(self, "_obstacle_actor") and self._obstacle_actor:
++            criteria.append(
++                TTRDARCriterion(
++                    self.ego_vehicles[0],
++                    self._obstacle_actor,
++                    d_obs=60.0,
++                    ttc_threshold=3.0,
++                    name="TTRDARObstacleApproachingEgo",
++                )
++            )
++            criteria.append(
++                ICImmediateLateral(
++                    self.ego_vehicles[0],
++                    self._obstacle_actor,
++                    ttc_threshold=3.0,
++                    theta_y=0.5,
++                    d_obs=60.0,
++                    name="ICImmediateLateralObstacleApproachingEgo",
++                )
++            )
++        if not self.route_mode:
++            criteria.append(CollisionTest(self.ego_vehicles[0]))
++        return criteria
++
++    def __del__(self):
++        """
++        Remove all actors and traffic lights upon deletion
++        """
++        self.remove_all_actors()

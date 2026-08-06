@@ -1,0 +1,19 @@
+# OOD-PerceptionBench -- acceptance harness version stamp
+component: tests
+version: v0.9
+corresponds_to: arXiv v1
+split: smoke
+split_routes: 9
+split_tiers:
+  core: 6
+  all: 9
+goldens_present: false
+goldens_reason: >
+  Goldens require a GPU, a running CARLA 0.9.15 and the installed content pack. None of that
+  was available where this release was assembled, and a fabricated golden is worse than none.
+  check_acceptance.py therefore exits 3 (INCONCLUSIVE) rather than 0 until a bundle lands.
+  Procedure: goldens/GENERATING.md
+reportable: false
+reportable_reason: >
+  Nine routes cannot approximate a claim computed over 55 base routes. Smoke-split scores must
+  never be published as a benchmark result.

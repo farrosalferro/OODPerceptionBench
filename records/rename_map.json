@@ -1,0 +1,36 @@
+{
+  "schema": "ood-perceptionbench/rename_map/1",
+  "version": "v0.9",
+  "binds_to": "arXiv v1",
+  "description": "The ood.* rename of the six OOD vehicle blueprint IDs to the neutral vehicle.ood.* namespace. This is the bundled, generator-facing subset of the release rename map: exactly the two maps build_records.py consumes, so the published records are reproducible from this repository alone. The route XMLs under routes/ and routes/MANIFEST.tsv were rewritten from the same maps.",
+  "consumed_by": [
+    "records/build_records.py",
+    "records/validate_against_frozen.py"
+  ],
+  "blueprint_id_map": {
+    "vehicle.tohoku.sedane": "vehicle.ood.sedan",
+    "vehicle.tohoku.hatchback": "vehicle.ood.hatchback",
+    "vehicle.tohoku.suv": "vehicle.ood.suv",
+    "vehicle.inkas.amv": "vehicle.ood.armoredvan",
+    "vehicle.caterpillar.dumptruck": "vehicle.ood.dumptruck",
+    "vehicle.hamm.roadroller": "vehicle.ood.roadroller"
+  },
+  "token_map": {
+    "sedane": "sedan",
+    "hatchback": "hatchback",
+    "suv": "suv",
+    "amv": "armoredvan",
+    "dumptruck": "dumptruck",
+    "roadroller": "roadroller"
+  },
+  "token_map_changed_only": {
+    "sedane": "sedan",
+    "amv": "armoredvan"
+  },
+  "notes_for_consumers": [
+    "blueprint_id_map: OLD vendor blueprint id -> released vehicle.ood.* id. Applied by build_records.py to the `agent_type` column AFTER OOD-collision attribution has run, because the collision messages in the raw result JSONs carry the OLD ids.",
+    "token_map: OLD on-disk prop token -> released token. Applied to `variant` to produce `prop`; the verbatim on-disk token is preserved as `prop_raw`, which is the join key back to the raw result tree and to the frozen analysis CSVs.",
+    "Only `sedane`->`sedan` and `amv`->`armoredvan` actually change a token; the other four are identity entries and are listed for completeness.",
+    "Walkers and static props were already generic and are NOT renamed."
+  ]
+}

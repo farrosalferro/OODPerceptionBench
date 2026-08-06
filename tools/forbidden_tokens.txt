@@ -1,0 +1,63 @@
+# OOD-PerceptionBench — forbidden source-token denylist (salted digests)
+#
+# WHY THIS FILE HOLDS HASHES AND NOT WORDS
+# ----------------------------------------
+# Two of the eighteen OOD props could not be shipped because their upstream
+# meshes were third-party game IP uploaded under a licence the uploader had no
+# right to grant. Those props were removed from the release. Writing their
+# upstream source slugs into this repository would republish the one fact the
+# removal was meant to suppress: which prop was a copy of what. A check that
+# spells the slugs out in order to search for them leaks exactly as loudly as
+# the leak it is guarding against — it just puts it in a CI file instead of a
+# README.
+#
+# So the denylist is stored as salted SHA-256 digests of normalised tokens.
+# `tools/check_forbidden_tokens.py` hashes the repository's own text the same
+# way and compares digests. Nothing here, in the checker, or in the CI log names
+# anything.
+#
+# THIS IS OBFUSCATION, NOT SECRECY — SAY SO OUT LOUD
+# --------------------------------------------------
+# The salt is in this file and the token space is small, so anyone who already
+# knows the answer can confirm it in a second. That is fine. The property being
+# bought is narrower and is the one that matters: the repository never *states*
+# the association, a reader learns nothing from it, and a regression that
+# reintroduces one of these strings still turns CI red. Do not treat this as a
+# secret store, and never put a real secret in it.
+#
+# FORMAT
+# ------
+#   salt   = <hex>            random, per-repository; changing it invalidates every digest
+#   canary = <sha256hex>      digest of a synthetic token the checker knows how to rebuild
+#   count  = <int>            number of token lines that must follow; a truncated file fails loudly
+#   <n> <sha256hex>           one token: n = number of words in the normalised form
+#
+# Digest  = sha256(unhexlify(salt) || 0x00 || utf8(normalised token))
+# Normalised token: lowercase, every run of non-alphanumeric characters becomes a
+# single word separator, words joined by '-'. So "Some Slug", "some_slug" and
+# "SOME-SLUG" all normalise to the same token and all match.
+#
+# ADDING A TOKEN
+# --------------
+#   printf '%s' 'the slug' | python3 tools/check_forbidden_tokens.py --hash-token
+# reads from stdin (not argv, so it stays out of shell history), prints the line
+# to paste below, and reminds you to bump `count`.
+#
+# Entries are deliberately multi-word where a single word would be a common
+# English word: a false positive here is un-diagnosable by design, because the
+# checker reports a file and a line number and never the matched text.
+
+salt   = 816c6896d0ec40aa16b213f33d572ddf
+canary = a0fe90c5dc5ec766a2cf8bd83478f108996b530417975ee49d1893feb5e57776
+count  = 10
+
+1 252f1358e18c0e9beec91ee3c534533f47681a97b52153ad151592fe9e2b1b8a
+1 48c93dcdd74ac910f7143b0f0f98d57971c6bded8a4a6a011a5a095fca662556
+1 570e431759edbc936ad6f648cafe2c6ba4f02fbeedb17d17dfeb95298144b4ca
+1 8cfabf2f0e35891617813f623a708043c8bd5be4974526e145b5b24f7c5c41da
+2 52c09187af9534642a385c3f27af1ab67a0ca90d3808248d3e2a27cc969ab581
+2 7a84d1543cbb9c6023e68d51e7538aae92807e6994e24395110d668563ef171a
+2 9496dabd7e944402e28c8c5cd053d9789b33bdd26fb0899514b52417d835e468
+2 acf43840445dddd2c6a061da84a8e2d428cc462d8ea0054f8367b5dbb698385e
+2 e6f52f27bbb354e57170699b34939d3f5387aa1fffd0b19b0570b5ea6c33d3d5
+3 53d68a58827d8aee4b1cb8aba2187003ec9a6db67235b26bc19605342f66e167

@@ -1,0 +1,21 @@
+# OOD-PerceptionBench asset pack v0.9 — files present in the source CARLA build that are
+# deliberately NOT shipped. Every exclusion below was verified unreferenced by dumping the
+# /Game/... import table of every cooked package in the same content directory.
+#
+# Columns: source_path <TAB> bytes <TAB> reason <TAB> verification
+#
+source_path	bytes	reason	verification
+CarlaUE4/Content/Boar/Animations/Boar__000_SK_Boar_LOD0_Anim_Armature_alerted.uasset	12619528	uncooked editor asset (no .uexp sibling); the shipping runtime cannot load it	no cooked package imports /Game/Boar/Animations/..._alerted (ABP_Boar, BS_Boar, BP_Boar, BP_Boar_v2 import tables dumped)
+CarlaUE4/Content/Boar/Animations/Boar__000_SK_Boar_LOD0_Anim_Armature_digging_feeding.uasset	13329635	uncooked editor asset (no .uexp sibling)	same
+CarlaUE4/Content/Boar/Animations/Boar__000_SK_Boar_LOD0_Anim_Armature_observing.uasset	12191658	uncooked editor asset (no .uexp sibling)	same
+CarlaUE4/Content/Boar/Animations/Boar__000_SK_Boar_LOD0_Anim_Armature_sniffing.uasset	10441319	uncooked editor asset (no .uexp sibling)	same
+CarlaUE4/Content/Boar/Animations/Boar__000_SK_Boar_LOD0_Anim_Armature_trot.uasset	903600	uncooked editor asset (no .uexp sibling)	same
+CarlaUE4/Content/Boar/Animations/Boar__000_SK_Boar_LOD0_Anim_Armature_wake_up.uasset	4691384	uncooked editor asset (no .uexp sibling)	same
+CarlaUE4/Content/Boar/Animations/Boar__000_SK_Boar_LOD0_Anim_Armature_wound.uasset	6148313	uncooked editor asset (no .uexp sibling)	same
+CarlaUE4/Content/Firefighter/Blueprints/BP_FireFighter.uasset	5284	orphan duplicate of BP_Firefighter that differs ONLY in letter case; collides with BP_Firefighter.uasset on case-insensitive filesystems (macOS/Windows)	the string "/Game/Firefighter/Blueprints/BP_FireFighter" occurs in exactly one file in the build — BP_FireFighter.uasset itself. BP_Firefighter_v2 (the blueprint WalkerFactory actually points at) inherits from /Game/Firefighter/Blueprints/BP_Firefighter, lower-case f.
+CarlaUE4/Content/Firefighter/Blueprints/BP_FireFighter.uexp	1314	same orphan duplicate	same
+#
+# Totals: 9 files, 60,332,035 bytes excluded (60.3 MB, 24.5% of the six source content dirs).
+#
+# The 4 Boar animations that ARE cooked and ARE shipped: _walk, _run, _sleeping (referenced by
+# BS_Boar) and _laydown (referenced by BP_Boar). The boar's in-scenario motion uses these only.

@@ -1,0 +1,173 @@
+diff --git a/Bench2Drive/scenario_runner/srunner/scenarios/hard_break_modified.py b/Bench2Drive/scenario_runner/srunner/scenarios/hard_break_modified.py
+new file mode 100644
+index 0000000..c9fbf78
+--- /dev/null
++++ b/Bench2Drive/scenario_runner/srunner/scenarios/hard_break_modified.py
+@@ -0,0 +1,167 @@
++#!/usr/bin/env python
++
++# Copyright (c) 2018-2022 Intel Corporation
++#
++# This work is licensed under the terms of the MIT license.
++# For a copy, see <https://opensource.org/licenses/MIT>.
++
++"""
++Hard break scenario with a spawned leading vehicle whose blueprint is configurable.
++The leading vehicle drives ahead of the ego and then hard brakes,
++forcing the ego to react.  Unlike HardBreakRoute (which relies on
++Background Activity), this variant spawns an explicit actor so that
++TTR/DAR metrics can reference it directly.
++"""
++
++import py_trees
++import carla
++
++from srunner.scenariomanager.carla_data_provider import CarlaDataProvider
++from srunner.scenariomanager.scenarioatomics.atomic_behaviors import (
++    AtomicBehavior,
++    ActorDestroy,
++    StopVehicle,
++    WaypointFollower,
++    Idle,
++)
++from srunner.scenariomanager.scenarioatomics.atomic_criteria import (
++    CollisionTest,
++    ScenarioTimeoutTest,
++    TTRDARCriterion,
++)
++from srunner.scenariomanager.scenarioatomics.atomic_trigger_conditions import (
++    DriveDistance,
++    StandStill,
++)
++from srunner.scenarios.basic_scenario import BasicScenario
++from srunner.tools.background_manager import RemoveRoadLane, ReAddRoadLane
++from srunner.tools.scenario_helper import get_waypoint_in_distance
++
++
++def get_value_parameter(config, name, p_type, default):
++  if name in config.other_parameters:
++    return p_type(config.other_parameters[name]["value"])
++  else:
++    return default
++
++
++class SetBrakeLight(AtomicBehavior):
++    def __init__(self, actor, active, name="SetBrakeLight"):
++        super().__init__(name, actor)
++        self._active = active
++
++    def update(self):
++        lights = self._actor.get_light_state()
++        if self._active:
++            lights |= carla.VehicleLightState.Brake
++        else:
++            lights &= ~carla.VehicleLightState.Brake
++        self._actor.set_light_state(carla.VehicleLightState(lights))
++        return py_trees.common.Status.SUCCESS
++
++
++class HardBreakRouteModified(BasicScenario):
++  """
++    A leading vehicle drives ahead of the ego and then performs an emergency
++    brake.  The leading vehicle blueprint is configurable via the route XML
++    parameter ``front_vehicle_model``.
++    """
++
++  timeout = 120
++
++  def __init__(
++      self,
++      world,
++      ego_vehicles,
++      config,
++      randomize=False,
++      debug_mode=False,
++      criteria_enable=True,
++      timeout=60,
++  ):
++    self._map = CarlaDataProvider.get_map()
++    self._reference_waypoint = self._map.get_waypoint(config.trigger_points[0].location)
++    self.timeout = timeout
++
++    self._front_vehicle_model = get_value_parameter(config, "front_vehicle_model", str, "vehicle.lincoln.mkz_2020")
++    self._first_vehicle_location = get_value_parameter(config, "distance", float, 25)
++    self._first_vehicle_speed = get_value_parameter(config, "speed", float, 10)
++    self._other_actor_max_brake = 1.0
++    self._stop_in_front_intersection = 20
++    self._stop_duration = 1.5
++    self._end_distance = 15
++
++    self._scenario_timeout = 240
++
++    super().__init__(
++        "HardBreakRouteModified",
++        ego_vehicles,
++        config,
++        world,
++        debug_mode,
++        criteria_enable=criteria_enable,
++    )
++
++  def _initialize_actors(self, config):
++    waypoint, _ = get_waypoint_in_distance(self._reference_waypoint, self._first_vehicle_location)
++    transform = waypoint.transform
++    transform.location.z += 0.5
++    self._front_vehicle = CarlaDataProvider.request_new_actor(self._front_vehicle_model, transform)
++    if not self._front_vehicle:
++      raise ValueError("Couldn't spawn the leading vehicle")
++    self.other_actors.append(self._front_vehicle)
++
++    ego_speed_limit_kmh = self.ego_vehicles[0].get_speed_limit()
++    if ego_speed_limit_kmh > 10:
++      self._first_vehicle_speed = ego_speed_limit_kmh / 3.6
++    else:
++      self._first_vehicle_speed = ego_speed_limit_kmh
++
++  def _create_behavior(self):
++    sequence = py_trees.composites.Sequence("HardBreakRouteModified")
++
++    if self.route_mode:
++      sequence.add_child(RemoveRoadLane(self._reference_waypoint))
++
++    driving = py_trees.composites.Parallel(
++        "DrivingTowardsIntersection",
++        policy=py_trees.common.ParallelPolicy.SUCCESS_ON_ONE,
++    )
++    driving.add_child(WaypointFollower(self.other_actors[0], self._first_vehicle_speed))
++    driving.add_child(DriveDistance(self.other_actors[0], 35))
++    sequence.add_child(driving)
++
++    sequence.add_child(SetBrakeLight(self.other_actors[0], True))
++    sequence.add_child(StopVehicle(self.other_actors[0], self._other_actor_max_brake))
++    sequence.add_child(Idle(self._stop_duration))
++    sequence.add_child(SetBrakeLight(self.other_actors[0], False))
++
++    end_condition = py_trees.composites.Parallel(
++        "WaitForEnd",
++        policy=py_trees.common.ParallelPolicy.SUCCESS_ON_ONE,
++    )
++    end_condition.add_child(WaypointFollower(self.other_actors[0], self._first_vehicle_speed))
++    end_condition.add_child(DriveDistance(self.ego_vehicles[0], self._end_distance))
++    end_condition.add_child(StandStill(self.ego_vehicles[0], name="StandStill", duration=3))
++    sequence.add_child(end_condition)
++
++    if self.route_mode:
++      sequence.add_child(ReAddRoadLane(0))
++    sequence.add_child(ActorDestroy(self.other_actors[0]))
++
++    return sequence
++
++  def _create_test_criteria(self):
++    criteria = [ScenarioTimeoutTest(self.ego_vehicles[0], self.config.name)]
++    if hasattr(self, "_front_vehicle") and self._front_vehicle:
++      criteria.append(TTRDARCriterion(
++          self.ego_vehicles[0],
++          self._front_vehicle,
++          name="TTRDARHardBreakRouteModified",
++      ))
++    if not self.route_mode:
++      criteria.append(CollisionTest(self.ego_vehicles[0]))
++    return criteria
++
++  def __del__(self):
++    self.remove_all_actors()

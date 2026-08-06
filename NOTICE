@@ -1,0 +1,223 @@
+================================================================================
+NOTICE — OOD-PerceptionBench
+Third-party components, attributions, and per-asset licence terms
+Version stamp: 0.9.0 (corresponds to arXiv v1)
+================================================================================
+
+This repository is a THIN OVERLAY. Our own code is MIT (see LICENSE). Everything
+below is either (a) a third-party project we build on but do NOT redistribute,
+or (b) a 3D asset we DO redistribute, under its own licence.
+
+--------------------------------------------------------------------------------
+!!  READ THIS FIRST — THE ASSET PACK IS MIXED-LICENCE AND CONTAINS A
+!!  NON-COMMERCIAL COMPONENT.
+!!
+!!  walker.pedestrian.firefighter is licensed CC BY-NC 4.0 (Attribution-
+!!  NonCommercial). You may NOT use it for commercial purposes. If your use is
+!!  commercial, you must exclude that asset and the 18 routes that reference it.
+!!  Every other shipped asset is CC BY 4.0, which permits commercial use with
+!!  attribution.
+--------------------------------------------------------------------------------
+
+
+================================================================================
+1. NOT REDISTRIBUTED — required, fetched by setup.sh or installed by you
+================================================================================
+
+CARLA Simulator
+  Version:  0.9.15
+  Source:   https://github.com/carla-simulator/carla
+  Licence:  "CARLA specific code is distributed under MIT License. CARLA
+            specific assets are distributed under CC-BY License."
+            (CARLA README.md, line 139)
+  Use here: OOD-PerceptionBench runs inside a CARLA 0.9.15 build. The reference
+            ("base") props in every route are native CARLA assets, and the
+            content pack in assets/ is installed into a CARLA build. We rely on
+            and reference CARLA content, so CC-BY attribution is given here:
+
+              CARLA content © the CARLA team and contributors,
+              licensed CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+
+            You must install CARLA yourself. It is not redistributed here.
+
+Bench2Drive
+  Source:   https://github.com/Thinklab-SJTU/Bench2Drive
+  Licence:  The Bench2Drive root LICENSE is CC BY-NC-ND 4.0
+            (Attribution-NonCommercial-NoDerivatives). Its leaderboard/ and
+            scenario_runner/ subtrees carry their own MIT licences inherited
+            from CARLA.
+  Use here: NOT REDISTRIBUTED, AND NOT VENDORED. The scenario and route lineage
+            of this benchmark descends from Bench2Drive: our *_modified.py
+            scenarios are derived from Bench2Drive/CARLA leaderboard scenarios,
+            and our route XML schema is the CARLA Leaderboard 2.0 schema as used
+            by Bench2Drive.
+
+            The NoDerivatives term is exactly why this repository is an overlay:
+            we ship patches, not a modified copy. The files our patches touch all
+            live in the MIT-licensed leaderboard/ and scenario_runner/ subtrees.
+
+  Please cite Bench2Drive if you use this benchmark:
+
+    @inproceedings{jia2024bench2drive,
+      title     = {{Bench2Drive}: Towards Multi-Ability Benchmarking of
+                   Closed-Loop End-To-End Autonomous Driving},
+      author    = {Jia, Xiaosong and Yang, Zhenjie and Li, Qifeng and
+                   Zhang, Zhiyuan and Yan, Junchi},
+      booktitle = {Advances in Neural Information Processing Systems,
+                   Datasets and Benchmarks Track},
+      year      = {2024},
+      eprint    = {2406.03877},
+      url       = {https://arxiv.org/abs/2406.03877}
+    }
+
+carla_garage
+  Source:   https://github.com/autonomousvision/carla_garage
+  Licence:  MIT
+  Use here: The upstream this overlay patches. Pinned by SHA — see
+            patches/UPSTREAM.txt. NOT REDISTRIBUTED; setup.sh clones it.
+            Bench2Drive is vendored inside carla_garage upstream-side; we do not
+            vendor either.
+
+  Please cite carla_garage / TransFuser++ if you use the PDM-Lite reference
+  agent or the TransFuser++ baseline:
+
+    @inproceedings{jaeger2023hidden,
+      title     = {Hidden Biases of End-to-End Driving Models},
+      author    = {Jaeger, Bernhard and Chitta, Kashyap and Geiger, Andreas},
+      booktitle = {Proceedings of the IEEE/CVF International Conference on
+                   Computer Vision (ICCV)},
+      year      = {2023},
+      eprint    = {2306.07957},
+      url       = {https://arxiv.org/abs/2306.07957}
+    }
+
+  And CARLA itself:
+
+    @inproceedings{dosovitskiy2017carla,
+      title     = {{CARLA}: An Open Urban Driving Simulator},
+      author    = {Dosovitskiy, Alexey and Ros, German and Codevilla, Felipe
+                   and Lopez, Antonio and Koltun, Vladlen},
+      booktitle = {Proceedings of the 1st Annual Conference on Robot Learning},
+      year      = {2017},
+      eprint    = {1711.03938},
+      url       = {https://arxiv.org/abs/1711.03938}
+    }
+
+
+================================================================================
+2. REDISTRIBUTED 3D ASSETS — the six shipped OOD props
+================================================================================
+
+Six of the eighteen OOD props used in the paper are redistributable and are
+included in the content pack under assets/. Each is attributed below with its
+author and licence, as its licence requires.
+
+  ---------------------------------------------------------------------------
+  Blueprint ID                        Author              Licence
+  ---------------------------------------------------------------------------
+  walker.pedestrian.astronaut         Antropik            CC BY 4.0
+  walker.pedestrian.deliveryrobot     Bento (@gostbento)  CC BY 4.0
+  walker.pedestrian.boar              AnimalMesh 3D       CC BY 4.0
+  static.prop.concreteroadbarrier     widthRider          CC BY 4.0
+  static.prop.roadclosedbarricade     exiS7-Gs            CC BY 4.0
+  walker.pedestrian.firefighter       KIFIR               CC BY-NC 4.0  <-- NC
+  ---------------------------------------------------------------------------
+
+Full texts:
+  CC BY 4.0     https://creativecommons.org/licenses/by/4.0/
+  CC BY-NC 4.0  https://creativecommons.org/licenses/by-nc/4.0/
+
+Per-asset detail
+----------------
+
+walker.pedestrian.astronaut
+  Author:  Antropik
+  Licence: Creative Commons Attribution 4.0 International (CC BY 4.0)
+  Notes:   Original work by the author. Attribution: "Astronaut by Antropik,
+           CC BY 4.0."
+
+walker.pedestrian.deliveryrobot
+  Author:  Bento (@gostbento)
+  Licence: Creative Commons Attribution 4.0 International (CC BY 4.0)
+  Notes:   Original modelling, not a derivative of any commercial product.
+           Attribution: "Delivery Robot by Bento (gostbento), CC BY 4.0."
+
+walker.pedestrian.boar
+  Author:  AnimalMesh 3D
+  Licence: Creative Commons Attribution 4.0 International (CC BY 4.0)
+  Notes:   Original wildlife model.
+           Attribution: "Animated Realistic Boar by AnimalMesh 3D, CC BY 4.0."
+
+static.prop.concreteroadbarrier
+  Author:  widthRider
+  Licence: Creative Commons Attribution 4.0 International (CC BY 4.0)
+  Notes:   The author's own photogrammetry scan, retopologised by the author.
+           No third-party scan-data restriction applies.
+           Attribution: "Concrete Road Barrier (photoscanned) by widthRider,
+           CC BY 4.0."
+
+static.prop.roadclosedbarricade
+  Author:  exiS7-Gs
+  Licence: Creative Commons Attribution 4.0 International (CC BY 4.0)
+  Notes:   Attribution: "Road Closed Sign by exiS7-Gs, CC BY 4.0."
+
+walker.pedestrian.firefighter                                    *** NC ASSET ***
+  Author:  KIFIR
+  Licence: Creative Commons Attribution-NonCommercial 4.0 International
+           (CC BY-NC 4.0)
+  Notes:   Original work by the author; there is no IP problem with this asset.
+           But the NonCommercial term means THIS ASSET MAY NOT BE USED FOR
+           COMMERCIAL PURPOSES, and it makes the content pack as a whole
+           mixed-licence. Commercial users must exclude this asset and the 18
+           routes that reference it (routes/pedestrian/**/*_firefighter.xml).
+           Attribution: "Firefighter by KIFIR, CC BY-NC 4.0."
+
+
+================================================================================
+3. NOT REDISTRIBUTED — the twelve remaining OOD props
+================================================================================
+
+Twelve of the eighteen OOD props are NOT redistributable and are NOT in this
+repository, in any form — no meshes, no textures, no cooked packages.
+
+  vehicle.ood.sedan          vehicle.ood.hatchback      vehicle.ood.suv
+  vehicle.ood.armoredvan     vehicle.ood.dumptruck      vehicle.ood.roadroller
+  walker.pedestrian.soldier  walker.pedestrian.wheelchair
+  static.prop.trafficmessageboard   static.prop.trafficarrowboard
+  static.prop.europianarrowboardtrailer   static.prop.roadclosedsign
+
+Two distinct reasons:
+
+  (a) Ten are paid marketplace assets whose licences prohibit standalone
+      redistribution AND separately prohibit AI use. A seller granting
+      redistribution would not cure the AI-use restriction, so no permission
+      path was available.
+
+  (b) Two are third-party game IP uploaded to a free model site under a licence
+      the uploader had no right to grant. They are not redistributable by
+      anyone, including us.
+
+These twelve are specified DIMENSIONALLY instead — the paper's appendix gives
+each prop's bounding box and its shift class, and the classifier rule that
+assigns a prop to the visual or geometric class is published. See
+docs/replacing-props.md. We deliberately do NOT name the marketplace listings:
+directing users to purchase assets carrying an AI-use prohibition, for use in an
+AI benchmark, would point them into the same restriction that closed that path
+for us.
+
+Blueprint IDs for the six vehicles were renamed to the neutral vehicle.ood.*
+namespace. That rename removes live third-party trademarks from a safety
+benchmark that publishes collision rates, and it decouples the blueprint ID from
+the asset's provenance so that a future mesh swap does not rewrite route XMLs.
+No trademark claim is made or implied by any identifier in this repository.
+
+
+================================================================================
+4. SUMMARY OF OBLIGATIONS IF YOU REDISTRIBUTE THIS REPOSITORY
+================================================================================
+
+  1. Keep this NOTICE file intact.
+  2. Keep the six per-asset attributions in section 2.
+  3. Keep the CARLA CC-BY attribution in section 1.
+  4. Do not use walker.pedestrian.firefighter commercially.
+  5. Do not add any of the twelve props in section 3 back into the pack.

@@ -1,0 +1,76 @@
+# OOD-PerceptionBench — import-pipeline site configuration
+#
+# Artifact version: v0.9 — corresponds to arXiv v1 of the OOD-PerceptionBench paper.
+#
+# Copy to `site_config.yaml` (beside the stage scripts, or in the directory you run them from)
+# and fill in every value for YOUR machine. There are no defaults: a stage that needs a key you
+# have not set fails immediately and tells you which key it wants.
+#
+# Any key can also be supplied through the environment as OODPB_<KEY_UPPERCASED>, e.g.
+#   export OODPB_CARLA_SRC=/opt/carla-src
+# Environment variables win over this file. `--config <file>` wins over $OODPB_SITE_CONFIG.
+#
+# Check what resolves before you start:
+#   python site_config.py --check
+
+# --- toolchain ------------------------------------------------------------------------------
+
+# The Blender executable.
+blender_bin: /opt/blender/blender
+
+# Unreal Engine 4.26 — CARLA's fork, not stock Epic UE. Stock UE cannot open the CARLA project.
+# `UE4Editor-Cmd` is expected at <ue_root>/Engine/Binaries/Linux/UE4Editor-Cmd.
+ue_root: /opt/UnrealEngine_4.26
+
+# CARLA 0.9.15 built FROM SOURCE. Must contain Makefile, Unreal/CarlaUE4/Content, and (after
+# cooking) Dist/. A packaged CARLA release is NOT enough — it has no Unreal project to cook in.
+carla_src: /opt/carla-source
+
+# The PACKAGED CARLA you actually evaluate with — contains CarlaUE4.sh, Import/, ImportAssets.sh.
+#
+# This is NOT the same directory as carla_src, and getting it wrong is the most common way to
+# lose an afternoon: the cook succeeds, the tarball installs into a CARLA nobody launches, and
+# every route then runs without your asset while still reporting a plausible score.
+carla_pkg: /opt/carla-0.9.15
+
+# A Python interpreter with the `carla` client package importable. Usually NOT the same
+# interpreter CARLA builds with.
+client_python: /opt/envs/carla-client/bin/python
+
+# Name of the Python 3.8 environment that satisfies CARLA's build requirements
+# (PythonAPI/util/requirements.txt), plus the conda/mamba root that provides it. `make package`
+# is run inside this environment.
+build_python_env: carla-build
+conda_root: /opt/conda
+
+# --- benchmark and working directories -------------------------------------------------------
+
+# Your clone of the OOD-PerceptionBench repository. Route templates, run-script templates and
+# the canonical route tree are resolved relative to this.
+bench_root: /work/OODPerceptionBench
+
+# Scratch space for per-asset runs, gate renders and resumable state files.
+work_root: /work/ood-import
+
+# Where validation-route output (checkpoint JSON, RGB frames, logs) is written.
+results_root: /work/ood-import/results
+
+# Where your downloaded source meshes live, together with the anchor files you exported once
+# from the Unreal editor.
+mesh_src: /work/meshes
+
+# The static anchor, exported to FBX from
+#   <carla_src>/Unreal/CarlaUE4/Content/Carla/Static/Dynamic/Construction/SM_TrafficCones_4
+# It is CARLA base content in the SOURCE tree and is not present in a packaged release.
+anchor_fbx: /work/meshes/TrafficWarning.FBX
+
+# --- optional: a second CARLA to install into ------------------------------------------------
+#
+# Only needed if you cook on one machine and evaluate on another (e.g. a workstation with the UE
+# build and a cluster with the simulator). Installing into one CARLA does not install into the
+# other, and a route run against the build that never received the tarball silently substitutes a
+# fallback actor. Leave these unset for a single-machine setup.
+#
+# secondary_carla_pkg: /shared/carla-0.9.15
+# secondary_ssh_host: user@login-node
+# secondary_submit_partitions: partition-a,partition-b

@@ -1,0 +1,333 @@
+name: acceptance
+
+# The acceptance harness is what decides whether an install of this benchmark measures what it
+# claims to measure. Its central failure mode is that a missing OOD asset does not crash: the
+# route completes, the Driving Score looks plausible, and the stimulus simply is not there.
+#
+# A harness that has quietly stopped detecting that looks exactly like a harness reporting good
+# news. So the harness gets its own CI.
+#
+# What CI *can* do: run the harness's self-tests, check that the smoke split still agrees with
+# the frozen route bundle, validate a golden bundle's integrity, run the route freeze validator
+# and the records/manifest reconciliation, and run the pre-tag readiness gate.
+# What CI can NOT do: execute the routes. That needs a GPU, CARLA 0.9.15 and the installed
+# content pack. No hosted runner has any of the three. See tests/goldens/GENERATING.md.
+#
+# This workflow used to run tests/selftest.py and nothing else — the repository's own
+# verification programs (routes/validate_routes.py, records/verify.sh,
+# tools/check_release_ready.py) existed but nothing ever executed them, so a broken route
+# freeze or a records table that no longer covered the benchmark would have shipped green.
+# The `data-integrity` and `release-readiness` jobs below are those gates.
+#
+# Default branch of this repository is `master`.
+
+on:
+  push:
+    branches: [ master ]
+    # A tag build is the one run where the readiness gate blocks. See `release-readiness`.
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+    inputs:
+      paper_repo:
+        description: >-
+          Path on the runner to a checkout of the paper repository. Enables the two records
+          checks that replay the paper's own statistics pipeline (checks 1/3 and 3/3 of
+          records/verify.sh). Leave empty on hosted runners: the paper repository is private
+          until arXiv, and those two checks are then reported as NOT ATTEMPTED, never as passed.
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: acceptance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  harness-selftest:
+    name: acceptance harness self-tests + split integrity
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Show the version stamp
+        run: cat tests/VERSION
+
+      - name: Smoke split still agrees with the frozen route bundle
+        # Every route in the split is pinned by sha256 into routes/. If a route XML is edited
+        # the benchmark definition has changed, and any golden generated before that edit is
+        # invalid. This must be a hard failure, not a warning.
+        #
+        # This step used to exit 0 with a notice when routes/ was empty, because the route
+        # freeze landed after the harness. The freeze has landed, so that escape hatch is now
+        # just a way for a deleted route tree to pass CI. It is a hard failure.
+        run: |
+          set -euo pipefail
+          if [ -z "$(find routes -mindepth 4 -name '*.xml' -print -quit 2>/dev/null)" ]; then
+            echo "::error title=Route tree missing::routes/ holds no route XMLs. The frozen 475 are part of this repository; nothing downstream can be verified without them."
+            exit 1
+          fi
+          python3 tests/smoke/materialize.py --verify-only
+
+      - name: Harness self-tests
+        # Synthetic leaderboard checkpoints driven through the real scripts: a missing asset, a
+        # Tesla substitution, a dropped criterion, an unfinalised checkpoint, a mismatched
+        # golden and a partial golden must each produce the right exit code.
+        run: |
+          set -euo pipefail
+          if [ -z "$(find routes -mindepth 4 -name '*.xml' -print -quit 2>/dev/null)" ]; then
+            echo "::error title=Route tree missing::the self-tests assert against the real frozen route tree, which is absent."
+            exit 1
+          fi
+          python3 tests/selftest.py
+
+      - name: Golden schema and example parse
+        run: |
+          set -euo pipefail
+          python3 -c "import json;json.load(open('tests/goldens/golden_schema.json'));print('schema OK')"
+          python3 -c "import json;d=json.load(open('tests/goldens/EXAMPLE.golden.json'));assert d['split']['sha256']=='0'*64,'the EXAMPLE must keep a zeroed split hash so it can never validate';print('example OK')"
+
+      - name: Smoke split must not name a non-redistributable asset
+        # v0.9 ships six assets. A split route needing one of the other twelve would be an
+        # unrunnable test for every user of this release -- a guaranteed red that teaches
+        # people to ignore the harness.
+        run: |
+          set -euo pipefail
+          bad=0
+          for a in trafficmessageboard trafficarrowboard europianarrowboardtrailer roadclosedsign soldier wheelchair sedan hatchback suv armoredvan dumptruck roadroller; do
+            if grep -qE "^[^#].*\.${a}\b" tests/smoke/SMOKE_SPLIT.tsv; then
+              echo "::error file=tests/smoke/SMOKE_SPLIT.tsv::split names ${a}, which is not redistributable at v0.9"
+              bad=1
+            fi
+          done
+          if [ "$bad" -ne 0 ]; then exit 1; fi
+          echo "split names only shippable assets"
+
+  acceptance-goldens:
+    name: golden bundle
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: harness-selftest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Is there a golden bundle?
+        id: detect
+        run: |
+          set -euo pipefail
+          # EXAMPLE.golden.json is documentation, not a golden; the harness ignores it by name
+          # and so must this.
+          found=$(find tests/goldens -maxdepth 1 -name '*.golden.json' ! -name 'EXAMPLE*' | head -1)
+          if [ -n "$found" ]; then
+            echo "have=true"     >> "$GITHUB_OUTPUT"
+            echo "bundle=$found" >> "$GITHUB_OUTPUT"
+          else
+            echo "have=false"    >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: SKIPPED — no golden bundle exists yet
+        if: steps.detect.outputs.have != 'true'
+        run: |
+          echo "::notice title=Acceptance goldens: SKIPPED::No golden bundle in tests/goldens/. Goldens require a GPU, a running CARLA 0.9.15 and the installed content pack, none of which a hosted runner has. This job starts checking automatically as soon as a bundle is committed. Procedure: tests/goldens/GENERATING.md"
+          {
+            echo "### Acceptance goldens: SKIPPED"
+            echo
+            echo "No \`*.golden.json\` in \`tests/goldens/\`, so assertion **A4 (Driving Score"
+            echo "within tolerance)** has nothing to compare against."
+            echo
+            echo "This is the expected state at **v0.9**. Goldens cannot be generated in CI:"
+            echo "they need a GPU, a running CARLA 0.9.15 and the installed content pack."
+            echo
+            echo "Assertions A1–A3 — including **A1 \`blueprint_spawned\`, the one that catches a"
+            echo "missing asset** — do not need goldens and are exercised by the self-test job"
+            echo "above."
+            echo
+            echo "To close this: follow [\`tests/goldens/GENERATING.md\`](tests/goldens/GENERATING.md)"
+            echo "on a GPU host and commit the bundle. This job then starts running by itself."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Golden bundle integrity
+        if: steps.detect.outputs.have == 'true'
+        # Checks the bundle is well formed, pinned to THIS smoke split by sha256, pinned to this
+        # bundle version, carries a measured tolerance, and covers every route in the split.
+        # It does not, and cannot, execute the routes.
+        run: |
+          set -euo pipefail
+          python3 tests/check_acceptance.py \
+            --validate-goldens-only \
+            --goldens "${{ steps.detect.outputs.bundle }}"
+
+      - name: Note what this did and did not prove
+        if: steps.detect.outputs.have == 'true'
+        run: |
+          {
+            echo "### Acceptance goldens: bundle validated"
+            echo
+            echo "\`${{ steps.detect.outputs.bundle }}\` is well formed, carries a measured"
+            echo "tolerance, and is pinned to the current smoke split and bundle version."
+            echo
+            echo "**This did not run the benchmark.** Executing the nine smoke routes requires a"
+            echo "GPU, CARLA 0.9.15 and the content pack. Run \`tests/check_acceptance.py\` on a"
+            echo "GPU host to assert A1–A4 against real output."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  data-integrity:
+    name: route freeze + records cover the benchmark
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    # The two things a reader of records/ has to be able to take on trust:
+    #   1. the 475 route XMLs are the ones the manifest and the paper describe, unedited;
+    #   2. the published records cover exactly those 475, once per model, no drops, no extras.
+    # Both have a program in this repository that proves them. Neither was ever run by CI.
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install the records tooling dependencies
+        run: python3 -m pip install --quiet 'pandas>=1.5'
+
+      - name: Route freeze validator — 38 checks over the frozen bundle
+        # Counts (475 = 70/162/243), level directories, blueprint vocabulary, base-route ids,
+        # the five deliberate exclusions, and every file's sha256 against MANIFEST.tsv.
+        # Stdlib only. If this is red the benchmark definition moved.
+        run: python3 routes/validate_routes.py
+
+      - name: Records cover the canonical route set exactly
+        # Check 2 of 3 in records/verify.sh — the one that needs nothing but this repository.
+        # It joins on the route key rather than counting, so a mis-keyed row cannot cancel a
+        # missing one, and it cross-checks the blueprint id recovered from the result JSONs
+        # against the manifest's.
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          csvs=(records/*.csv)
+          if [ "${#csvs[@]}" -ne 1 ]; then
+            echo "::error::expected exactly one records CSV in records/, found ${#csvs[@]}"
+            exit 1
+          fi
+          python3 records/reconcile_with_manifest.py \
+            --records "${csvs[0]}" --manifest routes/MANIFEST.tsv
+
+      - name: Records reproduce the paper — full records/verify.sh
+        # Checks 1/3 (row-level against the frozen paper CSVs) and 3/3 (Table 1 regenerates
+        # byte-identically by replaying the paper's own unmodified statistics scripts) need the
+        # paper repository, which is private until arXiv and is on no hosted runner. Dispatch
+        # this workflow with `paper_repo` on a runner that has it.
+        if: github.event_name == 'workflow_dispatch' && inputs.paper_repo != ''
+        # The dispatch input reaches the shell as an environment variable, never spliced into
+        # the script text: a `${{ }}` expansion inside `run:` is a script-injection seam.
+        env:
+          PAPER_REPO: ${{ inputs.paper_repo }}
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet 'pandas>=1.5' scipy numpy
+          bash records/verify.sh "$PAPER_REPO" "${RUNNER_TEMP}/records_verify"
+
+      - name: Say plainly which records checks were NOT attempted
+        # Not attempted is not the same as passed, and a green tick with no caveat reads as
+        # passed. The gap is stated in the job summary of every run that has it.
+        if: github.event_name != 'workflow_dispatch' || inputs.paper_repo == ''
+        run: |
+          {
+            echo "### Records: 1 of 3 checks run here"
+            echo
+            echo "| check | ran here |"
+            echo "|---|---|"
+            echo "| 1/3 row-level vs the frozen paper CSVs | **no** — needs the paper repository |"
+            echo "| 2/3 coverage vs routes/MANIFEST.tsv | yes |"
+            echo "| 3/3 Table 1 regenerates exactly | **no** — needs the paper repository |"
+            echo
+            echo "The paper repository is private until arXiv, so checks 1/3 and 3/3 cannot run"
+            echo "on a hosted runner. They are **not attempted**, which is not the same as passed."
+            echo "Run them before tagging:"
+            echo
+            echo '```'
+            echo "bash records/verify.sh <paper-repo> <scratch-dir>"
+            echo "python3 tools/check_release_ready.py --paper-repo <paper-repo>"
+            echo '```'
+            echo
+            echo "or re-dispatch this workflow with the \`paper_repo\` input on a runner that has it."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  release-readiness:
+    name: pre-tag readiness gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [harness-selftest, data-integrity]
+
+    # tools/check_release_ready.py aggregates every gate in the repository and used to exit 0
+    # while printing TODOs, so it could never block anything. Blocking is now its default and
+    # --allow-todo is the documented override for the intentional pre-tag state.
+    #
+    # On a branch or PR build the repository is legitimately mid-assembly, so the gate runs
+    # under the override: the TODO list is published to the job summary but does not fail the
+    # build. On a TAG build it runs without the override and a single TODO fails the tag.
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install the records tooling dependencies
+        # Without pandas the records gate degrades to "not attempted" rather than passing —
+        # install it so the gate is real.
+        run: python3 -m pip install --quiet 'pandas>=1.5'
+
+      - name: Readiness gate — blocking on a tag, advisory otherwise
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          # `pipefail` is load-bearing here, not habit: without it `tee` supplies the exit
+          # status and the gate can never fail the build — the same defect this job exists to
+          # repair, one layer down.
+          set -euo pipefail
+          if [ "$REF_TYPE" = "tag" ]; then
+            echo "tag build: the gate blocks."
+            python3 tools/check_release_ready.py | tee "${RUNNER_TEMP}/ready.txt"
+          else
+            python3 tools/check_release_ready.py \
+              --allow-todo "not a tag build: this repository is assembled in stages" \
+              | tee "${RUNNER_TEMP}/ready.txt"
+          fi
+
+      - name: Publish the readiness report
+        if: always()
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          {
+            echo "### Release readiness"
+            echo
+            if [ "$REF_TYPE" = "tag" ]; then
+              echo "Tag build — this gate **blocks**: any TODO fails the release."
+            else
+              echo "Branch/PR build — advisory, running under the documented"
+              echo "\`--allow-todo\` override. The TODOs below still have to be closed"
+              echo "before a tag can pass."
+            fi
+            echo
+            echo '```'
+            cat "${RUNNER_TEMP}/ready.txt" 2>/dev/null || echo "(the gate produced no output)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

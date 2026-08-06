@@ -1,0 +1,892 @@
+diff --git a/Bench2Drive/leaderboard/leaderboard/utils/statistics_manager.py b/Bench2Drive/leaderboard/leaderboard/utils/statistics_manager.py
+index c0ce5fb..42aad97 100644
+--- a/Bench2Drive/leaderboard/leaderboard/utils/statistics_manager.py
++++ b/Bench2Drive/leaderboard/leaderboard/utils/statistics_manager.py
+@@ -26,71 +26,151 @@ PENALTY_VALUE_DICT = {
+     TrafficEventType.TRAFFIC_LIGHT_INFRACTION: 0.7,
+     TrafficEventType.STOP_INFRACTION: 0.8,
+     TrafficEventType.SCENARIO_TIMEOUT: 0.7,
+-    TrafficEventType.YIELD_TO_EMERGENCY_VEHICLE: 0.7
++    TrafficEventType.YIELD_TO_EMERGENCY_VEHICLE: 0.7,
+ }
+ PENALTY_PERC_DICT = {
+     # Traffic events that substract a varying amount of points. This is the per unit value.
+     # 'increases' means that the higher the value, the higher the penalty.
+     # 'decreases' means that the ideal value is 100 and the lower the value, the higher the penalty.
+-    TrafficEventType.OUTSIDE_ROUTE_LANES_INFRACTION: [0, 'increases'],  # All route traversed through outside lanes is ignored
++    TrafficEventType.OUTSIDE_ROUTE_LANES_INFRACTION: [
++        0,
++        "increases",
++    ],  # All route traversed through outside lanes is ignored
+     # TrafficEventType.MIN_SPEED_INFRACTION: [0.7, 'decreases'],
+-    TrafficEventType.MIN_SPEED_INFRACTION: [0.7, 'unused'],
++    TrafficEventType.MIN_SPEED_INFRACTION: [0.7, "unused"],
+ }
+ 
+ PENALTY_NAME_DICT = {
+-    TrafficEventType.COLLISION_STATIC: 'collisions_layout',
+-    TrafficEventType.COLLISION_PEDESTRIAN: 'collisions_pedestrian',
+-    TrafficEventType.COLLISION_VEHICLE: 'collisions_vehicle',
+-    TrafficEventType.TRAFFIC_LIGHT_INFRACTION: 'red_light',
+-    TrafficEventType.STOP_INFRACTION: 'stop_infraction',
+-    TrafficEventType.OUTSIDE_ROUTE_LANES_INFRACTION: 'outside_route_lanes',
+-    TrafficEventType.MIN_SPEED_INFRACTION: 'min_speed_infractions',
+-    TrafficEventType.YIELD_TO_EMERGENCY_VEHICLE: 'yield_emergency_vehicle_infractions',
+-    TrafficEventType.SCENARIO_TIMEOUT: 'scenario_timeouts',
+-    TrafficEventType.ROUTE_DEVIATION: 'route_dev',
+-    TrafficEventType.VEHICLE_BLOCKED: 'vehicle_blocked',
++    TrafficEventType.COLLISION_STATIC: "collisions_layout",
++    TrafficEventType.COLLISION_PEDESTRIAN: "collisions_pedestrian",
++    TrafficEventType.COLLISION_VEHICLE: "collisions_vehicle",
++    TrafficEventType.TRAFFIC_LIGHT_INFRACTION: "red_light",
++    TrafficEventType.STOP_INFRACTION: "stop_infraction",
++    TrafficEventType.OUTSIDE_ROUTE_LANES_INFRACTION: "outside_route_lanes",
++    TrafficEventType.MIN_SPEED_INFRACTION: "min_speed_infractions",
++    TrafficEventType.YIELD_TO_EMERGENCY_VEHICLE: "yield_emergency_vehicle_infractions",
++    TrafficEventType.SCENARIO_TIMEOUT: "scenario_timeouts",
++    TrafficEventType.ROUTE_DEVIATION: "route_dev",
++    TrafficEventType.VEHICLE_BLOCKED: "vehicle_blocked",
++    TrafficEventType.TTR_DAR_MEASUREMENT: "ttr_dar",
++    TrafficEventType.INTERACTION_CORRECTNESS: "interaction_correctness",
++    TrafficEventType.IC_ANALYTIC: "ic_analytic",
++    TrafficEventType.TTR_DAR_ANALYTIC: "ttr_dar_analytic",
+ }
+ 
+ # Limit the entry status to some values. Eligible should always be gotten from this table
+-ENTRY_STATUS_VALUES = ['Started', 'Finished', 'Rejected', 'Crashed', 'Invalid']
+-ELIGIBLE_VALUES = {'Started': False, 'Finished': True, 'Rejected': False, 'Crashed': False, 'Invalid': False}
++ENTRY_STATUS_VALUES = ["Started", "Finished", "Rejected", "Crashed", "Invalid"]
++ELIGIBLE_VALUES = {
++    "Started": False,
++    "Finished": True,
++    "Rejected": False,
++    "Crashed": False,
++    "Invalid": False,
++}
+ 
+ # Dictionary mapping a route failure with the 'entry status' and 'status'
+ FAILURE_MESSAGES = {
+-    "Simulation" : ["Crashed", "Simulation crashed"],
++    "Simulation": ["Crashed", "Simulation crashed"],
+     "Sensors": ["Rejected", "Agent's sensors were invalid"],
+     "Agent_init": ["Started", "Agent couldn't be set up"],
+-    "Agent_runtime": ["Started", "Agent crashed"]
++    "Agent_runtime": ["Started", "Agent crashed"],
+ }
+ 
+ ROUND_DIGITS = 3
+ ROUND_DIGITS_SCORE = 6
+ 
+ 
+-class RouteRecord():
++class RouteRecord:
++
+     def __init__(self):
+         self.index = -1
+         self.route_id = None
+         self.scenario_name = None
+         self.weather_id = None
+         self.save_name = None
+-        self.status = 'Started'
++        self.status = "Started"
+         self.num_infractions = 0
+         self.infractions = {}
+         for event_name in PENALTY_NAME_DICT.values():
+             self.infractions[event_name] = []
+-        self.infractions['route_timeout'] = []
++        self.infractions["route_timeout"] = []
+ 
+-        self.scores = {
+-            'score_route': 0,
+-            'score_penalty': 0,
+-            'score_composed': 0
+-        }
++        self.scores = {"score_route": 0, "score_penalty": 0, "score_composed": 0}
+ 
+         self.meta = {
+-            'route_length': 0,
+-            'duration_game': 0,
+-            'duration_system': 0,
++            "route_length": 0,
++            "duration_game": 0,
++            "duration_system": 0,
++        }
++
++        self.ttr_dar = {
++            "ttr": None,
++            "dar": None,
++            "reaction_detected": None,
++            "agent_type": None,
++            # Enhanced logging fields
++            "t_obs_frame": None,
++            "t_react_frame": None,
++            "closing_velocity": None,
++            "ttc_at_reaction": None,
++            "reaction_cause": None,
++            "reaction_value": None,
++            "reaction_threshold": None,
++            # Additional context for P1 (speed change)
++            "v_start": None,
++            "v_end": None,
++            # Debugging info for no-reaction cases
++            "final_distance": None,
++            "final_closing_velocity": None,
++            "final_ttc": None,
++            # All reactions for post-hoc analysis
++            "all_reactions": [],
++            "num_reactions": 0,
++        }
++
++        self.interaction_correctness = {
++            "ic": None,
++            "strategy_type": None,
++            "violation_occurred": None,
++            "violation_frame": None,
++            "ego_entered_zone": None,
++            "agent_entered_zone": None,
++            "agent_cleared_zone": None,
++            "t_ego_enter_zone": None,
++            "t_agent_enter_zone": None,
++            "t_agent_clear_zone": None,
++            "ego_stopped_before_zone": None,
++            "agent_type": None,
++        }
++
++        # Analytic IC data for parameter calibration
++        self.ic_analytic = {
++            "criterion_type": None,
++            "agent_type": None,
++            # Time-series data (stored as lists for post-hoc analysis)
++            "time_series_data": None,  # Will contain the relevant history for each criterion type
++            # Summary statistics
++            "summary": None,
++            "num_frames_logged": 0,
++        }
++
++        # Analytic TTR/DAR data for parameter calibration
++        self.ttr_dar_analytic = {
++            "criterion_type": None,
++            "agent_type": None,
++            # Time-series data (stored as lists for post-hoc analysis)
++            "frame_data": None,  # Per-frame measurements
++            # Key frame info
++            "t_obs_frame": None,
++            "num_frames_logged": 0,
++            # Summary statistics
++            "min_distance": None,
++            "max_velocity": None,
++            "min_velocity": None,
++            "min_acceleration": None,
++            "max_deceleration": None,
++            "min_ttc": None,
++            "frames_observed": None,
+         }
+ 
+     def to_json(self):
+@@ -98,35 +178,32 @@ class RouteRecord():
+         return vars(self)
+ 
+ 
+-class GlobalRecord():
++class GlobalRecord:
+     def __init__(self):
+         self.index = -1
+         self.route_id = -1
+-        self.status = 'Perfect'
++        self.status = "Perfect"
+         self.infractions = {}
+         for event_name in PENALTY_NAME_DICT.values():
+             self.infractions[event_name] = 0
+-        self.infractions['route_timeout'] = 0
++        self.infractions["route_timeout"] = 0
+ 
+-        self.scores_mean = {
+-            'score_composed': 0,
+-            'score_route': 0,
+-            'score_penalty': 0
+-        }
++        self.scores_mean = {"score_composed": 0, "score_route": 0, "score_penalty": 0}
+         self.scores_std_dev = self.scores_mean.copy()
+ 
+         self.meta = {
+             "total_length": 0,
+             "duration_game": 0,
+             "duration_system": 0,
+-            'exceptions': []
++            "exceptions": [],
+         }
+ 
+     def to_json(self):
+         """Return a JSON serializable object"""
+         return vars(self)
+ 
+-class Checkpoint():
++
++class Checkpoint:
+ 
+     def __init__(self):
+         self.global_record = {}
+@@ -136,15 +213,17 @@ class Checkpoint():
+     def to_json(self):
+         """Return a JSON serializable object"""
+         d = {}
+-        d['global_record'] = self.global_record.to_json() if self.global_record else {}
+-        d['progress'] = self.progress
+-        d['records'] = []
+-        d['records'] = [x.to_json() for x in self.records if x.index != -1]  # Index -1 = Route in progress
++        d["global_record"] = self.global_record.to_json() if self.global_record else {}
++        d["progress"] = self.progress
++        d["records"] = []
++        d["records"] = [
++            x.to_json() for x in self.records if x.index != -1
++        ]  # Index -1 = Route in progress
+ 
+         return d
+ 
+ 
+-class Results():
++class Results:
+ 
+     def __init__(self):
+         self.checkpoint = Checkpoint()
+@@ -157,12 +236,12 @@ class Results():
+     def to_json(self):
+         """Return a JSON serializable object"""
+         d = {}
+-        d['_checkpoint'] = self.checkpoint.to_json()
+-        d['entry_status'] = self.entry_status
+-        d['eligible'] = self.eligible
+-        d['sensors'] = self.sensors
+-        d['values'] = self.values
+-        d['labels'] = self.labels
++        d["_checkpoint"] = self.checkpoint.to_json()
++        d["entry_status"] = self.entry_status
++        d["eligible"] = self.eligible
++        d["sensors"] = self.sensors
++        d["values"] = self.values
++        d["labels"] = self.labels
+ 
+         return d
+ 
+@@ -189,9 +268,7 @@ def compute_route_length(route):
+     return route_length
+ 
+ 
+-
+ class StatisticsManager(object):
+-
+     """
+     This is the statistics manager for the CARLA leaderboard.
+     It gathers data at runtime via the scenario evaluation criteria.
+@@ -210,23 +287,25 @@ class StatisticsManager(object):
+         data = fetch_dict(endpoint)
+ 
+         if data:
+-            route_records = dictor(data, '_checkpoint.records')
++            route_records = dictor(data, "_checkpoint.records")
+             if route_records:
+                 for record in route_records:
+                     self._results.checkpoint.records.append(to_route_record(record))
+ 
+     def clear_records(self):
+         """Cleanes up the file"""
+-        if not self._endpoint.startswith(('http:', 'https:', 'ftp:')):
+-            with open(self._endpoint, 'w') as fd:
++        if not self._endpoint.startswith(("http:", "https:", "ftp:")):
++            with open(self._endpoint, "w") as fd:
+                 fd.truncate(0)
+ 
+     def sort_records(self):
+         """Sorts the route records according to their route id (This being i.e RouteScenario0_rep0)"""
+-        self._results.checkpoint.records.sort(key=lambda x: (
+-            int(x.route_id.split('_')[1]),
+-            int(x.route_id.split('_rep')[-1])
+-        ))
++        self._results.checkpoint.records.sort(
++            key=lambda x: (
++                int(x.route_id.split("_")[1]),
++                int(x.route_id.split("_rep")[-1]),
++            )
++        )
+ 
+         for i, record in enumerate(self._results.checkpoint.records):
+             record.index = i
+@@ -242,48 +321,49 @@ class StatisticsManager(object):
+ 
+         all_events.sort(key=lambda e: e.get_frame(), reverse=True)
+ 
+-        with open(self._debug_endpoint, 'w') as f:
+-            f.write("Route id: {}\n\n"
+-                    "Scenario: {}\n\n"
+-                    "Town name: {}\n\n"
+-                    "Weather id: {}\n\n"
+-                    "Save name: {}\n\n"
+-                    "Scores:\n"
+-                    "    Driving score:      {:.3f}\n"
+-                    "    Route completion:   {:.3f}\n"
+-                    "    Infraction penalty: {:.3f}\n\n"
+-                    "    Route length:    {:.3f}\n"
+-                    "    Game duration:   {:.3f}\n"
+-                    "    System duration: {:.3f}\n\n"
+-                    "Ego:\n"
+-                    "    Throttle:           {:.3f}\n"
+-                    "    Brake:              {:.3f}\n"
+-                    "    Steer:              {:.3f}\n\n"
+-                    "    Speed:           {:.3f} km/h\n\n"
+-                    "    Location:           ({:.3f} {:.3f} {:.3f})\n\n"
+-                    "Total infractions: {}\n"
+-                    "Last 5 infractions:\n".format(
+-                        route_record.route_id,
+-                        route_record.scenario_name,
+-                        route_record.town_name,
+-                        route_record.weather_id,
+-                        route_record.save_name,
+-                        route_record.scores["score_composed"],
+-                        route_record.scores["score_route"],
+-                        route_record.scores["score_penalty"],
+-                        route_record.meta["route_length"],
+-                        route_record.meta["duration_game"],
+-                        route_record.meta["duration_system"],
+-                        ego_control.throttle,
+-                        ego_control.brake,
+-                        ego_control.steer,
+-                        ego_speed * 3.6,
+-                        ego_location.x,
+-                        ego_location.y,
+-                        ego_location.z,
+-                        route_record.num_infractions
+-                    )
++        with open(self._debug_endpoint, "w") as f:
++            f.write(
++                "Route id: {}\n\n"
++                "Scenario: {}\n\n"
++                "Town name: {}\n\n"
++                "Weather id: {}\n\n"
++                "Save name: {}\n\n"
++                "Scores:\n"
++                "    Driving score:      {:.3f}\n"
++                "    Route completion:   {:.3f}\n"
++                "    Infraction penalty: {:.3f}\n\n"
++                "    Route length:    {:.3f}\n"
++                "    Game duration:   {:.3f}\n"
++                "    System duration: {:.3f}\n\n"
++                "Ego:\n"
++                "    Throttle:           {:.3f}\n"
++                "    Brake:              {:.3f}\n"
++                "    Steer:              {:.3f}\n\n"
++                "    Speed:           {:.3f} km/h\n\n"
++                "    Location:           ({:.3f} {:.3f} {:.3f})\n\n"
++                "Total infractions: {}\n"
++                "Last 5 infractions:\n".format(
++                    route_record.route_id,
++                    route_record.scenario_name,
++                    route_record.town_name,
++                    route_record.weather_id,
++                    route_record.save_name,
++                    route_record.scores["score_composed"],
++                    route_record.scores["score_route"],
++                    route_record.scores["score_penalty"],
++                    route_record.meta["route_length"],
++                    route_record.meta["duration_game"],
++                    route_record.meta["duration_system"],
++                    ego_control.throttle,
++                    ego_control.brake,
++                    ego_control.steer,
++                    ego_speed * 3.6,
++                    ego_location.x,
++                    ego_location.y,
++                    ego_location.z,
++                    route_record.num_infractions,
+                 )
++            )
+             for e in all_events[:5]:
+                 # Prevent showing the ROUTE_COMPLETION event.
+                 event_type = e.get_type()
+@@ -291,9 +371,13 @@ class StatisticsManager(object):
+                     continue
+                 string = "    " + str(e.get_type()).replace("TrafficEventType.", "")
+                 if event_type in PENALTY_VALUE_DICT:
+-                    string += " (penalty: " + str(PENALTY_VALUE_DICT[event_type]) + ")\n"
++                    string += (
++                        " (penalty: " + str(PENALTY_VALUE_DICT[event_type]) + ")\n"
++                    )
+                 elif event_type in PENALTY_PERC_DICT:
+-                    string += " (value: " + str(round(e.get_dict()['percentage'], 3)) + "%)\n"
++                    string += (
++                        " (value: " + str(round(e.get_dict()["percentage"], 3)) + "%)\n"
++                    )
+ 
+                 f.write(string)
+ 
+@@ -310,7 +394,9 @@ class StatisticsManager(object):
+         self._results.checkpoint.progress = [route_index, total_routes]
+         self._total_routes = total_routes
+ 
+-    def create_route_data(self, route_id, scenario_name, weather_id, save_name, town_name, index):
++    def create_route_data(
++        self, route_id, scenario_name, weather_id, save_name, town_name, index
++    ):
+         """
+         Creates the basic route data.
+         This is done at the beginning to ensure the data is saved, even if a crash occurs
+@@ -339,23 +425,30 @@ class StatisticsManager(object):
+         self._scenario = None
+         self._route_length = 0
+ 
+-    def compute_route_statistics(self, route_index, duration_time_system=-1, duration_time_game=-1, failure_message=""):
++    def compute_route_statistics(
++        self,
++        route_index,
++        duration_time_system=-1,
++        duration_time_game=-1,
++        failure_message="",
++    ):
+         """
+         Compute the current statistics by evaluating all relevant scenario criteria.
+         Failure message will not be empty if an external source has stopped the simulations (i.e simulation crash).
+         For the rest of the cases, it will be filled by this function depending on the criteria.
+         """
++
+         def set_infraction_message():
+             infraction_name = PENALTY_NAME_DICT[event.get_type()]
+             route_record.infractions[infraction_name].append(event.get_message())
+ 
+         def set_score_penalty(score_penalty):
+-            event_value = event.get_dict()['percentage']
++            event_value = event.get_dict()["percentage"]
+             penalty_value, penalty_type = PENALTY_PERC_DICT[event.get_type()]
+             if penalty_type == "decreases":
+-                score_penalty *= (1 - (1 - penalty_value) * (1 - event_value / 100))
++                score_penalty *= 1 - (1 - penalty_value) * (1 - event_value / 100)
+             elif penalty_type == "increases":
+-                score_penalty *= (1 - (1 - penalty_value) * event_value / 100)
++                score_penalty *= 1 - (1 - penalty_value) * event_value / 100
+             elif penalty_type == "unused":
+                 pass
+             else:
+@@ -372,14 +465,14 @@ class StatisticsManager(object):
+             route_record.infractions[event_name] = []
+ 
+         # Update the route meta
+-        route_record.meta['route_length'] = self._route_length
+-        route_record.meta['duration_game'] = round(duration_time_game, ROUND_DIGITS)
+-        route_record.meta['duration_system'] = round(duration_time_system, ROUND_DIGITS)
++        route_record.meta["route_length"] = self._route_length
++        route_record.meta["duration_game"] = round(duration_time_game, ROUND_DIGITS)
++        route_record.meta["duration_system"] = round(duration_time_system, ROUND_DIGITS)
+ 
+         # Update the route infractions
+         if self._scenario:
+             if self._scenario.timeout_node.timeout:
+-                route_record.infractions['route_timeout'].append('Route timeout.')
++                route_record.infractions["route_timeout"].append("Route timeout.")
+                 failure_message = "Agent timed out"
+ 
+             for node in self._scenario.get_criteria():
+@@ -404,23 +497,139 @@ class StatisticsManager(object):
+                         set_infraction_message()
+ 
+                     elif event.get_type() == TrafficEventType.ROUTE_COMPLETION:
+-                        score_route = event.get_dict()['route_completed']
++                        score_route = event.get_dict()["route_completed"]
+                         target_reached = score_route >= 100
+ 
++                    elif event.get_type() == TrafficEventType.TTR_DAR_MEASUREMENT:
++                        event_dict = event.get_dict()
++                        route_record.ttr_dar = {
++                            "ttr": event_dict.get("ttr"),
++                            "dar": event_dict.get("dar"),
++                            "reaction_detected": event_dict.get("ttr") is not None,
++                            "agent_type": event_dict.get("agent_type"),
++                            # Enhanced logging fields
++                            "t_obs_frame": event_dict.get("t_obs_frame"),
++                            "t_react_frame": event_dict.get("t_react_frame"),
++                            "closing_velocity": event_dict.get("closing_velocity"),
++                            "ttc_at_reaction": event_dict.get("ttc_at_reaction"),
++                            "reaction_cause": event_dict.get("reaction_cause"),
++                            "reaction_value": event_dict.get("reaction_value"),
++                            "reaction_threshold": event_dict.get("reaction_threshold"),
++                            # Additional context for P1 (speed change)
++                            "v_start": event_dict.get("v_start"),
++                            "v_end": event_dict.get("v_end"),
++                            # Debugging info for no-reaction cases
++                            "final_distance": event_dict.get("final_distance"),
++                            "final_closing_velocity": event_dict.get("final_closing_velocity"),
++                            "final_ttc": event_dict.get("final_ttc"),
++                            # All reactions for post-hoc analysis
++                            "all_reactions": event_dict.get("all_reactions", []),
++                            "num_reactions": event_dict.get("num_reactions", 0),
++                        }
++
++                    elif event.get_type() == TrafficEventType.INTERACTION_CORRECTNESS:
++                        event_dict = event.get_dict()
++                        route_record.interaction_correctness = {
++                            "ic": event_dict.get("ic"),
++                            "strategy_type": event_dict.get("strategy_type"),
++                            "violation_occurred": event_dict.get("violation_occurred"),
++                            "violation_frame": event_dict.get("violation_frame"),
++                            "ego_entered_zone": event_dict.get("ego_entered_zone"),
++                            "agent_entered_zone": event_dict.get("agent_entered_zone"),
++                            "agent_cleared_zone": event_dict.get("agent_cleared_zone"),
++                            "t_ego_enter_zone": event_dict.get("t_ego_enter_zone"),
++                            "t_agent_enter_zone": event_dict.get("t_agent_enter_zone"),
++                            "t_agent_clear_zone": event_dict.get("t_agent_clear_zone"),
++                            "ego_stopped_before_zone": event_dict.get("ego_stopped_before_zone"),
++                            "agent_type": event_dict.get("agent_type"),
++                            # ICBoundedLateralAdjustment specific fields
++                            "max_lateral_offset_change": event_dict.get("max_lateral_offset_change"),
++                            "nudge_detected": event_dict.get("nudge_detected"),
++                            "nudge_frame": event_dict.get("nudge_frame"),
++                            "ego_stopped": event_dict.get("ego_stopped"),
++                            "stopped_frame": event_dict.get("stopped_frame"),
++                            "ego_lane_changed": event_dict.get("ego_lane_changed"),
++                            "lane_change_frame": event_dict.get("lane_change_frame"),
++                            "initial_lane_id": event_dict.get("initial_lane_id"),
++                            "final_lane_id": event_dict.get("final_lane_id"),
++                            "theta_y": event_dict.get("theta_y"),
++                            # ICMandatoryStopGap specific fields
++                            "t_agent_active": event_dict.get("t_agent_active"),
++                            "t_ego_passed_stop": event_dict.get("t_ego_passed_stop"),
++                            "ego_stopped_before_stop": event_dict.get("ego_stopped_before_stop"),
++                            "ego_passed_stop": event_dict.get("ego_passed_stop"),
++                            "agent_retrieved": event_dict.get("agent_retrieved"),
++                            "ego_min_dist_to_stop": event_dict.get("ego_min_dist_to_stop"),
++                            "stop_distance_from_obstacle": event_dict.get("stop_distance_from_obstacle"),
++                        }
++
++                    elif event.get_type() == TrafficEventType.IC_ANALYTIC:
++                        event_dict = event.get_dict()
++                        criterion_type = event_dict.get("criterion_type")
++                        
++                        # Extract the appropriate time-series data based on criterion type
++                        time_series_key = None
++                        if criterion_type == "ICImmediateLateralAnalytic":
++                            time_series_key = "ttc_history"
++                        elif criterion_type == "ICMandatoryStopGapAnalytic":
++                            time_series_key = "distance_history"
++                        elif criterion_type == "ICWaitThenSwerveAnalytic":
++                            time_series_key = "occupancy_history"
++                        elif criterion_type == "ICYieldUntilClearAnalytic":
++                            time_series_key = "position_history"
++                        elif criterion_type == "ICBoundedLateralAdjustmentAnalytic":
++                            time_series_key = "lateral_history"
++                        
++                        route_record.ic_analytic = {
++                            "criterion_type": criterion_type,
++                            "agent_type": event_dict.get("agent_type"),
++                            # Store all event data for flexible post-hoc analysis
++                            "time_series_data": event_dict.get(time_series_key) if time_series_key else None,
++                            # Also store the full event dict for complete data access
++                            "full_data": event_dict,
++                            "num_frames_logged": event_dict.get("num_frames_logged", 0),
++                        }
++
++                    elif event.get_type() == TrafficEventType.TTR_DAR_ANALYTIC:
++                        event_dict = event.get_dict()
++                        route_record.ttr_dar_analytic = {
++                            "criterion_type": event_dict.get("criterion_type"),
++                            "agent_type": event_dict.get("agent_type"),
++                            # Time-series data for post-hoc analysis
++                            "frame_data": event_dict.get("frame_data"),
++                            # Key frame info
++                            "t_obs_frame": event_dict.get("t_obs_frame"),
++                            "num_frames_logged": event_dict.get("num_frames_logged", 0),
++                            # Summary statistics
++                            "min_distance": event_dict.get("min_distance"),
++                            "max_velocity": event_dict.get("max_velocity"),
++                            "min_velocity": event_dict.get("min_velocity"),
++                            "min_acceleration": event_dict.get("min_acceleration"),
++                            "max_deceleration": event_dict.get("max_deceleration"),
++                            "min_ttc": event_dict.get("min_ttc"),
++                            "frames_observed": event_dict.get("frames_observed"),
++                        }
++
+         # Update route scores
+-        route_record.scores['score_route'] = round(score_route, ROUND_DIGITS_SCORE)
+-        route_record.scores['score_penalty'] = round(score_penalty, ROUND_DIGITS_SCORE)
+-        route_record.scores['score_composed'] = round(max(score_route * score_penalty, 0.0), ROUND_DIGITS_SCORE)
++        route_record.scores["score_route"] = round(score_route, ROUND_DIGITS_SCORE)
++        route_record.scores["score_penalty"] = round(score_penalty, ROUND_DIGITS_SCORE)
++        route_record.scores["score_composed"] = round(
++            max(score_route * score_penalty, 0.0), ROUND_DIGITS_SCORE
++        )
+ 
+         # Update result
+-        route_record.num_infractions = sum([len(route_record.infractions[key]) for key in route_record.infractions])
++        route_record.num_infractions = sum(
++            [len(route_record.infractions[key]) for key in route_record.infractions]
++        )
+ 
+         if target_reached:
+-            route_record.status = 'Completed' if route_record.num_infractions > 0 else 'Perfect'
++            route_record.status = (
++                "Completed" if route_record.num_infractions > 0 else "Perfect"
++            )
+         else:
+-            route_record.status = 'Failed'
++            route_record.status = "Failed"
+             if failure_message:
+-                route_record.status += ' - ' + failure_message
++                route_record.status += " - " + failure_message
+ 
+         # Add the new data, or overwrite a previous result (happens when resuming the simulation)
+         record_len = len(self._results.checkpoint.records)
+@@ -433,12 +642,16 @@ class StatisticsManager(object):
+ 
+     def compute_global_statistics(self):
+         """Computes and saves the global statistics of the routes"""
++
+         def get_infractions_value(route_record, key):
+             # Special case for the % based criteria. Extract the meters from the message. Very ugly, but it works
+-            if key == PENALTY_NAME_DICT[TrafficEventType.OUTSIDE_ROUTE_LANES_INFRACTION]:
++            if (
++                key
++                == PENALTY_NAME_DICT[TrafficEventType.OUTSIDE_ROUTE_LANES_INFRACTION]
++            ):
+                 if not route_record.infractions[key]:
+                     return 0.0
+-                return float(route_record.infractions[key][0].split(" ")[8])/1000
++                return float(route_record.infractions[key][0].split(" ")[8]) / 1000
+ 
+             return len(route_record.infractions[key])
+ 
+@@ -450,26 +663,38 @@ class StatisticsManager(object):
+         # Calculate the score's means and result
+         for route_record in route_records:
+ 
+-            global_record.scores_mean['score_route'] += route_record.scores['score_route'] / self._total_routes
+-            global_record.scores_mean['score_penalty'] += route_record.scores['score_penalty'] / self._total_routes
+-            global_record.scores_mean['score_composed'] += route_record.scores['score_composed'] / self._total_routes
+-
+-            global_record.meta['total_length'] += route_record.meta['route_length']
+-            global_record.meta['duration_game'] += route_record.meta['duration_game']
+-            global_record.meta['duration_system'] += route_record.meta['duration_system']
++            global_record.scores_mean["score_route"] += (
++                route_record.scores["score_route"] / self._total_routes
++            )
++            global_record.scores_mean["score_penalty"] += (
++                route_record.scores["score_penalty"] / self._total_routes
++            )
++            global_record.scores_mean["score_composed"] += (
++                route_record.scores["score_composed"] / self._total_routes
++            )
++
++            global_record.meta["total_length"] += route_record.meta["route_length"]
++            global_record.meta["duration_game"] += route_record.meta["duration_game"]
++            global_record.meta["duration_system"] += route_record.meta[
++                "duration_system"
++            ]
+ 
+             # Downgrade the global result if need be ('Perfect' -> 'Completed' -> 'Failed'), and record the failed routes
+-            route_result = 'Failed' if 'Failed' in route_record.status else route_record.status
+-            if route_result == 'Failed':
+-                global_record.meta['exceptions'].append((route_record.route_id,
+-                                                         route_record.index,
+-                                                         route_record.status))
++            route_result = (
++                "Failed" if "Failed" in route_record.status else route_record.status
++            )
++            if route_result == "Failed":
++                global_record.meta["exceptions"].append(
++                    (route_record.route_id, route_record.index, route_record.status)
++                )
+                 global_result = route_result
+-            elif global_result == 'Perfect' and route_result != 'Perfect':
++            elif global_result == "Perfect" and route_result != "Perfect":
+                 global_result = route_result
+ 
+         for item in global_record.scores_mean:
+-            global_record.scores_mean[item] = round(global_record.scores_mean[item], ROUND_DIGITS_SCORE)
++            global_record.scores_mean[item] = round(
++                global_record.scores_mean[item], ROUND_DIGITS_SCORE
++            )
+         global_record.status = global_result
+ 
+         # Calculate the score's standard deviation
+@@ -483,43 +708,105 @@ class StatisticsManager(object):
+                     global_record.scores_std_dev[key] += math.pow(diff, 2)
+ 
+             for key in global_record.scores_std_dev:
+-                value = round(math.sqrt(global_record.scores_std_dev[key] / float(self._total_routes - 1)), ROUND_DIGITS)
++                value = round(
++                    math.sqrt(
++                        global_record.scores_std_dev[key]
++                        / float(self._total_routes - 1)
++                    ),
++                    ROUND_DIGITS,
++                )
+                 global_record.scores_std_dev[key] = value
+ 
+         # Calculate the number of infractions per km
+         km_driven = 0
+         for route_record in route_records:
+-            km_driven += route_record.meta['route_length'] / 1000 * route_record.scores['score_route'] / 100
++            km_driven += (
++                route_record.meta["route_length"]
++                / 1000
++                * route_record.scores["score_route"]
++                / 100
++            )
+             for key in global_record.infractions:
+-                global_record.infractions[key] += get_infractions_value(route_record, key)
++                global_record.infractions[key] += get_infractions_value(
++                    route_record, key
++                )
+         km_driven = max(km_driven, 0.001)
+ 
+         for key in global_record.infractions:
+             # Special case for the % based criteria.
+-            if key != PENALTY_NAME_DICT[TrafficEventType.OUTSIDE_ROUTE_LANES_INFRACTION]:
++            if (
++                key
++                != PENALTY_NAME_DICT[TrafficEventType.OUTSIDE_ROUTE_LANES_INFRACTION]
++            ):
+                 global_record.infractions[key] /= km_driven
+-            global_record.infractions[key] = round(global_record.infractions[key], ROUND_DIGITS)
++            global_record.infractions[key] = round(
++                global_record.infractions[key], ROUND_DIGITS
++            )
+ 
+         # Save the global records
+         self._results.checkpoint.global_record = global_record
+ 
+         # Change the values and labels. These MUST HAVE A MATCHING ORDER
+         self._results.values = [
+-            str(global_record.scores_mean['score_composed']),
+-            str(global_record.scores_mean['score_route']),
+-            str(global_record.scores_mean['score_penalty']),
+-            str(global_record.infractions[PENALTY_NAME_DICT[TrafficEventType.COLLISION_PEDESTRIAN]]),
+-            str(global_record.infractions[PENALTY_NAME_DICT[TrafficEventType.COLLISION_VEHICLE]]),
+-            str(global_record.infractions[PENALTY_NAME_DICT[TrafficEventType.COLLISION_STATIC]]),
+-            str(global_record.infractions[PENALTY_NAME_DICT[TrafficEventType.TRAFFIC_LIGHT_INFRACTION]]),
+-            str(global_record.infractions[PENALTY_NAME_DICT[TrafficEventType.STOP_INFRACTION]]),
+-            str(global_record.infractions[PENALTY_NAME_DICT[TrafficEventType.OUTSIDE_ROUTE_LANES_INFRACTION]]),
+-            str(global_record.infractions[PENALTY_NAME_DICT[TrafficEventType.ROUTE_DEVIATION]]),
+-            str(global_record.infractions['route_timeout']),
+-            str(global_record.infractions[PENALTY_NAME_DICT[TrafficEventType.VEHICLE_BLOCKED]]),
+-            str(global_record.infractions[PENALTY_NAME_DICT[TrafficEventType.YIELD_TO_EMERGENCY_VEHICLE]]),
+-            str(global_record.infractions[PENALTY_NAME_DICT[TrafficEventType.SCENARIO_TIMEOUT]]),
+-            str(global_record.infractions[PENALTY_NAME_DICT[TrafficEventType.MIN_SPEED_INFRACTION]]),
++            str(global_record.scores_mean["score_composed"]),
++            str(global_record.scores_mean["score_route"]),
++            str(global_record.scores_mean["score_penalty"]),
++            str(
++                global_record.infractions[
++                    PENALTY_NAME_DICT[TrafficEventType.COLLISION_PEDESTRIAN]
++                ]
++            ),
++            str(
++                global_record.infractions[
++                    PENALTY_NAME_DICT[TrafficEventType.COLLISION_VEHICLE]
++                ]
++            ),
++            str(
++                global_record.infractions[
++                    PENALTY_NAME_DICT[TrafficEventType.COLLISION_STATIC]
++                ]
++            ),
++            str(
++                global_record.infractions[
++                    PENALTY_NAME_DICT[TrafficEventType.TRAFFIC_LIGHT_INFRACTION]
++                ]
++            ),
++            str(
++                global_record.infractions[
++                    PENALTY_NAME_DICT[TrafficEventType.STOP_INFRACTION]
++                ]
++            ),
++            str(
++                global_record.infractions[
++                    PENALTY_NAME_DICT[TrafficEventType.OUTSIDE_ROUTE_LANES_INFRACTION]
++                ]
++            ),
++            str(
++                global_record.infractions[
++                    PENALTY_NAME_DICT[TrafficEventType.ROUTE_DEVIATION]
++                ]
++            ),
++            str(global_record.infractions["route_timeout"]),
++            str(
++                global_record.infractions[
++                    PENALTY_NAME_DICT[TrafficEventType.VEHICLE_BLOCKED]
++                ]
++            ),
++            str(
++                global_record.infractions[
++                    PENALTY_NAME_DICT[TrafficEventType.YIELD_TO_EMERGENCY_VEHICLE]
++                ]
++            ),
++            str(
++                global_record.infractions[
++                    PENALTY_NAME_DICT[TrafficEventType.SCENARIO_TIMEOUT]
++                ]
++            ),
++            str(
++                global_record.infractions[
++                    PENALTY_NAME_DICT[TrafficEventType.MIN_SPEED_INFRACTION]
++                ]
++            ),
+         ]
+ 
+         self._results.labels = [
+@@ -537,17 +824,17 @@ class StatisticsManager(object):
+             "Agent blocked",
+             "Yield emergency vehicles infractions",
+             "Scenario timeouts",
+-            "Min speed infractions"
++            "Min speed infractions",
+         ]
+ 
+         # Change the entry status and eligible
+-        entry_status = 'Finished'
++        entry_status = "Finished"
+         for route_record in route_records:
+             route_status = route_record.status
+-            if 'Simulation crashed' in route_status:
+-                entry_status = 'Crashed'
++            if "Simulation crashed" in route_status:
++                entry_status = "Crashed"
+             elif "Agent's sensors were invalid" in route_status:
+-                entry_status = 'Rejected'
++                entry_status = "Rejected"
+ 
+         self.save_entry_status(entry_status)
+ 
+@@ -563,7 +850,7 @@ class StatisticsManager(object):
+         elif not self._results.values:
+             error_message = "Missing 'values' data"
+ 
+-        elif self._results.entry_status == 'Started':
++        elif self._results.entry_status == "Started":
+             error_message = "'entry_status' has the 'Started' value"
+ 
+         else:
+@@ -577,20 +864,24 @@ class StatisticsManager(object):
+             elif not progress:
+                 error_message = "Missing 'progress' data"
+ 
+-            elif not crashed and (progress[0] != progress[1] or progress[0] != len(route_records)):
++            elif not crashed and (
++                progress[0] != progress[1] or progress[0] != len(route_records)
++            ):
+                 error_message = "'progress' data doesn't match its expected value"
+ 
+             else:
+                 for record in route_records:
+-                    if record.status == 'Started':
++                    if record.status == "Started":
+                         error_message = "Found a route record with missing data"
+                         break
+ 
+         if error_message:
+-            print("\n\033[91mThe statistics are badly formed. Setting their status to 'Invalid':")
++            print(
++                "\n\033[91mThe statistics are badly formed. Setting their status to 'Invalid':"
++            )
+             print("> {}\033[0m\n".format(error_message))
+ 
+-            self.save_entry_status('Invalid')
++            self.save_entry_status("Invalid")
+ 
+         self.write_statistics()
+ 

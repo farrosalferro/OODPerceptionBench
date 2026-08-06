@@ -1,0 +1,146 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "ood-perceptionbench/golden/1",
+  "title": "OOD-PerceptionBench golden bundle",
+  "description": "Expected outputs for one smoke split, measured with a reference agent over several replicate runs. Written by tests/make_golden.py, consumed by tests/check_acceptance.py. Validated structurally by the harness (no third-party jsonschema dependency); this file is the normative description.",
+  "type": "object",
+  "required": ["schema", "bundle_version", "binds_to", "split", "reference_agent", "environment", "protocol", "tolerance", "generated", "routes"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {"const": "ood-perceptionbench/golden/1"},
+    "bundle_version": {
+      "type": "string",
+      "description": "Release bundle this golden is valid for, e.g. 'v0.9'. The harness rejects a mismatch: a golden is only valid for the content-pack version it was measured against.",
+      "examples": ["v0.9"]
+    },
+    "binds_to": {
+      "type": "string",
+      "description": "arXiv version these numbers correspond to (coordinator standing rule 1).",
+      "examples": ["arXiv v1"]
+    },
+    "reportable": {
+      "const": false,
+      "description": "Always false. Smoke-split scores must never be published as a benchmark result; six-to-nine routes cannot approximate a claim computed over 55 base routes."
+    },
+    "split": {
+      "type": "object",
+      "required": ["name", "tier", "sha256", "n_routes"],
+      "additionalProperties": true,
+      "properties": {
+        "name": {"const": "smoke"},
+        "tier": {"enum": ["core", "all"]},
+        "path": {"type": "string"},
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "sha256 of SMOKE_SPLIT.tsv. The harness refuses a bundle whose split hash differs from the split being checked -- comparing across splits is meaningless."
+        },
+        "n_routes": {"type": "integer", "minimum": 1}
+      }
+    },
+    "reference_agent": {
+      "type": "object",
+      "required": ["name", "version"],
+      "properties": {
+        "name": {"type": "string", "examples": ["pdmlite"]},
+        "version": {"type": "string", "description": "Commit, tag, or checkpoint identity. Free-form but must not be empty."}
+      }
+    },
+    "environment": {
+      "type": "object",
+      "required": ["carla_version", "content_pack_version"],
+      "properties": {
+        "carla_version": {"type": "string", "examples": ["0.9.15"]},
+        "content_pack_version": {"type": "string", "examples": ["v0.9"]},
+        "content_pack_sha256": {"type": ["string", "null"]},
+        "gpu": {"type": ["string", "null"]},
+        "os": {"type": ["string", "null"]},
+        "python": {"type": ["string", "null"]},
+        "runner_version": {"type": ["string", "null"]}
+      }
+    },
+    "protocol": {
+      "type": "object",
+      "required": ["seed", "repetitions", "n_replicates"],
+      "properties": {
+        "seed": {"const": 42, "description": "The published protocol is seed 42 only."},
+        "repetitions": {"const": 1},
+        "n_replicates": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Independent runs of the whole split. >= 2 is required for the tolerance to be measured rather than floored; make_golden.py needs --allow-single-replicate to go below."
+        }
+      }
+    },
+    "tolerance": {
+      "type": "object",
+      "required": ["driving_score_abs", "policy"],
+      "properties": {
+        "driving_score_abs": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Absolute Driving Score tolerance for assertion A4. Required: a golden without a tolerance is a wish, not a golden."
+        },
+        "policy": {"type": "string", "description": "How the number above was derived, in words."},
+        "max_observed_spread": {"type": "number", "minimum": 0}
+      }
+    },
+    "generated": {
+      "type": "object",
+      "required": ["utc", "by"],
+      "properties": {
+        "utc": {"type": "string"},
+        "by": {"type": "string"},
+        "procedure": {"type": "string"},
+        "notes": {"type": ["string", "null"]}
+      }
+    },
+    "routes": {
+      "type": "object",
+      "description": "Keyed by route path relative to the canonical routes root -- the same key the split uses. Must cover every route in the split; a partial bundle is rejected, because it would silently downgrade the uncovered routes to unchecked.",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "required": ["expected_blueprint_id", "observed_agent_type", "status", "driving_score", "replicates", "ds_spread"],
+        "properties": {
+          "route_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "expected_blueprint_id": {
+            "type": "string",
+            "description": "Blueprint the route XML asks for. Re-derived from the XML at generation time, not copied from the split."
+          },
+          "observed_agent_type": {
+            "type": "string",
+            "description": "type_id of the actor that actually spawned, read from record.ttr_dar.agent_type (which is the live actor's type_id). Equal to expected_blueprint_id in any bundle make_golden.py agrees to write."
+          },
+          "status": {"type": "string", "examples": ["Completed", "Perfect"]},
+          "driving_score": {"type": "number", "description": "Median across replicates."},
+          "route_completion": {"type": ["number", "null"]},
+          "infraction_penalty": {"type": ["number", "null"]},
+          "replicates": {
+            "type": "array",
+            "minItems": 1,
+            "description": "Every per-replicate observation, kept so the tolerance can be audited rather than trusted.",
+            "items": {
+              "type": "object",
+              "required": ["replicate", "status", "driving_score"],
+              "properties": {
+                "replicate": {"type": "string"},
+                "status": {"type": "string"},
+                "driving_score": {"type": "number"},
+                "route_completion": {"type": ["number", "null"]},
+                "infraction_penalty": {"type": ["number", "null"]},
+                "observed_agent_type": {"type": "string"}
+              }
+            }
+          },
+          "ds_spread": {"type": "number", "minimum": 0, "description": "max - min across replicates."},
+          "published_seed42_driving_score": {
+            "type": "number",
+            "description": "Optional. From the published records, for orientation only; never gating."
+          },
+          "published_seed42_delta": {"type": "number"}
+        }
+      }
+    }
+  }
+}

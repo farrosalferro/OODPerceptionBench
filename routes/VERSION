@@ -1,0 +1,14 @@
+# OOD-PerceptionBench -- canonical route bundle
+artifact: routes
+bundle_version: v0.9
+binds_to: arXiv v1
+routes: 475
+per_category: static=70 pedestrian=162 vehicle=243
+base_routes: 55
+seed_protocol: seed 42 only (see the Protocol section of the top-level README.md)
+frozen_by: make_manifest.py (routes freeze)
+
+# Two-version discipline: this bundle defines the route set that produced the v0.9
+# baseline records, which bind to arXiv v1. A v1.0 bundle (asset replacements for the
+# non-redistributable props) will bind to arXiv v2 and MUST NOT be compared row-for-row
+# against v0.9 scores. Any published result must state which bundle version it used.

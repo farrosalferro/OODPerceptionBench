@@ -1,0 +1,20 @@
+diff --git a/Bench2Drive/scenario_runner/srunner/scenariomanager/traffic_events.py b/Bench2Drive/scenario_runner/srunner/scenariomanager/traffic_events.py
+index d7fe1bd..49be924 100644
+--- a/Bench2Drive/scenario_runner/srunner/scenariomanager/traffic_events.py
++++ b/Bench2Drive/scenario_runner/srunner/scenariomanager/traffic_events.py
+@@ -33,6 +33,15 @@ class TrafficEventType(Enum):
+     MIN_SPEED_INFRACTION = 14
+     YIELD_TO_EMERGENCY_VEHICLE = 15
+     SCENARIO_TIMEOUT = 16
++    
++    # Perception Metrics
++    TTR_DAR_MEASUREMENT = 17
++    
++    # Planning Metrics
++    INTERACTION_CORRECTNESS = 18
++    IC_ANALYTIC = 19  # Analytic IC data for parameter calibration
++    TTR_DAR_ANALYTIC = 20  # Analytic TTR/DAR data for parameter calibration
++    
+ 
+ 
+ class TrafficEvent(object):

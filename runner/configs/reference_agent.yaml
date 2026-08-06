@@ -1,0 +1,80 @@
+# OOD-PerceptionBench runner — worked example wiring up the shipped reference agent.
+#
+# Benchmark release v0.9 (binds to arXiv v1).
+#
+# The reference agent is a plumbing test, not a baseline: it drives forward at a constant speed
+# and will score badly. Its job is to prove that CARLA starts on the intended GPU, the route
+# loads, the agent interface binds, criteria attach, and a finalized checkpoint JSON lands in
+# the right place — before you spend ~58 GPU-hours on a real model.
+#
+#   python run_benchmark.py --config configs/reference_agent.yaml --limit 1 --dry-run
+#   python run_benchmark.py --config configs/reference_agent.yaml --limit 1
+
+version: 1
+
+benchmark:
+  release: v0.9
+  arxiv_version: v1
+  seed: 42
+  repetitions: 1
+
+carla:
+  root: <path-to-carla-0.9.15>
+  client_timeout_s: 900
+
+leaderboard:
+  work_dir: <path-to-bench2drive-checkout>
+  root: <path-to-bench2drive-checkout>/leaderboard
+  scenario_runner_root: <path-to-bench2drive-checkout>/scenario_runner
+
+agent:
+  entrypoint: <path-to-this-repo>/runner/reference_agent/constant_velocity_agent.py
+  config: ""
+  track: SENSORS
+  pythonpath: []
+  env:
+    OODBENCH_TARGET_SPEED: "4.0"
+
+environment:
+  activate: []
+  python: python3
+
+execution:
+  backend: local
+  workers: 1
+  route_timeout_s: 1800
+  poll_interval_s: 5
+
+gpus:
+  - {cuda: 0, vulkan: 0}
+
+ports:
+  rpc_base: 20000
+  tm_base: 30000
+  stride: 10
+  probe: true
+
+retry:
+  record_budget: 1
+  infra_budget: 1
+  tickruntime_budget: 0
+  worker_quarantine_after: 2
+
+resume:
+  mode: skip_terminal
+
+output:
+  root: <path-to-output-dir>/reference_agent_smoke
+
+routes:
+  # The smoke split is a *selection*, not a directory in routes/. It is defined by
+  # tests/smoke/SMOKE_SPLIT.tsv and materialized out of the frozen route bundle
+  # (verifying each sha256 on the way):
+  #
+  #   python3 tests/smoke/materialize.py --out <path-to-scratch>/smoke_routes
+  #
+  # Point `root` at that output directory. Pointing it at routes/ instead runs all
+  # 475 routes, which is not what this config is for.
+  root: <path-to-scratch>/smoke_routes
+  manifest: null
+  strict_manifest: false

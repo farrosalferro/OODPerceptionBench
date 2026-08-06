@@ -1,0 +1,27 @@
+# OOD-PerceptionBench -- PUBLISHED seed-42 observations for the smoke-split routes
+# bundle_version: v0.9
+# binds_to: arXiv v1
+# source: records/ood_perceptionbench_records_v0.9.csv, model=pdmlite, seed=42
+#
+# *** THIS IS NOT A GOLDEN FILE. ***
+# These are the values the reference agent produced on the authors' build during the
+# published sweep. Nobody has measured how far they move on different hardware, so there
+# is no defensible tolerance attached to them and check_acceptance.py does NOT read this
+# file. It exists for two narrower purposes:
+#   1. it tells whoever generates real goldens what to expect, so a wildly different
+#      number is noticed at generation time rather than after publication;
+#   2. observed_agent_type documents, from the published run, that the actor which spawned
+#      on each of these routes really did carry the type_id the route XML asks for.
+# make_golden.py reports the delta against these numbers as INFO and never gates on it.
+#
+# separator is a single TAB
+path	category	scenario	level	base_route_id	prop_blueprint_id	observed_agent_type	town	status	driving_score	route_completion	infraction_penalty	route_length_m	duration_game_s	duration_system_s
+static/construction_obstacle/base/route_24795_trafficwarning.xml	static	construction_obstacle	base	24795	static.prop.trafficwarning	static.prop.trafficwarning	Town04	Completed	100.00	100.00	1.0000	141.6	13.2	13.0
+static/construction_obstacle/geometric_shift/route_24795_concreteroadbarrier.xml	static	construction_obstacle	geometric_shift	24795	static.prop.concreteroadbarrier	static.prop.concreteroadbarrier	Town04	Completed	100.00	100.00	1.0000	141.6	13.2	14.0
+static/construction_obstacle/geometric_shift/route_24795_roadclosedbarricade.xml	static	construction_obstacle	geometric_shift	24795	static.prop.roadclosedbarricade	static.prop.roadclosedbarricade	Town04	Completed	100.00	100.00	1.0000	141.6	13.2	18.0
+pedestrian/dynamic_object_crossing/base/route_24224_0001.xml	pedestrian	dynamic_object_crossing	base	24224	walker.pedestrian.0001	walker.pedestrian.0001	Town02	Completed	100.00	100.00	1.0000	132.1	12.9	9.0
+pedestrian/dynamic_object_crossing/visual_shift/route_24224_astronaut.xml	pedestrian	dynamic_object_crossing	visual_shift	24224	walker.pedestrian.astronaut	walker.pedestrian.astronaut	Town02	Completed	100.00	100.00	1.0000	132.1	12.8	9.0
+pedestrian/dynamic_object_crossing/visual_shift/route_24224_firefighter.xml	pedestrian	dynamic_object_crossing	visual_shift	24224	walker.pedestrian.firefighter	walker.pedestrian.firefighter	Town02	Completed	100.00	100.00	1.0000	132.1	12.8	9.0
+pedestrian/dynamic_object_crossing/geometric_shift/route_24224_boar.xml	pedestrian	dynamic_object_crossing	geometric_shift	24224	walker.pedestrian.boar	walker.pedestrian.boar	Town02	Completed	100.00	100.00	1.0000	132.1	12.8	8.0
+pedestrian/dynamic_object_crossing/geometric_shift/route_24224_deliveryrobot.xml	pedestrian	dynamic_object_crossing	geometric_shift	24224	walker.pedestrian.deliveryrobot	walker.pedestrian.deliveryrobot	Town02	Completed	100.00	100.00	1.0000	132.1	12.8	9.0
+vehicle/hard_break/base/route_26456_mkz_2020.xml	vehicle	hard_break	base	26456	vehicle.lincoln.mkz_2020	vehicle.lincoln.mkz_2020	Town03	Completed	100.00	100.00	1.0000	131.4	19.9	29.0

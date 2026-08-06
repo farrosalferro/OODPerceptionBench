@@ -1,0 +1,58 @@
+# OOD-PerceptionBench — machine configuration template
+#
+# Copy this to config/<your-machine>.yaml, fill it in, and pass it as --config.
+# Every value below is REQUIRED and has no working default. That is deliberate:
+# a config file with plausible-looking defaults pointing at somebody else's
+# cluster is worse than one that refuses to start.
+#
+# Version stamp: 0.9.0 (arXiv v1). The runner workstream owns this schema; if a
+# key here disagrees with runner/README.md, the runner is authoritative.
+
+# --- Simulator ---------------------------------------------------------------
+# Must be CARLA 0.9.15 exactly. The content pack ships a cooked WalkerFactory
+# that overwrites base content and is version-locked. Other versions fail
+# silently, not loudly.
+carla_root: /REPLACE/ME/CARLA_0.9.15
+
+# --- Patched harness ---------------------------------------------------------
+# The directory you passed to setup.sh --upstream-dir.
+upstream_dir: /REPLACE/ME/carla_garage
+
+# --- Compute -----------------------------------------------------------------
+gpus:    [0]        # physical GPU ids the worker pool may use
+workers: 1          # processes; each pins exactly one GPU via CUDA_VISIBLE_DEVICES
+
+# Per-worker port allocation: worker i gets rpc_base + i*stride and
+# tm_base + i*stride. Give stride enough headroom that two workers can never
+# collide -- CARLA claims more than one port around its RPC port.
+ports:
+  rpc_base: 2000
+  tm_base:  8000
+  stride:   50
+
+# --- Agent -------------------------------------------------------------------
+agent:
+  # Python file exposing get_entry_point() -> name of your AutonomousAgent subclass.
+  entrypoint: /REPLACE/ME/your_agent.py
+  # Optional config/checkpoint path handed to your agent's setup().
+  config: ""
+  # Command prefix used to launch the agent in its own environment.
+  # Leave empty to use the current interpreter. Example:
+  #   env_command: "conda run --no-capture-output -n <your-env>"
+  env_command: ""
+
+# --- Output ------------------------------------------------------------------
+output_root: /REPLACE/ME/results
+
+# --- Execution ---------------------------------------------------------------
+timeout_s: 1800     # per route, wall clock
+retries:   1        # bounded. Some model/route pairs fail intermittently in the
+                    # simulator and succeed on retry; unbounded retry hides a
+                    # genuinely broken agent.
+resume:    true     # skip routes whose output record is already FINALIZED
+                    # (finalized, not merely present -- a truncated record is
+                    # not a completed route)
+
+# --- Protocol ----------------------------------------------------------------
+# Do not change this if you want numbers comparable to the published baselines.
+seed: 42

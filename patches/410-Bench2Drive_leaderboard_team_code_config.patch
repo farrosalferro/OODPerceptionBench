@@ -1,0 +1,13 @@
+diff --git a/Bench2Drive/leaderboard/team_code/config.py b/Bench2Drive/leaderboard/team_code/config.py
+index 9f1b2c0..9833a80 100644
+--- a/Bench2Drive/leaderboard/team_code/config.py
++++ b/Bench2Drive/leaderboard/team_code/config.py
+@@ -400,6 +400,8 @@ class GlobalConfig:
+         # DataAgent
+         # -----------------------------------------------------------------------------
+         # Data agent hyperparameters
++        # Set to True to randomly shuffle weather (ignores route XML), False to respect route XML weather
++        self.shuffle_weather = False
+         self.azimuths = [45.0 * i for i in range(8)]
+         # Daytimes used for data collection
+         self.daytimes = {

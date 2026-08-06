@@ -1,0 +1,15 @@
+diff --git a/Bench2Drive/leaderboard/team_code/data_agent.py b/Bench2Drive/leaderboard/team_code/data_agent.py
+index ac9420f..5255d96 100644
+--- a/Bench2Drive/leaderboard/team_code/data_agent.py
++++ b/Bench2Drive/leaderboard/team_code/data_agent.py
+@@ -90,7 +90,9 @@ class DataAgent(AutoPilot):
+ 
+     def _init(self, hd_map):
+         super()._init(hd_map)
+-        if self.datagen:
++        # Only shuffle weather if explicitly enabled and datagen is True
++        # Set to False to respect route XML weather settings
++        if self.datagen and getattr(self.config, 'shuffle_weather', False):
+             self.shuffle_weather()
+ 
+         obs_config = {

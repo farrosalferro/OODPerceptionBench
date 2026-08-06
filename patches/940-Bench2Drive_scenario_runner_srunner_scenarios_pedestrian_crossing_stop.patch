@@ -1,0 +1,354 @@
+diff --git a/Bench2Drive/scenario_runner/srunner/scenarios/pedestrian_crossing_stop.py b/Bench2Drive/scenario_runner/srunner/scenarios/pedestrian_crossing_stop.py
+new file mode 100644
+index 0000000..9afbc31
+--- /dev/null
++++ b/Bench2Drive/scenario_runner/srunner/scenarios/pedestrian_crossing_stop.py
+@@ -0,0 +1,348 @@
++#!/usr/bin/env python
++# This work is licensed under the terms of the MIT license.
++# For a copy, see <https://opensource.org/licenses/MIT>.
++"""
++Pedestrians crossing through the middle of the lane.
++"""
++
++from __future__ import print_function
++
++import py_trees
++import carla
++import numpy as np
++
++from srunner.scenariomanager.carla_data_provider import CarlaDataProvider
++from srunner.scenariomanager.scenarioatomics.atomic_behaviors import (
++    ActorDestroy,
++    KeepVelocity,
++    WaitForever,
++    Idle,
++    ActorTransformSetter,
++    MovePedestrianWithEgo,
++    ScenarioTimeout,
++)
++from srunner.scenariomanager.scenarioatomics.atomic_criteria import (
++    CollisionTest,
++    TTRDARCriterion,
++)
++try:
++    from srunner.scenariomanager.scenarioatomics.atomic_criteria import ICImmediateLateral
++except ImportError:
++    ICImmediateLateral = None
++from srunner.scenariomanager.scenarioatomics.atomic_trigger_conditions import (
++    InTriggerDistanceToLocation,
++    InTimeToArrivalToLocation,
++    DriveDistance,
++    WaitUntilInFrontPosition,
++)
++from srunner.scenarios.basic_scenario import BasicScenario
++from srunner.tools.scenario_helper import get_location_in_distance_from_wp
++
++from srunner.tools.background_manager import (
++    HandleJunctionScenario,
++    ChangeOppositeBehavior,
++)
++
++
++def convert_dict_to_location(actor_dict):
++    """
++    Convert a JSON string to a Carla.Location
++    """
++    location = carla.Location(
++        x=float(actor_dict["x"]), y=float(actor_dict["y"]), z=float(actor_dict["z"])
++    )
++    return location
++
++
++def get_value_parameter(config, name, p_type, default):
++    if name in config.other_parameters:
++        return p_type(config.other_parameters[name]["value"])
++    else:
++        return default
++
++
++class PedestrianCrossingStop(BasicScenario):
++    """
++    This class holds everything required for a group of jaywalking pedestrians crossing the road.
++    The ego vehicle is passing through a road and encounters pedestrians jaywalking
++    in the middle of the road (not at a junction).
++
++    The pedestrians will:
++    1. Start crossing the road
++    2. Stop in the middle of the road
++    3. Wait until the ego vehicle passes in front of them
++    4. Resume crossing to complete their journey
++
++    This is a single ego vehicle scenario.
++
++    Configuration parameters:
++    - pedestrian_blueprint: Specific pedestrian blueprint to use (default: 'walker.pedestrian.boar')
++    - crossing_distance: Distance ahead of trigger point where pedestrians will cross (default: 15.0 meters)
++    - crossing_angle: Angle of crossing from perpendicular, -90 to 90 degrees (default: 0)
++    - direction: Which side the pedestrians come from - 'left' or 'right' (default: 'right')
++    - num_crossers: Number of pedestrians to spawn (default: 3)
++    """
++
++    def __init__(
++        self,
++        world,
++        ego_vehicles,
++        config,
++        debug_mode=False,
++        criteria_enable=True,
++        timeout=60,
++    ):
++        """
++        Setup all relevant parameters and create scenario
++        """
++        self._wmap = CarlaDataProvider.get_map()
++        self._trigger_location = config.trigger_points[0].location
++        self._reference_waypoint = self._wmap.get_waypoint(self._trigger_location)
++        self._rng = CarlaDataProvider.get_random_seed()
++
++        self._pedestrian_blueprint = get_value_parameter(
++            config, "pedestrian_blueprint", str, "walker.pedestrian.boar"
++        )
++        self._crossing_distance = get_value_parameter(
++            config, "crossing_distance", float, 15.0
++        )
++        self._crossing_angle = get_value_parameter(config, "crossing_angle", float, 0)
++        if abs(self._crossing_angle) > 90:
++            raise ValueError(
++                "'crossing_angle' must be between -90 and 90º for the pedestrian to cross the road"
++            )
++        self._direction = get_value_parameter(config, "direction", str, "right")
++        if self._direction not in ("left", "right"):
++            raise ValueError(
++                f"'direction' must be either 'right' or 'left' but {self._direction} was given"
++            )
++
++        self._crosser_speed = 2.5  # Speed of the pedestrian [m/s]
++        self._reaction_time = (
++            4.0  # Time the agent has to react to avoid the collision [s]
++        )
++        self._min_trigger_dist = 12.0  # Min distance to the collision location that triggers the adversary [m]
++        self._ego_end_distance = 90
++        self._scenario_timeout = 240
++
++        self._adversary_transform = None
++        self._collision_wp = None
++        self._collision_dist = 0
++
++        super().__init__(
++            "PedestrianCrossing",
++            ego_vehicles,
++            config,
++            world,
++            debug_mode,
++            criteria_enable=criteria_enable,
++        )
++
++    def _initialize_actors(self, config):
++        """
++        Custom initialization - spawn crossers at the sidewalk
++        """
++        # Get the waypoint at the crossing distance ahead of trigger
++        location, _ = get_location_in_distance_from_wp(
++            self._reference_waypoint, self._crossing_distance, False
++        )
++        waypoint = self._wmap.get_waypoint(location)
++        self._collision_wp = waypoint
++
++        # Move to the sidewalk
++        sidewalk_waypoint = waypoint
++        while sidewalk_waypoint.lane_type != carla.LaneType.Sidewalk:
++            if self._direction == "right":
++                side_wp = sidewalk_waypoint.get_right_lane()
++            else:
++                side_wp = sidewalk_waypoint.get_left_lane()
++            if side_wp is None:
++                break  # No more side lanes
++            sidewalk_waypoint = side_wp
++
++        # Get the spawn transform for pedestrian
++        yaw_offset = 270 - self._crossing_angle
++        z_offset = 0.3
++        rotation = sidewalk_waypoint.transform.rotation
++        rotation.yaw += yaw_offset
++        location = sidewalk_waypoint.transform.location
++        location.z += z_offset
++        spawn_transform = carla.Transform(location, rotation)
++        adversary = CarlaDataProvider.request_new_actor(
++            self._pedestrian_blueprint, spawn_transform
++        )
++
++        if adversary is None:
++            raise ValueError("Failed to spawn pedestrian")
++
++        adversary.set_location(spawn_transform.location + carla.Location(z=-200))
++        adversary = self._replace_walker(adversary)
++
++        # Calculate crossing distance
++        collision_dist = waypoint.transform.location.distance(spawn_transform.location)
++        self._collision_dist = max(self._collision_dist, collision_dist)
++
++        # Store actor with its movement data
++        move_dist = collision_dist / np.cos(np.radians(self._crossing_angle))
++
++        self._crosser_data = {
++            "actor": adversary,
++            "transform": spawn_transform,
++            "speed": self._crosser_speed,
++            "distance": move_dist,
++        }
++
++        self.other_actors.append(adversary)
++
++        if not self.other_actors:
++            raise ValueError("Failed to spawn any pedestrians")
++
++    def _create_behavior(self):
++        """
++        After invoking this scenario, crossers (pedestrians or bicycles) will wait for the user
++        controlled vehicle to enter trigger distance region. The crossers start crossing the road
++        once the condition meets and stops in the middle
++        """
++        sequence = py_trees.composites.Sequence(name="PedestrianCrossing")
++        if self.route_mode:
++            sequence.add_child(
++                HandleJunctionScenario(
++                    clear_junction=False,
++                    clear_ego_entry=True,
++                    remove_entries=[],
++                    remove_exits=[],
++                    stop_entries=False,
++                    extend_road_exit=0,
++                )
++            )
++            sequence.add_child(ChangeOppositeBehavior(active=False))
++
++        # Set initial positions for all pedestrians
++        sequence.add_child(
++            ActorTransformSetter(
++                self._crosser_data["actor"], self._crosser_data["transform"], True
++            )
++        )
++
++        collision_location = self._collision_wp.transform.location
++
++        # Wait until ego is close to the adversary
++        trigger_adversary = py_trees.composites.Parallel(
++            policy=py_trees.common.ParallelPolicy.SUCCESS_ON_ONE,
++            name="TriggerAdversaryStart",
++        )
++        trigger_adversary.add_child(
++            InTimeToArrivalToLocation(
++                self.ego_vehicles[0], self._reaction_time, collision_location
++            )
++        )
++        trigger_adversary.add_child(
++            InTriggerDistanceToLocation(
++                self.ego_vehicles[0], collision_location, self._min_trigger_dist
++            )
++        )
++        sequence.add_child(trigger_adversary)
++
++        # move the pedestrian
++        crosser_actor = self._crosser_data["actor"]
++        main_behavior = py_trees.composites.Sequence()
++        main_behavior.add_child(
++            KeepVelocity(
++                crosser_actor,
++                self._crosser_data["speed"],
++                False,
++                distance=self._crosser_data["distance"],
++            )
++        )
++        main_behavior.add_child(WaitForever())
++
++        end_condition = py_trees.composites.Parallel(
++            policy=py_trees.common.ParallelPolicy.SUCCESS_ON_ONE, name="EndCondition"
++        )
++
++        ego_end_wp = self._collision_wp.next(self._ego_end_distance)[0]
++        end_condition.add_child(main_behavior)
++        end_condition.add_child(
++            WaitUntilInFrontPosition(
++                self.ego_vehicles[0], ego_end_wp.transform, check_distance=False
++            )
++        )
++        end_condition.add_child(
++            ScenarioTimeout(self._scenario_timeout, self.config.name)
++        )
++
++        sequence.add_child(end_condition)
++        sequence.add_child(ActorDestroy(crosser_actor, name="DestroyAdversary"))
++
++        if self.route_mode:
++            sequence.add_child(ChangeOppositeBehavior(active=True))
++
++        return sequence
++
++    def _create_test_criteria(self):
++        """
++        A list of all test criteria will be created that is later used
++        in parallel behavior tree.
++        """
++        criteria = []
++        if hasattr(self, "_crosser_data") and self._crosser_data:
++            criteria.append(
++                TTRDARCriterion(
++                    self.ego_vehicles[0],
++                    self._crosser_data["actor"],
++                    d_obs=60.0,
++                    ttc_threshold=2.0,
++                    name="TTRDARPedestrianCrossingStop",
++                )
++            )
++            criteria.append(
++                ICImmediateLateral(
++                    self.ego_vehicles[0],
++                    self._crosser_data["actor"],
++                    ttc_threshold=3.0,
++                    theta_y=0.5,
++                    d_obs=60.0,
++                    name="ICImmediateLateralPedestrianCrossingStop",
++                )
++            )
++        if not self.route_mode:
++            criteria.append(CollisionTest(self.ego_vehicles[0]))
++        return criteria
++
++    def __del__(self):
++        """
++        Remove all actors upon deletion
++        """
++        self.remove_all_actors()
++
++    # TODO: Pedestrian have an issue with large maps were setting them to dormant breaks them,
++    # so all functions below are meant to patch it until the fix is done
++    def _replace_walker(self, walker):
++        """As the adversary is probably, replace it with another one"""
++        type_id = walker.type_id
++        walker.destroy()
++        spawn_transform = self.ego_vehicles[0].get_transform()
++        spawn_transform.location.z -= 50
++        walker = CarlaDataProvider.request_new_actor(type_id, spawn_transform)
++        if not walker:
++            raise ValueError("Couldn't spawn the walker substitute")
++        walker.set_simulate_physics(False)
++        walker.set_location(spawn_transform.location + carla.Location(z=-50))
++        return walker
++
++    def _setup_scenario_trigger(self, config):
++        """Normal scenario trigger but in parallel, a behavior that ensures the pedestrian stays active"""
++        trigger_tree = super()._setup_scenario_trigger(config)
++
++        if not self.route_mode:
++            return trigger_tree
++
++        parallel = py_trees.composites.Parallel(
++            policy=py_trees.common.ParallelPolicy.SUCCESS_ON_ONE, name="ScenarioTrigger"
++        )
++
++        for i, walker in enumerate(reversed(self.other_actors)):
++            parallel.add_child(MovePedestrianWithEgo(self.ego_vehicles[0], walker, 100))
++
++        parallel.add_child(trigger_tree)
++        return parallel

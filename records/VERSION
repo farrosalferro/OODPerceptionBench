@@ -1,0 +1,13 @@
+bundle: ood-perceptionbench-records
+version: v0.9
+binds_to: arXiv v1
+schema: ood-perceptionbench/records/1
+seed: 42
+n_rows: 8550
+n_models: 18
+n_routes: 475
+rename_map: release/rename_map.json (v0.9, arXiv v1)
+note: |
+  v0.9 records bind to arXiv v1. v1.0 records will bind to arXiv v2 and will NOT
+  be comparable: the v1.0 asset-replacement track re-runs 12 of the 18 OOD props.
+  Never mix the two score sets.

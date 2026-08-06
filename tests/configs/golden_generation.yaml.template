@@ -1,0 +1,81 @@
+# OOD-PerceptionBench -- runner config for generating a golden bundle.
+#
+# Benchmark release v0.9 (binds to arXiv v1).
+#
+# Copy this file, replace every <angle-bracket> placeholder, and run it once per replicate
+# into a DIFFERENT output root. Full procedure: tests/goldens/GENERATING.md
+#
+#   python3 runner/run_benchmark.py --config /scratch/golden_gen.yaml --out /scratch/smoke_rep1
+#
+# The settings marked LOCKED are not preferences. Changing them changes what the golden
+# means -- see the notes under each one.
+
+version: 1
+
+benchmark:
+  release: v0.9
+  arxiv_version: v1
+  seed: 42            # LOCKED. The published protocol is seed 42 only.
+  repetitions: 1      # LOCKED. One seed per run; the replicates ARE the repetition.
+
+carla:
+  root: <path-to-carla-0.9.15-with-the-v0.9-content-pack-installed>
+  client_timeout_s: 900
+
+leaderboard:
+  work_dir: <path-to-the-patched-carla_garage-checkout>
+  root: <path-to-the-patched-carla_garage-checkout>/Bench2Drive/leaderboard
+  scenario_runner_root: <path-to-the-patched-carla_garage-checkout>/Bench2Drive/scenario_runner
+
+agent:
+  # PDM-Lite is the reference agent: privileged perception, so run-to-run variance reflects
+  # the simulator rather than the model. See GENERATING.md section 0.
+  entrypoint: <path-to-pdmlite-agent.py>
+  config: <path-to-pdmlite-config-or-checkpoint>
+  track: MAP
+  pythonpath: []
+  env: {}
+
+environment:
+  activate:
+    - <command to activate the environment PDM-Lite runs in>
+  python: python3
+
+execution:
+  backend: local
+  workers: 1          # LOCKED. Sharing a GPU adds timing variance to the exact quantity
+                      # the tolerance is measuring.
+  route_timeout_s: 1800
+  poll_interval_s: 5
+
+gpus:
+  # Both indices matter: `cuda` pins the agent, `vulkan` pins the simulator's -graphicsadapter.
+  # Run `python3 runner/run_benchmark.py --check-gpus` to learn the mapping on this machine.
+  - {cuda: 0, vulkan: 0}
+
+ports:
+  rpc_base: 20000
+  tm_base: 30000
+  stride: 10
+  probe: true
+
+retry:
+  record_budget: 2
+  infra_budget: 2
+  tickruntime_budget: 0
+
+resume:
+  mode: none          # LOCKED. Anything else lets a replicate reuse a previous replicate's
+                      # record. The measured spread would collapse to zero and the resulting
+                      # tolerance would fail on every other machine.
+                      # `none` requires --force on the command line; that friction is the point.
+
+output:
+  root: <replaced per replicate on the command line with --out>
+  record_carla: false
+
+routes:
+  # Produced by: python3 tests/smoke/materialize.py --out /scratch/smoke_routes
+  root: /scratch/smoke_routes
+  manifest: /scratch/smoke_routes/MANIFEST.tsv
+  strict_manifest: true    # an edited route XML must be a startup error, not a surprise later

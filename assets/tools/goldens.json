@@ -1,0 +1,32 @@
+{
+  "static.prop.concreteroadbarrier": [
+    1.079,
+    0.308,
+    0.417
+  ],
+  "static.prop.roadclosedbarricade": [
+    0.257,
+    1.458,
+    1.085
+  ],
+  "walker.pedestrian.astronaut": [
+    0.213,
+    0.213,
+    0.93
+  ],
+  "walker.pedestrian.boar": [
+    0.47,
+    0.47,
+    0.61
+  ],
+  "walker.pedestrian.deliveryrobot": [
+    0.432,
+    0.432,
+    0.65
+  ],
+  "walker.pedestrian.firefighter": [
+    0.19,
+    0.19,
+    0.93
+  ]
+}

@@ -1,0 +1,576 @@
+{
+  "schema": "ood-perceptionbench/records/1",
+  "version": "v0.9",
+  "binds_to": "arXiv v1",
+  "generated_utc": "2026-08-04T04:07:59+00:00",
+  "generated_by": "records/build_records.py",
+  "generator_sha256": "2f87162a5f273bb99227a0235350c483ca6cf40a2e52067fb67d539890bf3d9e",
+  "rename_map_sha256": "25df09def0952fb82a724d6ab46c2084416ed568376437154fbb8ed3abbb82b4",
+  "seed": 42,
+  "seed_note": "Seed 42 only. Every number in the paper is seed 42; the multiseed tree is a paper-side robustness appendix and is NOT part of this release.",
+  "results_root": "<results_root>/ood_benchmark_v2",
+  "rename_map_version": "v0.9",
+  "rename_map_binds_to": "arXiv v1",
+  "partial_run": false,
+  "models": [
+    "admlp",
+    "bridgedrive",
+    "diffad",
+    "drivemoe",
+    "drivetransformer",
+    "hipad",
+    "hydra_next",
+    "lead",
+    "minddrive",
+    "orion",
+    "orion_lite",
+    "pdmlite",
+    "simlingo",
+    "sparsedrive_v2",
+    "tcp",
+    "tfpp",
+    "uniad",
+    "vad"
+  ],
+  "e2e_models_n": 17,
+  "ceiling_models_excluded_from_stats": [
+    "pdmlite"
+  ],
+  "categories": [
+    "pedestrian",
+    "static",
+    "vehicle"
+  ],
+  "n_rows": 8550,
+  "n_columns": 64,
+  "columns": [
+    "model",
+    "category",
+    "scenario",
+    "route_id",
+    "level",
+    "prop",
+    "seed",
+    "prop_raw",
+    "variant",
+    "scenario_name",
+    "town_name",
+    "weather_id",
+    "status",
+    "success",
+    "score_composed",
+    "score_route",
+    "score_penalty",
+    "driving_score",
+    "route_completion",
+    "infraction_penalty",
+    "ood_agent_hit",
+    "ood_agent_collision_count",
+    "collided_with_ood_agent",
+    "agent_type",
+    "agent_type_source",
+    "n_collisions_layout",
+    "n_collisions_pedestrian",
+    "n_collisions_vehicle",
+    "n_red_light",
+    "n_stop_infraction",
+    "n_outside_route_lanes",
+    "n_min_speed_infractions",
+    "n_yield_emergency_vehicle_infractions",
+    "n_scenario_timeouts",
+    "n_route_dev",
+    "n_vehicle_blocked",
+    "n_route_timeout",
+    "n_infractions_scoring",
+    "collisions_pedestrians",
+    "collisions_vehicles",
+    "collisions_layout",
+    "off_road_infractions",
+    "route_length",
+    "duration_game",
+    "duration_system",
+    "ttr_dar_present",
+    "ttr",
+    "dar",
+    "ttc_at_reaction",
+    "reaction_detected",
+    "t_obs_frame",
+    "t_react_frame",
+    "closing_velocity",
+    "reaction_cause",
+    "reaction_value",
+    "reaction_threshold",
+    "v_start",
+    "v_end",
+    "final_distance",
+    "final_closing_velocity",
+    "final_ttc",
+    "num_reactions",
+    "all_reactions",
+    "source_relpath"
+  ],
+  "expected_routes_per_category": {
+    "pedestrian": 162,
+    "static": 70,
+    "vehicle": 243
+  },
+  "row_count_reconciliation": [
+    {
+      "model": "admlp",
+      "category": "pedestrian",
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "bridgedrive",
+      "category": "pedestrian",
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "diffad",
+      "category": "pedestrian",
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "drivemoe",
+      "category": "pedestrian",
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "drivetransformer",
+      "category": "pedestrian",
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "hipad",
+      "category": "pedestrian",
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "hydra_next",
+      "category": "pedestrian",
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "lead",
+      "category": "pedestrian",
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "minddrive",
+      "category": "pedestrian",
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "orion",
+      "category": "pedestrian",
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "orion_lite",
+      "category": "pedestrian",
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "simlingo",
+      "category": "pedestrian",
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "sparsedrive_v2",
+      "category": "pedestrian",
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "tcp",
+      "category": "pedestrian",
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "tfpp",
+      "category": "pedestrian",
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "uniad",
+      "category": "pedestrian",
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "vad",
+      "category": "pedestrian",
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "pdmlite",
+      "category": "pedestrian",
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "admlp",
+      "category": "static",
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "bridgedrive",
+      "category": "static",
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "diffad",
+      "category": "static",
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "drivemoe",
+      "category": "static",
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "drivetransformer",
+      "category": "static",
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "hipad",
+      "category": "static",
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "hydra_next",
+      "category": "static",
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "lead",
+      "category": "static",
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "minddrive",
+      "category": "static",
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "orion",
+      "category": "static",
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "orion_lite",
+      "category": "static",
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "simlingo",
+      "category": "static",
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "sparsedrive_v2",
+      "category": "static",
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "tcp",
+      "category": "static",
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "tfpp",
+      "category": "static",
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "uniad",
+      "category": "static",
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "vad",
+      "category": "static",
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "pdmlite",
+      "category": "static",
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "admlp",
+      "category": "vehicle",
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    },
+    {
+      "model": "bridgedrive",
+      "category": "vehicle",
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    },
+    {
+      "model": "diffad",
+      "category": "vehicle",
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    },
+    {
+      "model": "drivemoe",
+      "category": "vehicle",
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    },
+    {
+      "model": "drivetransformer",
+      "category": "vehicle",
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    },
+    {
+      "model": "hipad",
+      "category": "vehicle",
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    },
+    {
+      "model": "hydra_next",
+      "category": "vehicle",
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    },
+    {
+      "model": "lead",
+      "category": "vehicle",
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    },
+    {
+      "model": "minddrive",
+      "category": "vehicle",
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    },
+    {
+      "model": "orion",
+      "category": "vehicle",
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    },
+    {
+      "model": "orion_lite",
+      "category": "vehicle",
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    },
+    {
+      "model": "simlingo",
+      "category": "vehicle",
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    },
+    {
+      "model": "sparsedrive_v2",
+      "category": "vehicle",
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    },
+    {
+      "model": "tcp",
+      "category": "vehicle",
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    },
+    {
+      "model": "tfpp",
+      "category": "vehicle",
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    },
+    {
+      "model": "uniad",
+      "category": "vehicle",
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    },
+    {
+      "model": "vad",
+      "category": "vehicle",
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    },
+    {
+      "model": "pdmlite",
+      "category": "vehicle",
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    }
+  ],
+  "row_count_cells_ok": 54,
+  "row_count_cells_total": 54,
+  "agent_type_source_counts": {
+    "record": 6635,
+    "fallback": 1906,
+    "sentinel": 9
+  },
+  "agent_type_fallback_map": {
+    "pedestrian": {
+      "0001": "walker.pedestrian.0001",
+      "0014": "walker.pedestrian.0014",
+      "0028": "walker.pedestrian.0028",
+      "boar": "walker.pedestrian.boar",
+      "deliveryrobot": "walker.pedestrian.deliveryrobot",
+      "wheelchair": "walker.pedestrian.wheelchair",
+      "astronaut": "walker.pedestrian.astronaut",
+      "firefighter": "walker.pedestrian.firefighter",
+      "soldier": "walker.pedestrian.soldier"
+    },
+    "static": {
+      "trafficwarning": "static.prop.trafficwarning",
+      "concreteroadbarrier": "static.prop.concreteroadbarrier",
+      "roadclosedbarricade": "static.prop.roadclosedbarricade",
+      "roadclosedsign": "static.prop.roadclosedsign",
+      "europianarrowboardtrailer": "static.prop.europianarrowboardtrailer",
+      "trafficarrowboard": "static.prop.trafficarrowboard",
+      "trafficmessageboard": "static.prop.trafficmessageboard"
+    },
+    "vehicle": {
+      "cooper_s_2021": "vehicle.mini.cooper_s_2021",
+      "coupe_2020": "vehicle.mercedes.coupe_2020",
+      "mkz_2020": "vehicle.lincoln.mkz_2020",
+      "amv": "vehicle.inkas.amv",
+      "dumptruck": "vehicle.caterpillar.dumptruck",
+      "roadroller": "vehicle.hamm.roadroller",
+      "hatchback": "vehicle.tohoku.hatchback",
+      "sedane": "vehicle.tohoku.sedane",
+      "suv": "vehicle.tohoku.suv"
+    }
+  },
+  "agent_type_ambiguous_dropped": {},
+  "rename_stats": {
+    "prop_unchanged": 7578,
+    "prop_renamed": 972,
+    "agent_type_renamed": 2910
+  },
+  "ttr_dar_present_by_model": {
+    "admlp": 0.9979,
+    "bridgedrive": 0.0,
+    "diffad": 0.0,
+    "drivemoe": 1.0,
+    "drivetransformer": 1.0,
+    "hipad": 0.0,
+    "hydra_next": 1.0,
+    "lead": 1.0,
+    "minddrive": 1.0,
+    "orion": 1.0,
+    "orion_lite": 1.0,
+    "pdmlite": 1.0,
+    "simlingo": 1.0,
+    "sparsedrive_v2": 0.0,
+    "tcp": 1.0,
+    "tfpp": 1.0,
+    "uniad": 1.0,
+    "vad": 1.0
+  },
+  "errors": [],
+  "artifacts": {
+    "csv": {
+      "path": "ood_perceptionbench_records_v0.9.csv",
+      "sha256": "221268092f310ca48f642d68369a972c16a4317b8fb538f8e329f5515d27a248",
+      "bytes": 10490519
+    },
+    "parquet": {
+      "path": "ood_perceptionbench_records_v0.9.parquet",
+      "sha256": "14aad8717159af33033bbd52ce0690c800b5a1d9b66333c39eaf1a2ae11b607e",
+      "bytes": 2362445
+    }
+  }
+}

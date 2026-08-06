@@ -1,0 +1,127 @@
+{
+  "_comment": [
+    "EXAMPLE ONLY -- NOT A GOLDEN. Every number here is a placeholder and the split sha256 is",
+    "deliberately all zeros so this file can never validate against the real smoke split.",
+    "check_acceptance.py additionally ignores any file whose name starts with EXAMPLE.",
+    "It shows two of the nine routes; a real bundle must cover every route in the split.",
+    "Produce a real one with tests/make_golden.py -- see GENERATING.md."
+  ],
+  "schema": "ood-perceptionbench/golden/1",
+  "bundle_version": "v0.9",
+  "binds_to": "arXiv v1",
+  "reportable": false,
+  "split": {
+    "name": "smoke",
+    "tier": "all",
+    "path": "SMOKE_SPLIT.tsv",
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "n_routes": 9
+  },
+  "reference_agent": {
+    "name": "pdmlite",
+    "version": "<commit-or-tag-of-the-agent-you-ran>"
+  },
+  "environment": {
+    "carla_version": "0.9.15",
+    "content_pack_version": "v0.9",
+    "content_pack_sha256": "<sha256-of-the-content-pack-archive>",
+    "gpu": "<gpu model>, driver <version>",
+    "os": "<platform string>",
+    "python": "3.10.x",
+    "runner_version": "<runner version or commit>"
+  },
+  "protocol": {
+    "seed": 42,
+    "repetitions": 1,
+    "n_replicates": 3
+  },
+  "tolerance": {
+    "driving_score_abs": 1.0,
+    "policy": "max(1.0, 2.0 x largest observed run-to-run spread). Largest spread across 3 replicate(s) was 0.0 DS points.",
+    "max_observed_spread": 0.0
+  },
+  "generated": {
+    "utc": "1970-01-01T00:00:00Z",
+    "by": "tests/make_golden.py",
+    "procedure": "tests/goldens/GENERATING.md",
+    "notes": "EXAMPLE FILE -- placeholder values, do not use."
+  },
+  "routes": {
+    "pedestrian/dynamic_object_crossing/visual_shift/route_24224_astronaut.xml": {
+      "route_sha256": "b1b5b4c10554fc39cedecb06cfd9582f4a9b1da9d5fe88a79badca656e35a83c",
+      "expected_blueprint_id": "walker.pedestrian.astronaut",
+      "observed_agent_type": "walker.pedestrian.astronaut",
+      "status": "Completed",
+      "driving_score": 100.0,
+      "route_completion": 100,
+      "infraction_penalty": 1.0,
+      "replicates": [
+        {
+          "replicate": "/scratch/smoke_rep1",
+          "status": "Completed",
+          "driving_score": 100.0,
+          "route_completion": 100,
+          "infraction_penalty": 1.0,
+          "observed_agent_type": "walker.pedestrian.astronaut"
+        },
+        {
+          "replicate": "/scratch/smoke_rep2",
+          "status": "Completed",
+          "driving_score": 100.0,
+          "route_completion": 100,
+          "infraction_penalty": 1.0,
+          "observed_agent_type": "walker.pedestrian.astronaut"
+        },
+        {
+          "replicate": "/scratch/smoke_rep3",
+          "status": "Completed",
+          "driving_score": 100.0,
+          "route_completion": 100,
+          "infraction_penalty": 1.0,
+          "observed_agent_type": "walker.pedestrian.astronaut"
+        }
+      ],
+      "ds_spread": 0.0,
+      "published_seed42_driving_score": 100.0,
+      "published_seed42_delta": 0.0
+    },
+    "vehicle/hard_break/base/route_26456_mkz_2020.xml": {
+      "route_sha256": "f016ffac65681c6b3099254a993a97dfb301497159463423e311869423753d57",
+      "expected_blueprint_id": "vehicle.lincoln.mkz_2020",
+      "observed_agent_type": "vehicle.lincoln.mkz_2020",
+      "status": "Completed",
+      "driving_score": 100.0,
+      "route_completion": 100,
+      "infraction_penalty": 1.0,
+      "replicates": [
+        {
+          "replicate": "/scratch/smoke_rep1",
+          "status": "Completed",
+          "driving_score": 100.0,
+          "route_completion": 100,
+          "infraction_penalty": 1.0,
+          "observed_agent_type": "vehicle.lincoln.mkz_2020"
+        },
+        {
+          "replicate": "/scratch/smoke_rep2",
+          "status": "Completed",
+          "driving_score": 100.0,
+          "route_completion": 100,
+          "infraction_penalty": 1.0,
+          "observed_agent_type": "vehicle.lincoln.mkz_2020"
+        },
+        {
+          "replicate": "/scratch/smoke_rep3",
+          "status": "Completed",
+          "driving_score": 100.0,
+          "route_completion": 100,
+          "infraction_penalty": 1.0,
+          "observed_agent_type": "vehicle.lincoln.mkz_2020"
+        }
+      ],
+      "ds_spread": 0.0,
+      "published_seed42_driving_score": 100.0,
+      "published_seed42_delta": 0.0
+    }
+  }
+}

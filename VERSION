@@ -1,0 +1,15 @@
+version: 0.9.0
+status: pre-release (staging; not yet published)
+corresponds_to: arXiv v1
+release_tag: v0.9.0
+route_set: 475 canonical routes (static 70 / pedestrian 162 / vehicle 243)
+seed: 42 (single seed — see README "Protocol")
+records_binding: v0.9 baseline records correspond to arXiv v1 of the paper.
+
+# Two-version discipline
+# ----------------------
+# v0.9 records bind to arXiv v1. v1.0 records will bind to arXiv v2 and are
+# produced after two unlicensable walkers and one static prop are replaced and
+# the affected routes re-run. Scores from v0.9 and v1.0 are NOT comparable on
+# the affected props and must never be mixed in a table. Every artifact in this
+# repository carries this stamp for that reason.

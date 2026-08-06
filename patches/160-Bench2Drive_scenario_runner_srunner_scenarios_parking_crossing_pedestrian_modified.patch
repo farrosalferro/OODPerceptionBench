@@ -1,0 +1,294 @@
+diff --git a/Bench2Drive/scenario_runner/srunner/scenarios/parking_crossing_pedestrian_modified.py b/Bench2Drive/scenario_runner/srunner/scenarios/parking_crossing_pedestrian_modified.py
+new file mode 100644
+index 0000000..0eb1ed1
+--- /dev/null
++++ b/Bench2Drive/scenario_runner/srunner/scenarios/parking_crossing_pedestrian_modified.py
+@@ -0,0 +1,288 @@
++#!/usr/bin/env python
++# This work is licensed under the terms of the MIT license.
++# For a copy, see <https://opensource.org/licenses/MIT>.
++
++"""
++Variation of DynamicObjectCrossing where the blocker is a parked vehicle
++and a pedestrian steps out from behind it.
++Modified version with configurable walker blueprint and TTR/DAR metrics.
++"""
++
++from __future__ import print_function
++
++from math import floor
++
++import py_trees
++import carla
++
++from srunner.scenariomanager.carla_data_provider import CarlaDataProvider
++from srunner.scenariomanager.scenarioatomics.atomic_behaviors import (
++    ActorDestroy,
++    KeepVelocity,
++    ActorTransformSetter,
++    MovePedestrianWithEgo,
++)
++from srunner.scenariomanager.scenarioatomics.atomic_criteria import (
++    CollisionTest,
++    TTRDARCriterion,
++)
++from srunner.scenariomanager.scenarioatomics.atomic_trigger_conditions import (
++    InTriggerDistanceToLocation,
++    InTimeToArrivalToLocation,
++    DriveDistance,
++)
++from srunner.scenarios.basic_scenario import BasicScenario
++from srunner.tools.scenario_helper import apply_leading_edge_offset
++from srunner.tools.background_manager import LeaveSpaceInFront
++
++
++def get_value_parameter(config, name, p_type, default):
++    if name in config.other_parameters:
++        return p_type(config.other_parameters[name]["value"])
++    else:
++        return default
++
++
++class ParkingCrossingPedestrianModified(BasicScenario):
++    """
++    A pedestrian steps out from behind a parked vehicle and crosses the road.
++    The walker blueprint is configurable via the route XML parameter
++    ``pedestrian_blueprint``.
++    """
++
++    def __init__(
++        self,
++        world,
++        ego_vehicles,
++        config,
++        randomize=False,
++        debug_mode=False,
++        criteria_enable=True,
++        timeout=60,
++    ):
++        self._wmap = CarlaDataProvider.get_map()
++        self._trigger_location = config.trigger_points[0].location
++        self._reference_waypoint = self._wmap.get_waypoint(self._trigger_location)
++        self._num_lane_changes = 0
++
++        self._adversary_speed = 2.0
++        self._min_trigger_dist = 6.0
++        self._ego_end_distance = 40
++        self.timeout = timeout
++
++        self._bp_attributes = {"base_type": "car", "generation": 2}
++
++        self._distance = get_value_parameter(config, "distance", float, 12)
++        self._crossing_angle = get_value_parameter(config, "crossing_angle", float, 0)
++        self._pedestrian_blueprint = get_value_parameter(
++            config, "pedestrian_blueprint", str, "walker.*"
++        )
++
++        if abs(self._crossing_angle) > 90:
++            raise ValueError(
++                "'crossing_angle' must be between -90 and 90 for the pedestrian to cross the road"
++            )
++        self._direction = get_value_parameter(config, "direction", str, "right")
++        if self._direction not in ("left", "right"):
++            raise ValueError(
++                f"'direction' must be either 'right' or 'left' but {self._direction} was given"
++            )
++
++        self._reaction_time = 2.15
++        self._reaction_time += 0.1 * floor(self._crossing_angle / 5)
++
++        super().__init__(
++            "ParkingCrossingPedestrianModified",
++            ego_vehicles,
++            config,
++            world,
++            debug_mode,
++            criteria_enable=criteria_enable,
++        )
++
++    def _get_blocker_transform(self, waypoint):
++        if waypoint.lane_type == carla.LaneType.Sidewalk:
++            new_location = waypoint.transform.location
++        else:
++            vector = waypoint.transform.get_right_vector()
++            if self._direction == "left":
++                vector *= -1
++            offset_location = carla.Location(
++                waypoint.lane_width * vector.x, waypoint.lane_width * vector.y
++            )
++            new_location = waypoint.transform.location + offset_location
++        new_location.z += 0.5
++
++        return carla.Transform(new_location, waypoint.transform.rotation)
++
++    def _get_walker_transform(self, waypoint):
++        new_rotation = waypoint.transform.rotation
++        new_rotation.yaw += (
++            270 - self._crossing_angle
++            if self._direction == "right"
++            else 90 + self._crossing_angle
++        )
++
++        if waypoint.lane_type == carla.LaneType.Sidewalk:
++            new_location = waypoint.transform.location
++        else:
++            vector = waypoint.transform.get_right_vector()
++            if self._direction == "left":
++                vector *= -1
++            offset_location = carla.Location(
++                waypoint.lane_width * vector.x, waypoint.lane_width * vector.y
++            )
++            new_location = waypoint.transform.location + offset_location
++        new_location.z += 1.2
++
++        return carla.Transform(new_location, new_rotation)
++
++    def _initialize_actors(self, config):
++        wps = self._reference_waypoint.next(self._distance)
++        if not wps:
++            raise ValueError("Couldn't find a location to spawn the adversary")
++        blocker_wp = wps[0]
++
++        self._blocker_transform = self._get_blocker_transform(blocker_wp)
++        self.parking_slots.append(self._blocker_transform.location)
++        blocker = CarlaDataProvider.request_new_actor(
++            "vehicle.*",
++            self._blocker_transform,
++            attribute_filter=self._bp_attributes,
++        )
++        if blocker is None:
++            raise ValueError("Couldn't spawn the blocker")
++        self.other_actors.append(blocker)
++        blocker.apply_control(carla.VehicleControl(hand_brake=True))
++
++        walker_dist = blocker.bounding_box.extent.x + 0.5
++        wps = blocker_wp.next(walker_dist)
++        if not wps:
++            raise ValueError("Couldn't find a location to spawn the adversary")
++        walker_wp = wps[0]
++
++        self._walker_transform = self._get_walker_transform(walker_wp)
++        self.parking_slots.append(self._walker_transform.location)
++
++        walker = CarlaDataProvider.request_new_actor(
++            self._pedestrian_blueprint, self._walker_transform
++        )
++        if walker is None:
++            raise ValueError("Couldn't spawn the adversary")
++
++        walker.set_location(
++            self._walker_transform.location + carla.Location(z=-200)
++        )
++        walker = self._replace_walker(walker)
++        apply_leading_edge_offset(
++            self._walker_transform, walker.bounding_box.extent.x
++        )
++
++        self._adversary = walker
++        self.other_actors.append(walker)
++
++        self._collision_wp = walker_wp
++
++    def _create_behavior(self):
++        sequence = py_trees.composites.Sequence(
++            name="ParkingCrossingPedestrianModified"
++        )
++        if self.route_mode:
++            total_dist = self._distance + 15
++            sequence.add_child(LeaveSpaceInFront(total_dist))
++
++        sequence.add_child(
++            ActorTransformSetter(self.other_actors[1], self._walker_transform, True)
++        )
++        collision_location = self._collision_wp.transform.location
++
++        trigger_adversary = py_trees.composites.Parallel(
++            policy=py_trees.common.ParallelPolicy.SUCCESS_ON_ONE,
++            name="TriggerAdversaryStart",
++        )
++        trigger_adversary.add_child(
++            InTimeToArrivalToLocation(
++                self.ego_vehicles[0], self._reaction_time, collision_location
++            )
++        )
++        trigger_adversary.add_child(
++            InTriggerDistanceToLocation(
++                self.ego_vehicles[0], collision_location, self._min_trigger_dist
++            )
++        )
++        sequence.add_child(trigger_adversary)
++
++        distance = 8.0
++        duration = distance / self._adversary_speed
++
++        sequence.add_child(
++            KeepVelocity(
++                self.other_actors[1],
++                self._adversary_speed,
++                force_speed=True,
++                duration=duration,
++                distance=distance,
++                name="AdversaryCrossing",
++            )
++        )
++
++        sequence.add_child(
++            ActorDestroy(self.other_actors[1], name="DestroyAdversary")
++        )
++        sequence.add_child(
++            ActorDestroy(self.other_actors[0], name="DestroyBlocker")
++        )
++        sequence.add_child(
++            DriveDistance(
++                self.ego_vehicles[0], self._ego_end_distance, name="EndCondition"
++            )
++        )
++
++        return sequence
++
++    def _create_test_criteria(self):
++        criteria = []
++        if hasattr(self, "_adversary") and self._adversary:
++            criteria.append(
++                TTRDARCriterion(
++                    self.ego_vehicles[0],
++                    self._adversary,
++                    name="TTRDARParkingCrossingPedestrianModified",
++                )
++            )
++        if not self.route_mode:
++            criteria.append(CollisionTest(self.ego_vehicles[0]))
++        return criteria
++
++    def __del__(self):
++        self.remove_all_actors()
++
++    def _replace_walker(self, walker):
++        type_id = walker.type_id
++        walker.destroy()
++        spawn_transform = self.ego_vehicles[0].get_transform()
++        spawn_transform.location.z -= 50
++        walker = CarlaDataProvider.request_new_actor(type_id, spawn_transform)
++        if not walker:
++            raise ValueError("Couldn't spawn the walker substitute")
++        walker.set_simulate_physics(False)
++        walker.set_location(spawn_transform.location + carla.Location(z=-50))
++        return walker
++
++    def _setup_scenario_trigger(self, config):
++        trigger_tree = super()._setup_scenario_trigger(config)
++
++        if not self.route_mode:
++            return trigger_tree
++
++        parallel = py_trees.composites.Parallel(
++            policy=py_trees.common.ParallelPolicy.SUCCESS_ON_ONE,
++            name="ScenarioTrigger",
++        )
++
++        parallel.add_child(
++            MovePedestrianWithEgo(self.ego_vehicles[0], self.other_actors[1], 100)
++        )
++
++        parallel.add_child(trigger_tree)
++        return parallel
