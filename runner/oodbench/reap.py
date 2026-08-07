@@ -19,15 +19,74 @@ from pathlib import Path
 from typing import Iterable, List, Optional, Sequence
 
 #: Patterns that mean the child died hard even if the exit status is ambiguous.
+#:
+#: **These are regexes, and the whitespace class is the whole point.** They were plain
+#: substrings, and ``"Aborted (core dumped)"`` -- written with one space -- was dead code that
+#: had never matched anything: the shell pads the signal name into a fixed column, so the line
+#: it actually writes is ``Aborted`` + seventeen spaces + ``(core dumped)``. ``Segmentation
+#: fault`` matched only by accident, because it is also present as a bare prefix before the
+#: padding starts. Any pattern here that carries a space MUST use ``\s+``.
+#:
+#: This list is now a *secondary* signal. The primary one is the exit status
+#: (:func:`describe_exit_signal`), which needs no text at all and cannot be defeated by a
+#: shell's formatting or a locale. The patterns still earn their place because
+#: :meth:`LocalBackend.poll` also consults them while the attempt is **still running**, where
+#: there is no exit status yet: a simulator that crashes under a hung evaluator is visible only
+#: in the stream. Deliberately absent: a bare ``Killed``. It is what the OOM killer's shell
+#: message says, but it is also an ordinary English word an agent may log, and a false positive
+#: here costs a real retry. SIGKILL is caught by exit status instead, where it is unambiguous.
 FAULT_PATTERNS = (
-    "Segmentation fault",
-    "Aborted (core dumped)",
-    "Fatal Python error: Segmentation fault",
-    "Illegal instruction",
-    "Bus error",
+    r"Segmentation fault",
+    r"Aborted\s+\(core dumped\)",
+    r"Fatal Python error: Segmentation fault",
+    r"Fatal Python error: Aborted",
+    r"Illegal instruction",
+    r"Bus error",
 )
 
+_FAULT_RES = tuple(re.compile(p) for p in FAULT_PATTERNS)
+
 _RPC_PORT_RE = re.compile(rb"-carla-rpc-port[= ](\d+)")
+
+#: Highest real signal number, used to bound the shell's ``128 + N`` convention. Linux defines
+#: ``NSIG`` as 65, so signals run 1..64.
+_MAX_SIGNAL = getattr(signal, "NSIG", 65) - 1
+
+
+def describe_exit_signal(rc: int) -> Optional[str]:
+    """Name the signal that killed a process, read from its exit status alone, or ``None``.
+
+    Death by signal is the one thing a stderr pattern cannot be trusted to report, and it is
+    exactly the case that must not be mistaken for a self-terminated verdict. Two shapes reach
+    us:
+
+    * ``rc < 0`` -- :meth:`subprocess.Popen.poll` returns ``-N`` when the process we launched
+      *directly* (the job script's ``bash``) was itself killed by signal *N*. A cgroup OOM
+      reaper, a SLURM preemption or an operator's ``kill`` takes the whole group, shell
+      included.
+    * ``128 < rc <= 128 + NSIG-1`` -- the shell's convention for relaying a child's death by
+      signal. :func:`jobscript.render` ends with ``exit ${rc}``, so the evaluator's ``128+N``
+      arrives here verbatim.
+
+    **The upper bound is load-bearing, not tidiness.** The vendored evaluator ends its own
+    crash path with ``sys.exit(-1)``, which is exit status **255** -- numerically ``128 + 127``,
+    and there is no signal 127. Without the bound, that self-terminated verdict would be
+    reclassified as a hard death, which is the opposite error and would spend the ambiguity
+    budget on a record the model really did write. A non-zero exit on its own is still a clean
+    exit (DESIGN.md 6A.2); only death by signal is not.
+    """
+    if rc < 0:
+        return f"killed by {_signal_name(-rc)} (the job script itself was signalled)"
+    if 128 < rc <= 128 + _MAX_SIGNAL:
+        return f"killed by {_signal_name(rc - 128)} (relayed by the shell as {rc})"
+    return None
+
+
+def _signal_name(num: int) -> str:
+    try:
+        return signal.Signals(num).name
+    except ValueError:
+        return f"signal {num}"
 
 
 def detect_fault(path: Optional[Path], max_bytes: int = 256 * 1024) -> Optional[str]:
@@ -42,9 +101,13 @@ def detect_fault(path: Optional[Path], max_bytes: int = 256 * 1024) -> Optional[
             tail = fh.read().decode("utf-8", errors="replace")
     except OSError:
         return None
-    for pat in FAULT_PATTERNS:
-        if pat in tail:
-            return pat
+    for rx in _FAULT_RES:
+        match = rx.search(tail)
+        if match:
+            # The matched TEXT, not the pattern: a raw regex is not something to put in a log
+            # line an operator has to read, and the text is what they will grep the stream for.
+            # Whitespace is collapsed so a seventeen-space column pad does not reach the report.
+            return " ".join(match.group(0).split())
     return None
 
 

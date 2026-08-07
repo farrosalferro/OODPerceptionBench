@@ -4,7 +4,7 @@
 > (replacement assets + re-run) binds to arXiv v2, and scores from the two are **not**
 > comparable. Every report this runner writes carries that stamp.
 >
-> **This is a FIRST CUT.** The supervision logic is covered by 153 automated tests, but nothing
+> **This is a FIRST CUT.** The supervision logic is covered by 219 automated tests, but nothing
 > here has been run against a real CARLA server or a real GPU. Read `STATUS.md` before trusting
 > it with GPU-hours.
 
@@ -121,8 +121,8 @@ dropped:
 
 | Code | Meaning |
 |---:|---|
-| 0 | every planned route has a **final** record on disk |
-| 1 | partial sweep — at least one planned route has no final record |
+| 0 | every planned route has a **settled** result |
+| 1 | partial sweep — at least one planned route has no settled result |
 | 2 | configuration / preflight error |
 | 3 | interrupted by signal |
 | 4 | all workers quarantined / no usable GPU |
@@ -130,8 +130,9 @@ dropped:
 
 **A model failing routes is not a runner failure.** A model that scores
 `Failed - TickRuntime` on all 475 routes has produced a valid benchmark result and that run
-exits 0. Exit 1 means we do not *know* the answer for some route. Script your automation on the
-exit code — a partial sweep can never exit 0.
+exits 0. Exit 1 means we do not *know* the answer for some route — either nothing was written,
+or the record on disk was preserved from an earlier attempt and this run never refreshed it.
+Script your automation on the exit code — a partial sweep can never exit 0.
 
 ---
 
@@ -183,19 +184,88 @@ and that route is accepted forever without ever being retried — even though th
 have retried it had it not been interrupted. `skip_terminal` makes within-run and across-run
 retry semantics agree.
 
-### `retry` — two separate budgets
+### `retry` — four separate budgets
 
-- `record_budget` — attempts where the simulator wrote a *retryable* record.
-- `infra_budget` — attempts that wrote no record at all (timeout, segfault, non-zero exit).
+- `record_budget` — attempts that **ended on their own** having written a *retryable* record.
+- `infra_budget` — **consecutive** attempts that wrote no record at all (timeout, segfault,
+  non-zero exit), and attempts that never launched. Consecutive because what it bounds is a
+  machine that is broken *now*: any attempt that produces a record of its own clears the count,
+  so hiccups scattered hours apart across a long sweep cannot add up to a gate on a route that
+  has been running fine. The lifetime total is reported separately (`attempts.infra_total`) and
+  gates nothing. **Read it as "N attempts, then give up on this route", not "N retries."** It is
+  the only budget consulted *before* an attempt runs, so it is one off from the others: at
+  `infra_budget: 1` a route gets a single try, at `3` it gets three. `0` also means one try —
+  the gate needs a counter that was actually charged — but say `1` if that is what you mean.
 - `tickruntime_budget` — its own axis, default **0**, matching the reference sweeps:
   `Failed - TickRuntime` means the agent is slower than CARLA's tick budget, which is a
   model-side property that retrying does not fix.
+- `killed_budget` — attempts the runner **killed** (wall clock, fault, quarantine) while a
+  crash-shaped record was on disk. That record is ambiguous by construction: it is what a dying
+  simulator writes, and also what a route that finished and hung in teardown leaves behind. It
+  gets its own bounded axis so a kill can neither spend the model's record retries nor leave the
+  route unable to ever settle.
 
 They are separate so that a bad GPU cannot consume a route's *record* retries and leave behind a
-result-shaped artifact that was actually produced by infrastructure.
+result-shaped artifact that was actually produced by infrastructure. Which budget an attempt
+charges is decided by **how the attempt ended**, never by what happens to be on disk — the full
+table is normative in `DESIGN.md` §6A.
 
 `worker_quarantine_after` consecutive infra failures pull a worker from the pool: one worker
 failing while others progress is the signature of a wedged GPU.
+
+`infra_budget` is the one budget that never settles a route: exhausting it means *we do not know
+this route's answer*, so the run exits 1 rather than presenting whatever is on disk as a result.
+That verdict is persisted, so it survives into later runs — deliberately, but not for ever.
+Repair the machine and re-run with **`--retry-infra-exhausted`**:
+
+```bash
+python run_benchmark.py --config my_config.yaml --retry-infra-exhausted
+```
+
+It clears the infrastructure counter of exactly the routes that hit the gate, and nothing else:
+every result file, every settlement bit and every other budget is untouched, and the lifetime
+infra count still records what happened. It buys attempts, never answers — which is why, unlike
+`--resume-mode none`, it does not need `--force`. Using it is recorded in the report.
+
+Two things worth knowing before you reach for it. It is applied to the **whole ledger** before
+planning, so `--limit` and a narrowed `--routes` do not scope it. And it is safe to preview:
+`--dry-run` writes nothing at all — it never saves the ledger — so combining the two shows you
+which routes this would unlock and what would then run, without spending the recovery you asked
+it to describe.
+
+### Resuming a tree written by an older runner
+
+Three different questions get three different answers, and the runner tells you about each:
+
+| what changed | how you find out |
+|---|---|
+| a setting you chose | `config_digest` differs → *"produced by a DIFFERENT configuration"* |
+| the runner build | `runner.version` is stamped into every report |
+| the **rules** — which budget a cell charges, whether it settles | `accounting_epoch` in the ledger → a warning naming both epochs |
+
+The third exists because the second and third are easy to conflate. Adding a config key at its
+default does **not** move the digest (a key nobody set is not a setting they changed), but the
+`DESIGN.md` §6A model changed alongside one such key — before epoch 2, every final retryable
+record charged the `record` axis, including attempts that ended abnormally, which now charge the
+separate bounded `killed` axis. Resuming across that boundary is fine and the counters carry over
+untouched; routes still in flight may simply settle after a different number of attempts. You are
+told so you can decide whether that matters, not because anything is wrong.
+
+### Complete vs. settled
+
+A route counts as complete only when its result file is final **and** the ledger says this run
+settled it. The two come apart in one direction that matters: a launch that fails preserves the
+record it was about to replace (it must never be destroyed), but preserving a record is not
+answering the route. Such a route is reported under *"no settled result"* with
+`unsettled_reason: unrefreshed_record` and the run exits 1.
+
+`unsettled_reason` separates three different problems that share one headline number, and it is
+decided ledger-first: `not_reached` (the planning loop never got to this route — it stops at a
+fatal agent abort), then `unrefreshed_record` (a record is on disk from an earlier attempt and
+the retries this run planned never ran), then `no_record` (nothing final was ever written).
+
+A model failing routes is still not a runner failure: `Failed - TickRuntime` on all 475 routes,
+or a retryable record whose retry budget is spent, are settled results and exit 0.
 
 ### `routes.manifest` — recommended
 
@@ -237,11 +307,18 @@ No GPU, no CARLA, no network, no third-party packages:
 python -m unittest discover -s tests -t .
 ```
 
-153 tests covering the port allocator (at worker counts far above any real GPU count), the
+188 tests covering the port allocator (at worker counts far above any real GPU count), the
 finalization predicate and status taxonomy, path mirroring, manifest integrity, the resume and
-budget decision, the exit contract, the ledger, the generated job script, and backend
-concurrency — plus 19 end-to-end tests that drive the full supervision loop against a stand-in
-evaluator, exercising resume, retry, timeout kill, quarantine and every exit code.
+budget decision, the attempt-accounting model of `DESIGN.md` §6A, the exit contract, the ledger,
+the generated job script, and backend concurrency — plus 22 end-to-end tests (19 in
+`tests/test_integration_local.py`, and three more for infra-gate recovery and for the trap
+under a simulator that crashes into the shared stderr) that drive the full
+supervision loop against a stand-in evaluator, exercising resume, retry, timeout kill,
+quarantine and every exit code.
+
+One of them parses the normative table in `DESIGN.md` §6A.5 and drives the settle path for all
+24 of its cells, so the document and the code cannot drift apart silently — that is a defect
+this component has already had twice.
 
 What they do **not** cover is anything that requires a running simulator. See `STATUS.md`.
 
@@ -260,7 +337,9 @@ What they do **not** cover is anything that requires a running simulator. See `S
 | exit 2, "agent.env may not set variable(s) the runner owns" | your model config sets one of the runner's own variables. Use the config field the error names. |
 | exit 2, "gpus[i].vulkan=N is already claimed" | two entries share a Vulkan adapter, which would put both simulators on one GPU. Run `--check-gpus`. |
 | SLURM: fewer jobs in flight than expected | concurrency is `slurm.max_parallel`; `execution.workers` does nothing under this backend. |
-| Report says routes were skipped with "budget already spent" | a previous run exhausted their retries. Investigate the logs, then delete those result files to force a re-run. |
+| Report says routes were skipped with "budget already spent" | a previous run exhausted their *record* retries. The record on disk is the answer; investigate the logs before deciding it is wrong. |
+| Report says the **infrastructure** retry budget is gone | the machine, not the model. Fix it, then re-run with `--retry-infra-exhausted` — no result file is touched and no other budget moves. |
+| Resuming an output root warns "produced by a DIFFERENT configuration" | some setting really did change. Adding a key that holds its default does *not* trigger this (see `DESIGN.md` §6A.11); a changed agent or CARLA build should use a fresh output root. |
 
 ---
 

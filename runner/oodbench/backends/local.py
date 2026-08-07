@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from .. import jobscript, ports as ports_mod, reap
+from .. import jobscript, ports as ports_mod, reap, results as results_mod
 from ..config import Config, GpuSpec
 from ..plan import RouteTask
 from ..ports import PortPair
@@ -23,6 +23,23 @@ from .base import (Attempt, AttemptOutcome, Backend, restore_checkpoint,
 
 class LocalBackendError(Exception):
     pass
+
+
+def _hard_death_phrase(fault: Optional[str], signalled: Optional[str]) -> str:
+    """How an attempt died, for a human, naming every source that said so.
+
+    Both can be present (a segfaulting evaluator writes the pattern *and* exits 139) and either
+    can be alone: a signal whose shell message we do not match, or a pattern from the shared
+    CARLA stream under a wrapper that then exited non-zero for its own reasons. The exit status
+    is stated first because it is the one an operator can trust without asking whose output the
+    stream was.
+    """
+    parts = []
+    if signalled:
+        parts.append(signalled)
+    if fault:
+        parts.append(f'"{fault}" in stderr')
+    return " and ".join(parts) if parts else "ended abnormally"
 
 
 class LocalBackend(Backend):
@@ -176,12 +193,93 @@ class LocalBackend(Backend):
         attempt.finished_at = time.time()
         self._close(attempt)
         fault = reap.detect_fault(attempt.stderr_path)
-        if fault:
-            attempt.outcome = AttemptOutcome.FAULT
-            attempt.detail = f'fault pattern "{fault}" in stderr (exit {rc})'
-        else:
+        # Death by signal is read from the exit status, NOT from the stream, and it is checked
+        # here rather than inside the fault branch below -- which is the bug this line closes.
+        # The rc gate used to live only inside `if fault:`, so the whole classification hung on
+        # a stderr substring; and two of those substrings did not match what a shell actually
+        # writes ("Aborted (core dumped)" was column-padded, SIGKILL says only "Killed"). An
+        # evaluator that died of SIGABRT or was taken by the OOM killer therefore arrived here
+        # as "the process decided to stop", and its crash-shaped record was charged to the
+        # MODEL's record budget and settled as the model's verdict, at exit 0, silently. That is
+        # cross-review finding 2 for the fourth time. A signal is not a verdict; see
+        # reap.describe_exit_signal for why 255 (`sys.exit(-1)`) is deliberately NOT one.
+        signalled = reap.describe_exit_signal(rc)
+        hard = fault or signalled
+        if not hard:
             attempt.outcome = AttemptOutcome.EXITED
             attempt.detail = f"exit {rc}"
+            return True
+
+        # Something says this attempt died hard -- a pattern in the stream, or the exit status
+        # itself. Whether it is evidence about *this* attempt is the whole question; it takes
+        # both of the facts below to answer it, and the record is read exactly once.
+        #
+        # The two sources are not equally trustworthy and the difference decides the case
+        # below. The STREAM is shared with the CARLA server, so a pattern in it may be about a
+        # different process. The EXIT STATUS is ours alone: nothing but this attempt's own
+        # wrapper can set it, so `signalled` is never a shared-stderr artefact and never
+        # reaches the demotion (a signal death cannot have rc == 0).
+        has_record = results_mod.read(attempt.task.result_path).final
+        # The question the demotion actually asks is "did OUR process die hard?", and there is
+        # now an exact test for it. This was `rc == 0`, which is a strictly narrower proxy: the
+        # vendored evaluator ends its own crash paths with `sys.exit(-1)` -> status 255, a
+        # SELF-TERMINATED verdict that `describe_exit_signal` correctly declines to call a
+        # signal. Under the old proxy those verdicts could never be demoted, so a UE4 abort in
+        # the shared stream sent `Failed - Simulation crashed` and `Failed - Agent couldn't be
+        # set up` -- the status family of four published v0.9 rows -- to the ambiguity budget
+        # instead of the model's. Cross-review 2026-08-07, round 3, cursor's finding 1.
+        clean_exit = signalled is None
+
+        if clean_exit and has_record:
+            # `FAULT` is inferred from a log file the SIMULATOR also writes into: the evaluator
+            # starts CARLA with `Popen(..., shell=True)` and no redirection, so it inherits this
+            # attempt's single stderr handle. A UE4 crash during shutdown therefore stamps
+            # "the attempt died hard" on a process that exited on its own having already written
+            # its verdict -- and downstream that reclassifies a genuine model result as an
+            # ambiguous kill. When the process exited by itself, CLEANLY, AND a final record is
+            # on disk, the pattern is reported but not believed.
+            #
+            # All THREE conditions are load-bearing, and `rc == 0` is the one that was missing.
+            # The demotion's whole justification is "this stream carries a second process's
+            # output" -- but that argument only reaches the case where *our* process is fine,
+            # and the only evidence we have of that is its exit status. Without the rc test the
+            # demotion also swallowed an evaluator that died of SIGSEGV / SIGABRT / the OOM
+            # killer with a final record already on disk, and handed that ambiguous record to
+            # the model's own record budget as a clean verdict -- which is finding 2 again, by a
+            # third door. See DESIGN.md 6A.2.
+            #
+            # Note what the test does NOT do: a non-zero exit is still a self-terminated exit,
+            # because the vendored evaluator exits non-zero for its own crash paths
+            # (`sys.exit(-1)` when `_load_and_run_scenario` reports crashed). Only a hard death
+            # -- which by definition means a signal -- refuses the demotion.
+            #
+            # Reachable only from the stream: this branch is where `fault` is set and
+            # `signalled` is not. That is the point -- it exists to forgive the CARLA server's
+            # output, and a signal on our own wrapper is never the server's output.
+            attempt.outcome = AttemptOutcome.EXITED
+            attempt.detail = (f'exit {rc}; a "{fault}" pattern appeared in stderr, but this '
+                              f'process terminated itself rather than dying by signal, with a '
+                              f'final record written, and stderr is shared with the CARLA '
+                              f'server, so the pattern is not evidence about this attempt')
+            self.log.warning("worker %d: %s finished with a %r pattern in its (shared) stderr; "
+                             "judging it by its record, not by the log",
+                             attempt.worker, attempt.task.key, fault)
+        elif has_record:
+            # Not clean, and a record is on disk: the case the missing rc test used to hide.
+            # Say it out loud, because that record now goes to the bounded ambiguity axis
+            # instead of being read as the model's verdict, and an operator should know why.
+            attempt.outcome = AttemptOutcome.FAULT
+            attempt.detail = (f'{_hard_death_phrase(fault, signalled)} (exit {rc}): a final '
+                              f'record is on disk but this process did not end cleanly, so the '
+                              f'record cannot be credited to it')
+            self.log.warning("worker %d: %s ended hard (%s) while a final record was on disk; "
+                             "the wrapper itself did not exit cleanly, so this is an abnormal "
+                             "end, not a shared-stderr artefact",
+                             attempt.worker, attempt.task.key,
+                             _hard_death_phrase(fault, signalled))
+        else:
+            attempt.outcome = AttemptOutcome.FAULT
+            attempt.detail = f"{_hard_death_phrase(fault, signalled)} (exit {rc})"
         return True
 
     def kill(self, attempt: Attempt, reason: str) -> None:

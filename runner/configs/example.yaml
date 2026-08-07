@@ -107,9 +107,20 @@ ports:
   probe: true
 
 retry:
-  record_budget: 3        # attempts after the simulator wrote a retryable record
-  infra_budget: 3         # attempts that died without writing any record (timeout, segfault)
+  record_budget: 3        # attempts that ENDED ON THEIR OWN having written a retryable record
+  # CONSECUTIVE attempts that wrote no record at all (timeout, segfault, failed launch). Any
+  # attempt that produces a record of its own clears the count, so scattered hiccups cannot add
+  # up to a gate on a route that has been running fine. Exhausting it does NOT settle the route:
+  # the run exits 1, because we do not know that route's answer. Once the machine is fixed,
+  # `--retry-infra-exhausted` clears this counter only — no result and no other budget moves.
+  infra_budget: 3
   tickruntime_budget: 0   # 0 matches the reference sweeps: TickRuntime is model-side
+  # Attempts killed (wall clock, fault, quarantine) while a crash-shaped record was on disk.
+  # Ambiguous: that is what a dying simulator writes, and also what a route that finished and
+  # hung in teardown leaves behind. Own axis, so a kill cannot spend the model's record
+  # retries — but bounded, so the route still settles on that record instead of retrying
+  # forever. 0 or 1 accepts such a record with no clean re-run at all.
+  killed_budget: 2
   worker_quarantine_after: 3   # consecutive infra failures before a worker is pulled
 
 resume:

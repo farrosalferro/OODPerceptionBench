@@ -184,9 +184,13 @@ class TestDecide(unittest.TestCase):
             "records": [{"status": status, "scores": {"score_composed": 1.0}}]}}),
             encoding="utf-8")
 
-    def _decide(self, attempts=None, mode="skip_terminal", record=3, tick=0, infra=3):
+    def _decide(self, attempts=None, mode="skip_terminal", record=3, tick=0, infra=3, killed=2):
+        # `killed_budget` is required and has no default (DESIGN.md 6A.9): there is no safe
+        # value to fall back to, so the caller must say. None of the cases below charge the
+        # ambiguity axis, so the gate cannot fire and every assertion means what it did.
         return plan.decide(self.task, attempts or {}, mode,
-                           record_budget=record, tickruntime_budget=tick, infra_budget=infra)
+                           record_budget=record, tickruntime_budget=tick, infra_budget=infra,
+                           killed_budget=killed)
 
     def test_no_result_runs(self):
         self.assertIs(self._decide().decision, Decision.RUN)

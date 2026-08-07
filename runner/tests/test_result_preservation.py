@@ -259,7 +259,8 @@ class TestInterruptDoesNotSpendBudget(PreservationBase):
         self.assertIsNotNone(st.last_reason)
 
         decision = plan_mod.decide(task, st.budgets(), cfg.resume["mode"],
-                                   record_budget=3, tickruntime_budget=0, infra_budget=3)
+                                   record_budget=3, tickruntime_budget=0, infra_budget=3,
+                                   killed_budget=int(cfg.retry["killed_budget"]))
         self.assertIs(decision.decision, plan_mod.Decision.RUN,
                       "interrupts permanently abandoned a route that never actually failed")
 
@@ -313,7 +314,8 @@ class TestInterruptDoesNotSpendBudget(PreservationBase):
                          "an interrupt artefact was frozen in as the route's benchmark result")
 
         decision = plan_mod.decide(task, st.budgets(), cfg.resume["mode"],
-                                   record_budget=2, tickruntime_budget=0, infra_budget=3)
+                                   record_budget=2, tickruntime_budget=0, infra_budget=3,
+                                   killed_budget=int(cfg.retry["killed_budget"]))
         self.assertIs(decision.decision, plan_mod.Decision.RUN,
                       "the next run must re-plan an interrupted route, budget intact")
 

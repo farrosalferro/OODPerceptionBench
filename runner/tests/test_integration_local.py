@@ -22,7 +22,7 @@ from oodbench import EXIT_CONFIG, EXIT_OK, EXIT_PARTIAL, ports
 
 FAKE_EVALUATOR = textwrap.dedent('''\
     """Stand-in for leaderboard_evaluator.py. Behaviour is driven by FAKE_MODE."""
-    import argparse, json, os, sys, time
+    import argparse, json, os, signal, sys, time
     from pathlib import Path
 
     p = argparse.ArgumentParser()
@@ -74,6 +74,38 @@ FAKE_EVALUATOR = textwrap.dedent('''\
         sys.exit(1)
     elif mode == "hang":
         time.sleep(600)
+    elif mode == "shutdown_crash_tickruntime":
+        # The trap's end-to-end shape: the route produced a real TickRuntime verdict, then the
+        # CARLA server segfaulted during teardown into the stderr stream it SHARES with this
+        # process. The real evaluator exits 0 on this path (`crashed` stays False).
+        emit("Failed - TickRuntime")
+        print("Signal 11 caught.", file=sys.stderr, flush=True)
+        print("Segmentation fault (core dumped)", file=sys.stderr, flush=True)
+    elif mode == "shutdown_crash_agent":
+        # Same shared-stderr crash, but on the evaluator's own crash path, which exits non-zero
+        # (`sys.exit(-1)`). Cannot be told apart from the evaluator itself dying, so the record
+        # goes to the bounded ambiguity axis rather than to the model's record budget.
+        emit("Failed - Agent crashed")
+        print("Segmentation fault (core dumped)", file=sys.stderr, flush=True)
+        sys.exit(255)
+    elif mode == "abort_after_record":
+        # The evaluator itself dies of SIGABRT with a crash-shaped record already on disk.
+        # bash pads the signal name into a column, so the stderr line is NOT the single-spaced
+        # "Aborted (core dumped)" the fault patterns used to look for -- which is exactly why
+        # this shape was classified as a clean exit and charged to the model's record budget.
+        emit("Failed - Simulation crashed")
+        os.kill(os.getpid(), signal.SIGABRT)
+    elif mode == "oomkill_after_record":
+        # What a cgroup OOM kill looks like: SIGKILL, and bash prints only "Killed", which is
+        # in no fault pattern at all and deliberately never will be (too ordinary a word).
+        emit("Failed - Simulation crashed")
+        os.kill(os.getpid(), signal.SIGKILL)
+    elif mode == "abort_after_tickruntime":
+        # THE TRAP, on the hard-death path: a real degenerate-model verdict, then the process
+        # dies by signal. Must still settle at exit 0 -- TickRuntime is not fabricable by a
+        # kill, so it is charged to the tickruntime axis in BOTH outcome classes.
+        emit("Failed - TickRuntime")
+        os.kill(os.getpid(), signal.SIGABRT)
     elif mode == "flaky":
         counter = Path(os.environ["FAKE_COUNTER"])
         n = int(counter.read_text()) if counter.exists() else 0

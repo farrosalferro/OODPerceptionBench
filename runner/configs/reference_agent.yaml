@@ -58,6 +58,7 @@ retry:
   record_budget: 1
   infra_budget: 1
   tickruntime_budget: 0
+  killed_budget: 2
   worker_quarantine_after: 2
 
 resume:

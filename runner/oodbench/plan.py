@@ -10,6 +10,7 @@ then reports a finished sweep as empty.
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path, PurePosixPath
@@ -254,20 +255,68 @@ def build_tasks(xmls: Sequence[Path], routes_root: Path, out_root: Path, base_se
     return tasks
 
 
+#: Named once, used everywhere an infra-exhausted route is explained (planner, settle path,
+#: report). ``infra`` is the one budget that does not settle, so an exhausted route stays
+#: unsettled across resumes *by design* -- but "by design" must not mean "unrecoverable except
+#: by hand-editing the ledger". Every message that reports the gate names the one lossless way
+#: through it, because a recovery an operator cannot find is not a recovery (DESIGN.md 6A.5,
+#: the termination argument, and 6A.8).
+INFRA_RECOVERY_HINT = (
+    "Repair the infrastructure, then re-run with --retry-infra-exhausted, which clears ONLY "
+    "the infrastructure counter of routes that hit this gate; every record on disk and every "
+    "other budget is left untouched."
+)
+
+
 @dataclass(frozen=True)
 class TaskDecision:
     decision: Decision
     record: ResultRecord
     reason: str
+    #: Settlement (DESIGN.md 6A.7): the result file holds an answer this run is no longer
+    #: obliged to improve on. Returned here rather than re-derived by the caller, because the
+    #: caller re-deriving it is how "a record exists" came to mean "the route is complete".
+    #: Note the asymmetry that carries the exit contract: SKIP_EXHAUSTED is settled when the
+    #: *record's own* budget is gone (the record IS the answer) and unsettled when the *infra*
+    #: budget is gone (there is no answer and this run cannot produce one).
+    settled: bool = False
 
 
 def decide(task: RouteTask, ledger_attempts: Dict[str, int], resume_mode: str,
-           record_budget: int, tickruntime_budget: int, infra_budget: int) -> TaskDecision:
-    """Should this task run in this invocation?
+           record_budget: int, tickruntime_budget: int, infra_budget: int,
+           killed_budget: int) -> TaskDecision:
+    """Should this task run in this invocation, and is its result already settled?
 
     ``ledger_attempts`` carries the *persisted* attempt counters for this task key
-    (``{"record": n, "tickruntime": n, "infra": n}``). Budgets are a property of the route, not
-    of the process: three interrupted restarts must not buy three times the budget.
+    (``{"record": n, "tickruntime": n, "infra": n, "killed": n}``). Budgets are a property of
+    the route, not of the process: three interrupted restarts must not buy three times the
+    budget.
+
+    Gating order is normative (DESIGN.md 6A.9). The infra gate is reached from **both**
+    branches -- a route holding an old retryable record used to retry past its infra limit
+    forever -- and it sits *after* the record/tickruntime check so that a route whose record
+    budget is spent settles on its record rather than on the state of the machine.
+
+    **Both infra gates test ``infra_spent and infra_spent >= infra_budget``, and the first
+    conjunct is not redundant.** The record, tickruntime and killed gates are only ever reached
+    *after* an attempt has charged their axis, so a budget of 0 there means "one attempt, then
+    accept" -- which is what ``tickruntime_budget: 0``, the shipped default, relies on. The
+    infra gate is different in kind: it is evaluated during planning, **before** the first
+    attempt, so ``0 >= 0`` fires on a virgin ledger. Without the guard, ``retry.infra_budget: 0``
+    -- a value config validation accepts, and one an operator reads as "do not retry
+    infrastructure failures" by analogy with every other budget -- made the runner refuse to
+    start a single route, for ever: exit 1 with zero executions, on a healthy machine, and
+    ``--retry-infra-exhausted`` could not release it because :meth:`RunState.clear_infra_exhaustion`
+    (rightly) only clears a counter that was actually charged. That is the dead end DESIGN.md
+    6A.5's invariant forbids, re-created by an off-by-one rather than by a rule. The guard makes
+    the axis mean what the other three mean. The idiom is the killed gate's, one screen above.
+
+    ``killed_budget`` is **required and has no default**, deliberately. It briefly had
+    ``= 0``, which is not a safe fallback in either direction: with 0 the gate below fires for
+    any charged ambiguity budget, so a caller that merely forgot the keyword silently settled
+    the route on a record the model has just admitted the kill may have manufactured; and
+    dropping the gate instead resets the bound on every resume (6A.9). A parameter with no safe
+    default must not have one -- the caller is made to say what it means.
     """
     record = results_mod.read(task.result_path)
 
@@ -279,38 +328,96 @@ def decide(task: RouteTask, ledger_attempts: Dict[str, int], resume_mode: str,
 
     if results_mod.should_skip_on_resume(record, resume_mode):
         return TaskDecision(Decision.SKIP_DONE, record,
-                            f"final record with status {record.status!r}")
+                            f"final record with status {record.status!r}", settled=True)
 
+    # `none` requires --force and means "re-run regardless of history". It deliberately does not
+    # consult any budget: the ledger it runs against is the spent ledger of the run being
+    # replaced, so consulting it would make --force a no-op on the tree it is pointed at.
+    # Retries within the run stay bounded because _settle keeps incrementing the same counters.
     if resume_mode == "none":
         return TaskDecision(Decision.RUN, record, "resume.mode=none: re-running")
+
+    infra_spent = ledger_attempts.get("infra", 0)
 
     if record.final:
         disp = record.disposition
         if disp is Disposition.RETRY_RECORD or disp is Disposition.UNKNOWN:
             spent, budget, label = ledger_attempts.get("record", 0), record_budget, "record"
+            # The ambiguous-kill axis settles on the same record; a route that has exhausted it
+            # must not be re-planned by a fresh process, or the bound would reset every run.
+            killed_spent = ledger_attempts.get("killed", 0)
+            if killed_spent and killed_spent >= killed_budget:
+                spent, budget, label = killed_spent, killed_budget, "killed"
         elif disp is Disposition.RETRY_TICKRUNTIME:
             spent, budget, label = (ledger_attempts.get("tickruntime", 0),
                                     tickruntime_budget, "tickruntime")
         else:  # ACCEPT was handled by should_skip_on_resume for skip_terminal
             return TaskDecision(Decision.SKIP_DONE, record,
-                                f"final record with status {record.status!r}")
+                                f"final record with status {record.status!r}", settled=True)
         if spent >= budget:
+            # The record's own retry budget is gone, so the record IS the benchmark result --
+            # including for a degenerate model row re-planned after its ledger was lost, where
+            # every route lands here with tickruntime 0/0. Not settling here would report a
+            # complete, valid model row as N incomplete routes at exit 1.
             return TaskDecision(
                 Decision.SKIP_EXHAUSTED, record,
                 f"final record with status {record.status!r}; {label} retry budget already "
-                f"spent ({spent}/{budget}) in an earlier run")
+                f"spent ({spent}/{budget}) in an earlier run", settled=True)
+        if infra_spent and infra_spent >= infra_budget:
+            return TaskDecision(
+                Decision.SKIP_EXHAUSTED, record,
+                f"final record with status {record.status!r} and {label} budget "
+                f"{spent}/{budget} left to spend, but the infrastructure retry budget is gone "
+                f"({infra_spent}/{infra_budget}): the record on disk is from an EARLIER attempt "
+                f"and this run cannot produce the retry it owes. {INFRA_RECOVERY_HINT}")
         return TaskDecision(Decision.RUN, record,
                             f"retryable status {record.status!r}, {label} budget "
                             f"{spent}/{budget}")
 
     # No final record. Only the infra budget can be exhausted here.
-    if ledger_attempts.get("infra", 0) >= infra_budget:
+    if infra_spent and infra_spent >= infra_budget:
         return TaskDecision(
             Decision.SKIP_EXHAUSTED, record,
             f"no final record and the infrastructure retry budget is spent "
-            f"({ledger_attempts.get('infra', 0)}/{infra_budget}) -- this route has NOT produced "
-            f"a benchmark result")
+            f"({infra_spent}/{infra_budget}) -- this route has NOT produced "
+            f"a benchmark result. {INFRA_RECOVERY_HINT}")
     return TaskDecision(Decision.RUN, record, record.error or "no result yet")
+
+
+_SEED_IN_NAME = re.compile(r"_seed(\d+)$")
+
+
+def foreign_seed_files(out_root: Path, allowed_seeds: Iterable[int]) -> List[Path]:
+    """Result files in the output tree whose embedded ``_seed<N>`` is not in ``allowed_seeds``.
+
+    The report-time half of the seed guard (DESIGN.md 6A.10). :func:`assert_seed_consistency`
+    checks the paths the runner *intends to write*, where a mismatch is close to unrepresentable
+    because the task carries the seed by construction. The check with real content is over the
+    **tree**: a stray ``_seed7.json`` sitting beside the counted results means two protocols are
+    mixed in one output root, and an aggregator globbing ``results/*.json`` will happily average
+    across them. Those files are never *counted* -- only planned paths are ever read -- so this
+    is a warning about the tree, not a verdict on the run.
+
+    ``_runner/`` is skipped: it is the runner's own scratch space (job scripts, logs, records
+    copied aside), not results.
+    """
+    root = Path(out_root)
+    if not root.is_dir():
+        return []
+    allowed = set(allowed_seeds)
+    hits: List[Path] = []
+    for path in sorted(root.rglob("*.json")):
+        if path.parent.name != "results":
+            continue
+        try:
+            if "_runner" in path.relative_to(root).parts:
+                continue
+        except ValueError:  # pragma: no cover - rglob results are always under root
+            continue
+        m = _SEED_IN_NAME.search(path.stem)
+        if m and int(m.group(1)) not in allowed:
+            hits.append(path)
+    return hits
 
 
 def assert_seed_consistency(tasks: Iterable[RouteTask], expected_seed_base: int,

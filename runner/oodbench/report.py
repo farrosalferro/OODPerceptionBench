@@ -23,13 +23,14 @@ from typing import Dict, List, Optional, Sequence
 
 from . import (ARXIV_VERSION, BENCHMARK_RELEASE, EXIT_AGENT_FATAL, EXIT_INTERRUPTED,
                EXIT_NO_WORKERS, EXIT_OK, EXIT_PARTIAL, __version__)
+from . import plan as plan_mod
 from . import results as results_mod
 from .plan import RouteTask
 from .state import RunState
 
 EXIT_MEANING = {
-    EXIT_OK: "every planned route has a final record on disk",
-    EXIT_PARTIAL: "partial sweep: at least one planned route has no final record",
+    EXIT_OK: "every planned route has a settled result",
+    EXIT_PARTIAL: "partial sweep: at least one planned route has no settled result",
     2: "configuration or preflight error",
     EXIT_INTERRUPTED: "interrupted by signal; children reaped and state written",
     EXIT_NO_WORKERS: "all workers quarantined / no usable GPU",
@@ -46,16 +47,39 @@ class RouteOutcome:
     final: bool
     status: Optional[str]
     score_composed: Optional[float]
+    #: The ledger half of completeness (DESIGN.md 6A.7/6A.8). A record can be on disk without
+    #: this run having produced or settled it -- a failed launch preserves an earlier attempt's
+    #: record, and preserving it must not be mistaken for answering the route.
+    settled: bool = False
     attempts_record: int = 0
     attempts_tickruntime: int = 0
+    #: The *consecutive* infra failures the gate compares against ``retry.infra_budget``.
     attempts_infra: int = 0
+    #: Every infra failure this route ever had. Differs from :attr:`attempts_infra` once an
+    #: attempt that produced its own record cleared the streak, or ``--retry-infra-exhausted``
+    #: did; the report keeps both so a settled route still shows what the machine cost.
+    attempts_infra_total: int = 0
+    attempts_killed: int = 0
     last_reason: Optional[str] = None
     last_worker: Optional[int] = None
     duration_s: Optional[float] = None
+    #: Machine-readable: *why* this route has no settled result. Set by :func:`build`; one of
+    #: ``no_record`` (nothing final was ever written), ``unrefreshed_record`` (a record is on
+    #: disk but this run never settled it -- typically preserved by a failed launch, or the
+    #: infra budget ran out before the planned retry could run), ``not_reached`` (the planning
+    #: loop never got to this route). The same headline number, three different problems.
+    unsettled_reason: Optional[str] = None
 
     @property
     def complete(self) -> bool:
-        return self.final
+        """Both halves, and they are independent.
+
+        The *disk* half is kept because the report must reflect what is actually there: a
+        result file deleted after the fact makes the route incomplete whatever the ledger says.
+        The *ledger* half is what stops a record that is merely present from counting as an
+        answer.
+        """
+        return self.final and self.settled
 
 
 @dataclass
@@ -84,13 +108,29 @@ class Report:
 
     @property
     def status_counts(self) -> Dict[str, int]:
-        c = Counter(o.status or "(no record)" for o in self.outcomes)
+        """The benchmark result: one row per status, over the routes that have a settled answer.
+
+        Deliberately **not** over every outcome. A route the totals call incomplete must not
+        also appear here as though its record were a result -- an operator reads the two numbers
+        side by side and a downstream aggregator sums this one. ``status_counts`` therefore sums
+        to ``complete`` and :attr:`unsettled_counts` sums to ``incomplete``.
+        """
+        c = Counter(o.status or "(no record)" for o in self.outcomes if o.complete)
+        return dict(sorted(c.items(), key=lambda kv: (-kv[1], kv[0])))
+
+    @property
+    def unsettled_counts(self) -> Dict[str, int]:
+        """The same breakdown for routes with no settled result, kept strictly apart."""
+        c = Counter(
+            (o.status or "(no record)") if o.final else "(no record)"
+            for o in self.outcomes if not o.complete
+        )
         return dict(sorted(c.items(), key=lambda kv: (-kv[1], kv[0])))
 
     def exit_code(self) -> int:
         """The one and only place an exit code is decided.
 
-        There is no path where a route without a final record yields 0. The ordering is
+        There is no path where a route without a settled result yields 0. The ordering is
         deliberate: the most specific diagnosis wins, but every branch below EXIT_OK is
         non-zero, so a partial sweep cannot slip through whichever branch it takes.
         """
@@ -139,7 +179,11 @@ class Report:
                 "incomplete": len(self.incomplete),
                 "skipped_already_done": self.skipped_done,
                 "skipped_budget_exhausted": self.skipped_exhausted,
+                # by_status sums to `complete`; by_status_unsettled sums to `incomplete`. The
+                # split is the point: one route must never be counted as both a result and a
+                # gap.
                 "by_status": self.status_counts,
+                "by_status_unsettled": self.unsettled_counts,
             },
             "quarantined_workers": self.quarantined_workers,
             "warnings": self.warnings,
@@ -149,10 +193,17 @@ class Report:
                     "route": o.route,
                     "seed": o.seed,
                     "last_status": o.status,
+                    # A record can be on disk here: `final` plus `unsettled_reason` is what
+                    # separates "nothing was ever written" from "a stale record was preserved
+                    # and the retries never ran".
+                    "final": o.final,
+                    "unsettled_reason": o.unsettled_reason,
                     "attempts": {
                         "record": o.attempts_record,
                         "tickruntime": o.attempts_tickruntime,
                         "infra": o.attempts_infra,
+                        "infra_total": o.attempts_infra_total,
+                        "killed": o.attempts_killed,
                     },
                     "reason": o.last_reason,
                     "result_path": o.result_path,
@@ -167,10 +218,15 @@ class Report:
                     "status": o.status,
                     "score_composed": o.score_composed,
                     "final": o.final,
+                    "settled": o.settled,
+                    "complete": o.complete,
+                    "unsettled_reason": o.unsettled_reason,
                     "attempts": {
                         "record": o.attempts_record,
                         "tickruntime": o.attempts_tickruntime,
                         "infra": o.attempts_infra,
+                        "infra_total": o.attempts_infra_total,
+                        "killed": o.attempts_killed,
                     },
                     "worker": o.last_worker,
                     "duration_s": o.duration_s,
@@ -201,7 +257,7 @@ class Report:
             f"| {self.planned} | {self.planned - len(self.incomplete)} | "
             f"{len(self.incomplete)} | {self.skipped_done} | {self.skipped_exhausted} |",
             "",
-            "## Status breakdown",
+            "## Status breakdown — routes with a settled result",
             "",
             "| status | n |",
             "|---|---:|",
@@ -212,16 +268,28 @@ class Report:
         if self.incomplete:
             lines += [
                 "",
-                "## Incomplete routes — NO benchmark result was produced for these",
+                "## Routes with NO settled result",
                 "",
-                "| route | seed | last status | record | tick | infra | reason |",
-                "|---|---:|---|---:|---:|---:|---|",
+                "Not all of these are empty: `unsettled = unrefreshed_record` means a record "
+                "**is** on disk, from an earlier attempt, and the retries this run planned never "
+                "ran. It was preserved, not refreshed, and is not counted as a result.",
+                "",
+                "| route | seed | last status | on disk | unsettled | record | tick | infra | "
+                "killed | reason |",
+                "|---|---:|---|---|---|---:|---:|---:|---:|---|",
             ]
             for o in self.incomplete:
                 lines.append(
-                    f"| `{o.key}` | {o.seed} | {o.status or '—'} | {o.attempts_record} | "
-                    f"{o.attempts_tickruntime} | {o.attempts_infra} | {o.last_reason or '—'} |"
+                    f"| `{o.key}` | {o.seed} | {o.status or '—'} | "
+                    f"{'final record' if o.final else 'nothing'} | "
+                    f"{o.unsettled_reason or '—'} | {o.attempts_record} | "
+                    f"{o.attempts_tickruntime} | {o.attempts_infra} | {o.attempts_killed} | "
+                    f"{o.last_reason or '—'} |"
                 )
+            if any(o.attempts_infra for o in self.incomplete):
+                # `infra` is the budget that never settles, so an operator reading this section
+                # needs the way out in the same place, not three documents away.
+                lines += ["", f"> {plan_mod.INFRA_RECOVERY_HINT}"]
 
         if self.quarantined_workers:
             lines += ["", f"## Quarantined workers: {self.quarantined_workers}",
@@ -240,7 +308,9 @@ class Report:
             "",
             "A model failing routes is **not** a runner failure: a route whose final record says "
             "`Failed - TickRuntime` is a valid benchmark result and counts as complete. Exit 1 "
-            "means some route has no final record at all, so its answer is unknown.",
+            "means some route has no *settled* result — either nothing was written, or what is "
+            "there was preserved from an earlier attempt and never refreshed — so its answer is "
+            "unknown.",
         ]
         return "\n".join(lines) + "\n"
 
@@ -284,6 +354,25 @@ def build(tasks: Sequence[RouteTask], state: RunState, *, started_at: float,
     for task in tasks:
         rec = results_mod.read(task.result_path)
         st = state.tasks.get(task.key)
+        # Completeness has two halves and this is the only place they meet: what is on disk
+        # (re-read, never trusted from memory) and whether the ledger settled it. A record can
+        # be present without this run having produced or settled it.
+        settled = bool(st.finished) if st else False
+        if not rec.final or not settled:
+            # Order matters and was wrong: `rec.final` was tested first, which made
+            # `not_reached` unreachable for any route with a record on disk -- and a route the
+            # planning loop never reached is *precisely* a route whose record is left over from
+            # an earlier run. Two of the three cases the field exists to separate collapsed into
+            # one. The ledger question ("was this route ever looked at?") is strictly prior to
+            # the disk question ("is there a record?"), so it is asked first.
+            if st is None:
+                reason = "not_reached"
+            elif rec.final:
+                reason = "unrefreshed_record"
+            else:
+                reason = "no_record"
+        else:
+            reason = None
         rep.outcomes.append(RouteOutcome(
             key=task.key,
             route=str(task.xml),
@@ -292,11 +381,31 @@ def build(tasks: Sequence[RouteTask], state: RunState, *, started_at: float,
             final=rec.final,
             status=rec.status if rec.final else None,
             score_composed=rec.score_composed if rec.final else None,
+            settled=settled,
             attempts_record=st.attempts_record if st else 0,
             attempts_tickruntime=st.attempts_tickruntime if st else 0,
             attempts_infra=st.attempts_infra if st else 0,
+            attempts_infra_total=st.attempts_infra_total if st else 0,
+            attempts_killed=st.attempts_killed if st else 0,
             last_reason=(st.last_reason if st else None) or rec.error,
             last_worker=st.last_worker if st else None,
             duration_s=st.last_duration_s if st else None,
+            unsettled_reason=reason,
         ))
+
+    # Report-time seed check over the TREE, not over the planned paths (DESIGN.md 6A.10). The
+    # planned paths carry the seed by construction and plan.assert_seed_consistency already
+    # checks them; what that cannot see is a result file from a *different* seed sitting in the
+    # same output root, which any aggregator globbing `results/*.json` would average across.
+    if tasks:
+        allowed = {t.seed for t in tasks}
+        strays = plan_mod.foreign_seed_files(tasks[0].out_root, allowed)
+        if strays:
+            shown = ", ".join(p.name for p in strays[:5]) + (" ..." if len(strays) > 5 else "")
+            rep.warnings.append(
+                f"{len(strays)} result file(s) in this output root carry a seed outside the "
+                f"configured set {sorted(allowed)}: {shown}. They were NOT counted -- only the "
+                f"planned paths are ever read -- but a tree holding two seeds is a tree an "
+                f"aggregator will average across. Use a separate output root per seed."
+            )
     return rep

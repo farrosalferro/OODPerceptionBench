@@ -5,9 +5,9 @@
 
 FIRST CUT. See DESIGN.md for the locked decisions and STATUS.md for what is unvalidated.
 
-Exit codes (DESIGN.md section 6):
-    0  every planned route has a final record on disk
-    1  partial sweep -- at least one planned route has no final record
+Exit codes (DESIGN.md section 6; "settled" is defined in section 6A):
+    0  every planned route has a settled result
+    1  partial sweep -- at least one planned route has no settled result
     2  configuration / preflight error
     3  interrupted by signal
     4  all workers quarantined / no usable GPU
@@ -34,6 +34,7 @@ from oodbench import report as report_mod, results as results_mod  # noqa: E402
 from oodbench.backends.base import Attempt, AttemptOutcome  # noqa: E402
 from oodbench.plan import Decision, RouteTask  # noqa: E402
 from oodbench.results import Disposition  # noqa: E402
+from oodbench import state as state_mod  # noqa: E402
 from oodbench.state import RunState  # noqa: E402
 
 log = logging.getLogger("oodbench")
@@ -76,9 +77,16 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
                         "flagged in the report)")
     p.add_argument("--limit", type=int, help="run at most N routes (smoke testing)")
     p.add_argument("--dry-run", action="store_true",
-                   help="print the plan and exit 0 without running anything")
+                   help="print the plan and exit 0 without running anything. Never writes "
+                        "the ledger, so previewing cannot change what a later real run does")
     p.add_argument("--force", action="store_true",
                    help="required with --resume-mode none, which overwrites existing results")
+    p.add_argument("--retry-infra-exhausted", action="store_true",
+                   help="give routes whose INFRASTRUCTURE retry budget is spent a fresh one, "
+                        "for a resume after the machine has been repaired. Clears only that "
+                        "counter: no result file is touched and no other budget moves, so it "
+                        "buys attempts, never answers. Deliberately not --force: it destroys "
+                        "nothing")
     p.add_argument("--check-gpus", action="store_true",
                    help="print the CUDA and Vulkan device lists side by side and exit")
     p.add_argument("--verbose", "-v", action="store_true")
@@ -185,25 +193,40 @@ class Runner:
                 record_budget=int(retry["record_budget"]),
                 tickruntime_budget=int(retry["tickruntime_budget"]),
                 infra_budget=int(retry["infra_budget"]),
+                killed_budget=int(retry["killed_budget"]),
             )
             if decision.decision is Decision.FATAL:
                 log.error("%s: %s", task.key, decision.reason)
                 self.fatal_agent = True
                 self.warnings.append(f"{task.key}: {decision.reason}")
                 break
+            # Settlement comes from decide(), never re-derived here: the caller re-deriving it
+            # from "a record exists" is how a preserved record came to mean "route complete".
             if decision.decision is Decision.SKIP_DONE:
                 self.skipped_done += 1
-                st.finished = True
+                st.finished = decision.settled
                 st.last_status = decision.record.status
                 continue
             if decision.decision is Decision.SKIP_EXHAUSTED:
                 self.skipped_exhausted += 1
+                st.finished = decision.settled
                 st.last_reason = decision.reason
                 log.warning("%s: %s", task.key, decision.reason)
                 continue
+            # This run owes the route an attempt, so whatever settled it before does not settle
+            # it now. Without this, a route re-planned under `resume.mode: none` stays settled
+            # on the strength of a record this run intends to replace and then never produces.
+            st.finished = False
             queue.append(task)
 
-        state.save()
+        # A dry run must not write the ledger AT ALL, rather than write it and put it back:
+        # a snapshot-and-restore leaves a window in which a SIGKILL freezes the preview's
+        # settlement bits and config digest on disk, and the restoring write is itself
+        # non-atomic. Not writing is crash-safe by construction. The loop above still mutates
+        # the in-memory ledger, which it must -- otherwise the plan printed below would not be
+        # the plan a real run would make. (Cross-review 2026-08-07, round 4, codex finding 2.)
+        if not self.args.dry_run:
+            state.save()
 
         if self.fatal_agent:
             return self._report(tasks, state, backend)
@@ -298,97 +321,101 @@ class Runner:
                 interrupted: bool = False) -> bool:
         """Account for one finished attempt. Returns True if the task should be re-queued.
 
-        Two independent budgets, so a bad GPU cannot consume a route's *record* retries and
-        leave behind a result-shaped artifact produced by infrastructure.
+        **DESIGN.md section 6A is normative for this method.** One rule, from which every case
+        below follows:
+
+            a record on disk counts as this attempt's output only if the way the attempt ended
+            could not have manufactured that record.
+
+        The three things we know are the outcome class (how the attempt stopped), the on-disk
+        case (six of them: no final record, plus the five dispositions -- and ``disposition``
+        returns UNKNOWN for a non-final record too, so ``record.final`` MUST be tested first),
+        and the teardown flag. ``interrupted`` is that flag; read it as *torn_down*, since the
+        runner also raises it on a fatal-agent abort and when every worker is quarantined.
+
+        Class precedence is a strict order: NEVER_STARTED > TORN_DOWN > ABNORMAL_END >
+        CLEAN_EXIT. NEVER_STARTED outranking the teardown flag is what stops a drained failed
+        launch from reading a *restored* earlier-attempt record as its own verdict.
         """
         task = attempt.task
         st = state.get(task.key)
         st.last_worker = attempt.worker
         st.last_duration_s = round(attempt.duration_s, 1)
         st.total_runtime_s += attempt.duration_s
-        retry = self.cfg.retry
 
         record = results_mod.read(task.result_path)
         st.last_status = record.status
+        reason = attempt.detail or (attempt.outcome.value if attempt.outcome else "unknown")
 
-        # A launch that never happened produced nothing, so nothing on disk can be read as this
-        # attempt's output. Both backends put the pre-existing record back on every failed-launch
-        # path (see backends.base.take_checkpoint_aside), which means `record` here belongs to an
-        # EARLIER attempt. Judging it as if this attempt had produced it is a two-part silent
-        # failure: it charges the route's *record* budget for an infrastructure fault -- busy
-        # ports, a refused sbatch -- and then, once that budget runs out, freezes the stale
-        # record as the final answer while the route's real retries were never spent. Worse
-        # still under `resume.mode: none`, where a stale *accepted* record would be re-adopted
-        # as this run's result without a single route having been driven.
+        # -- class NEVER_STARTED ---------------------------------------------------------
+        # Nothing ran, so nothing on disk can be read as this attempt's output. Both backends
+        # put the pre-existing record back on every failed-launch path (see
+        # backends.base.take_checkpoint_aside), which means `record` here belongs to an EARLIER
+        # attempt. Judging it as if this attempt had produced it is a three-part silent failure:
+        # it charges the route's *record* budget for an infrastructure fault; once that budget
+        # runs out it freezes the stale record in as the final answer having never retried it;
+        # and -- the part the report got wrong -- it lets that preserved record make the route
+        # count COMPLETE at exit 0. Under `resume.mode: none` a stale *accepted* record would
+        # even be re-adopted as this run's result with nothing having been driven.
         #
-        # A failed launch is infrastructure, unconditionally, whatever is on disk.
-        launch_failed = attempt.outcome is AttemptOutcome.LAUNCH_FAILED
-        produced_record = record.final and not launch_failed
+        # This outranks the teardown flag: a launch that failed and was then drained during a
+        # shutdown still never ran, and the record still is not its.
+        if attempt.outcome is AttemptOutcome.LAUNCH_FAILED or attempt.outcome is None:
+            if attempt.outcome is None:
+                self._warn_once(
+                    f"{task.key}: the backend reported an attempt finished without saying how "
+                    f"(outcome is None). Treated as a launch failure, which is the fail-safe "
+                    f"reading: nothing on disk is credited to it.")
+            return self._charge_infra(attempt, st, backend, reason, record,
+                                      never_started=True)
 
-        if produced_record:
-            self.consecutive_infra[attempt.worker] = 0
-        elif not interrupted:
-            self.consecutive_infra[attempt.worker] = self.consecutive_infra.get(
-                attempt.worker, 0) + 1
-
-        # -- this attempt produced no record: infrastructure -----------------------------
-        if not produced_record:
-            reason = attempt.detail or (attempt.outcome.value if attempt.outcome else "unknown")
-
-            # An operator interrupt is not an infrastructure failure. We killed a healthy route
-            # mid-flight; the machine did nothing wrong. Charging the infra budget here would
-            # let three Ctrl-Cs permanently abandon a route that never actually failed -- and
-            # abandon it *as* "this route has NOT produced a benchmark result", which is the
-            # exact silent-loss the budget exists to prevent. Charge nothing, report nothing,
-            # and let the next run start this route with its budget intact.
-            if interrupted:
-                st.last_reason = f"interrupted before a record was written ({reason})"
-                log.info("%s: interrupted mid-route; no retry budget charged", task.key)
+        # -- class TORN_DOWN -------------------------------------------------------------
+        # We stopped a route that was not failing: an operator signal, a fatal-agent abort, or
+        # every worker quarantined. The machine did nothing wrong, so NOTHING is charged -- in
+        # any budget. Charging would let three interrupted sweeps permanently abandon a route
+        # that never actually failed, and abandon it *as* "this route has NOT produced a
+        # benchmark result", the exact silent loss the budgets exist to prevent.
+        #
+        # This matters most for the record budget: killing the worker takes its process group
+        # down, CARLA included, and a crash handler can write a *final* retryable record on the
+        # way out. That record is an artefact of the kill, not something the model produced.
+        if interrupted:
+            if record.final and record.disposition is Disposition.FATAL:
+                return self._abort_fatal(task, st, record)
+            if record.final and record.disposition is Disposition.ACCEPT:
+                # It genuinely finished before we killed anything.
+                st.finished = True
+                st.last_reason = None
                 return False
-
-            st.attempts_infra += 1
-            if launch_failed:
-                st.last_reason = f"launch failed, nothing ran ({reason})"
-                log.warning("%s: launch failed on attempt %d [%s]",
-                            task.key, st.attempts_infra, reason)
-            else:
-                st.last_reason = f"no final record ({reason})"
-                log.warning("%s: no final record after attempt %d [%s]",
-                            task.key, st.attempts_infra, reason)
-            self._maybe_quarantine(attempt.worker, backend)
-            if st.attempts_infra < int(retry["infra_budget"]):
-                return True
-
-            if record.final:
-                # Reachable only via a failed launch, which preserved a record an earlier
-                # attempt really did produce. The route is not "incomplete" -- it holds a valid
-                # benchmark result -- but the retries this run planned never happened, and the
-                # report must not imply otherwise by staying silent.
-                msg = (f"{task.key}: infrastructure retry budget exhausted "
-                       f"({st.attempts_infra}/{int(retry['infra_budget'])}) without a single "
-                       f"attempt ever starting. The record on disk (status {record.status!r}) "
-                       f"is from an EARLIER attempt; it was preserved, not refreshed.")
-                log.error("%s", msg)
-                if msg not in self.warnings:
-                    self.warnings.append(msg)
-                return False
-
-            log.error("%s: infrastructure retry budget exhausted (%d/%d) -- this route has NOT "
-                      "produced a benchmark result", task.key, st.attempts_infra,
-                      int(retry["infra_budget"]))
+            st.last_reason = (f"{record.status} (interrupted; no budget charged)"
+                              if record.final
+                              else f"interrupted before a record was written ({reason})")
+            log.info("%s: interrupted; no retry budget charged", task.key)
             return False
 
-        # -- this attempt produced a final record: judge it -------------------------------
+        abnormal = attempt.outcome in (AttemptOutcome.TIMEOUT, AttemptOutcome.FAULT,
+                                       AttemptOutcome.KILLED)
+
+        # -- no final record: infrastructure, for both remaining classes ------------------
+        if not record.final:
+            return self._charge_infra(attempt, st, backend, reason, record,
+                                      never_started=False)
+
+        # -- FATAL and ACCEPT are taken first, for CLEAN_EXIT and ABNORMAL_END alike ------
         disposition = record.disposition
         if disposition is Disposition.FATAL:
-            log.error("%s: status %r means the agent's sensor configuration is rejected; it will "
-                      "fail identically on every route. Aborting the sweep.",
-                      task.key, record.status)
-            self.fatal_agent = True
-            st.last_reason = f"fatal: {record.status}"
-            return False
+            # Not fabricable by a kill: the sensor configuration is validated before the route
+            # runs. Aborts the sweep either way.
+            self._clear_infra_debt(st, attempt.worker)
+            return self._abort_fatal(task, st, record)
 
         if disposition is Disposition.ACCEPT:
+            # A kill cannot fabricate an ACCEPT status -- those come from the criteria
+            # evaluation of a route that ended normally, and the checkpoint is written when the
+            # ROUTE ends, not when the process does. A final ACCEPT plus a wall-clock kill is
+            # the signature of a route that finished and hung in teardown. Re-running it would
+            # overwrite a real result.
+            self._clear_infra_debt(st, attempt.worker)
             st.finished = True
             st.last_reason = None
             log.info("%s: %s (score_composed=%s) in %.0fs on worker %d",
@@ -397,54 +424,166 @@ class Runner:
             return False
 
         if disposition is Disposition.UNKNOWN:
-            msg = (f"{task.key}: unrecognised route status {record.status!r}. The runner's status "
-                   f"taxonomy may be out of date with this leaderboard build; treating it as "
-                   f"retryable. Please report it.")
-            log.warning(msg)
-            if msg not in self.warnings:
-                self.warnings.append(msg)
+            self._warn_once(
+                f"{task.key}: unrecognised route status {record.status!r}. The runner's status "
+                f"taxonomy may be out of date with this leaderboard build; treating it as "
+                f"retryable. Please report it.")
 
+        # -- retryable: which axis? ------------------------------------------------------
         if disposition is Disposition.RETRY_TICKRUNTIME:
-            budget, label = int(retry["tickruntime_budget"]), "tickruntime"
-        else:  # RETRY_RECORD or UNKNOWN
-            budget, label = int(retry["record_budget"]), "record"
-
-        # An operator interrupt charges NOTHING, in this budget as well as the infra one.
-        # Killing the worker takes its whole process group down, CARLA included, and the
-        # evaluator's crash handler writes a *final* `Failed - Simulation crashed` record on the
-        # way out -- a record manufactured by the Ctrl-C, not produced by the model. Charging it
-        # let a few interrupted sweeps spend a route's real retries and then, on the last one,
-        # mark the route finished with that interrupt artefact frozen in as its benchmark
-        # result. The record is preserved (the runner never deletes one), no budget moves, and
-        # the next run re-plans this route with its budget intact and starts it from a clean
-        # slate. An accepted record is still accepted above: that route genuinely completed
-        # before we killed anything.
-        if interrupted:
-            spent = st.budgets()[label]
-            st.last_reason = (f"{record.status} (interrupted; no {label} budget charged, "
-                              f"still {spent}/{budget})")
-            log.info("%s: interrupted with a %r record on disk; no retry budget charged",
-                     task.key, record.status)
-            return False
-
-        if label == "tickruntime":
+            # Raised only by the scenario manager's own `tick_count > 4000` guard, so a kill
+            # cannot manufacture it -- and it is, by definition, the outcome of a route that ran
+            # a very long time, i.e. the population most likely to breach route_timeout_s during
+            # teardown. Charging those to infrastructure would report a degenerate model's
+            # entire row as incomplete at exit 1: a legitimate benchmark result silently
+            # converted into an infrastructure failure.
+            self._clear_infra_debt(st, attempt.worker)
+            label, budget = "tickruntime", int(self.cfg.retry["tickruntime_budget"])
             st.attempts_tickruntime += 1
             spent = st.attempts_tickruntime
+        elif abnormal:
+            # THE AMBIGUOUS CELL. `Failed`, `Agent crashed`, `Simulation crashed` and
+            # `Agent couldn't be set up` are exactly the statuses the evaluator's except-blocks
+            # write -- which is also what a dying simulator under a surviving evaluator
+            # produces. We cannot tell the two apart, so this charges neither the model's record
+            # budget (it may not be the model's verdict) nor the infra budget (which never
+            # settles, and would make legitimate published rows such as vad's four
+            # `Agent couldn't be set up` unreproducible: exit 1 forever, on every resume).
+            # Its own bounded axis: retry to resolve the ambiguity, then accept the record.
+            #
+            # The quarantine counter -- and the route's infra debt, which is cleared by exactly
+            # the same event -- are deliberately left ALONE here: a worker that ran a route all
+            # the way to record registration is demonstrably not wedged, but neither has it
+            # proved itself. Resetting them let a worker that kills every route it touches
+            # evade detection forever. This is the one cell where a final record is on disk and
+            # nothing is cleared, because it is the one cell where the record is not evidence.
+            label, budget = "killed", int(self.cfg.retry["killed_budget"])
+            st.attempts_killed += 1
+            spent = st.attempts_killed
+            log.warning("%s: attempt ended abnormally (%s) with a %r record on disk. That "
+                        "record may have been written by the route or by the kill; charging "
+                        "the ambiguous-kill budget (%d/%d), not the model's record budget.",
+                        task.key, reason, record.status, spent, budget)
         else:
+            self._clear_infra_debt(st, attempt.worker)
+            label, budget = "record", int(self.cfg.retry["record_budget"])
             st.attempts_record += 1
             spent = st.attempts_record
 
         st.last_reason = f"{record.status} ({label} attempts {spent}/{budget})"
         if spent < budget:
+            if label == "killed":
+                self._copy_record_aside(task, spent)
             log.warning("%s: %s -- retrying (%s %d/%d)", task.key, record.status, label,
                         spent, budget)
             return True
 
-        # Budget spent. The record on disk IS the benchmark result; the route is complete.
+        # Budget spent. The record on disk IS the benchmark result; the route is settled.
+        # Every cell that holds a final record must reach settlement in a finite number of
+        # attempts -- a route that can never settle is a permanent exit 1 with no recovery
+        # short of editing the ledger by hand.
         st.finished = True
+        if label == "killed":
+            self._warn_once(
+                f"{task.key}: settled on status {record.status!r} after {spent} attempt(s) that "
+                f"ended abnormally while that record was on disk. It may have been written by "
+                f"the kill rather than by the model; earlier copies are under "
+                f"_runner/killed_records/.")
         log.info("%s: %s -- %s retry budget spent (%d/%d); accepting the record as the result",
                  task.key, record.status, label, spent, budget)
         return False
+
+    # -- _settle helpers ----------------------------------------------------------------
+    def _warn_once(self, msg: str) -> None:
+        log.warning("%s", msg)
+        if msg not in self.warnings:
+            self.warnings.append(msg)
+
+    def _clear_infra_debt(self, st, worker: int) -> None:
+        """One event clears both consecutive-failure counters, because they ask one question.
+
+        The event is *an attempt produced a final record the way it ended could not have
+        manufactured*. It is evidence that this worker is not wedged (so the quarantine counter
+        resets) and that this route can run here (so its infra debt resets). What both budgets
+        bound is a machine that is broken **now**; a lifetime tally would let unrelated hiccups
+        scattered across a long sweep gate a route that has been running fine all along, and
+        that gate is persisted, so the route would still be gated on the next run.
+
+        Deliberately NOT called for an abnormal end holding a crash-shaped record: that is the
+        one cell whose record we have just declared unreliable, and clearing on it is how a
+        worker that kills every route it touches evaded the detector (DESIGN.md 6A.5).
+        """
+        self.consecutive_infra[worker] = 0
+        st.attempts_infra = 0
+
+    def _abort_fatal(self, task: RouteTask, st, record) -> bool:
+        log.error("%s: status %r means the agent's sensor configuration is rejected; it will "
+                  "fail identically on every route. Aborting the sweep.",
+                  task.key, record.status)
+        self.fatal_agent = True
+        st.last_reason = f"fatal: {record.status}"
+        return False
+
+    def _charge_infra(self, attempt: Attempt, st, backend, reason: str, record,
+                      never_started: bool) -> bool:
+        """Charge the infrastructure budget for an attempt that produced no record of its own.
+
+        The quarantine counter tracks exactly this population -- *nothing ran at all* is the
+        signature of a wedged GPU or a permanently squatted port block -- which is why a failed
+        launch advances it even though there is a perfectly good record on disk.
+        """
+        task = attempt.task
+        infra_budget = int(self.cfg.retry["infra_budget"])
+        self.consecutive_infra[attempt.worker] = self.consecutive_infra.get(
+            attempt.worker, 0) + 1
+        # The streak is the gate; the total is the audit trail and is never cleared.
+        st.attempts_infra += 1
+        st.attempts_infra_total += 1
+        if never_started:
+            st.last_reason = f"launch failed, nothing ran ({reason})"
+            log.warning("%s: launch failed on attempt %d [%s]",
+                        task.key, st.attempts_infra, reason)
+        else:
+            st.last_reason = f"no final record ({reason})"
+            log.warning("%s: no final record after attempt %d [%s]",
+                        task.key, st.attempts_infra, reason)
+        self._maybe_quarantine(attempt.worker, backend)
+        if st.attempts_infra < infra_budget:
+            return True
+
+        if record.final and never_started:
+            # A record an EARLIER attempt really did produce, preserved by the failed-launch
+            # path. It must never be destroyed -- and it must never be mistaken for an answer
+            # this run produced. `finished` stays false, so the report counts the route
+            # incomplete and the run exits non-zero: we do not know this route's answer.
+            self._warn_once(
+                f"{task.key}: infrastructure retry budget exhausted "
+                f"({st.attempts_infra}/{infra_budget}) without a single attempt ever starting. "
+                f"The record on disk (status {record.status!r}) is from an EARLIER attempt; it "
+                f"was preserved, not refreshed, and this route is reported as having no settled "
+                f"result. {plan_mod.INFRA_RECOVERY_HINT}")
+            return False
+
+        log.error("%s: infrastructure retry budget exhausted (%d/%d) -- this route has NOT "
+                  "produced a benchmark result. %s",
+                  task.key, st.attempts_infra, infra_budget, plan_mod.INFRA_RECOVERY_HINT)
+        return False
+
+    def _copy_record_aside(self, task: RouteTask, n: int) -> None:
+        """Keep a copy of an ambiguous record before the retry deletes it.
+
+        ``take_checkpoint_aside`` clears the checkpoint on the next *successful* launch, so a
+        route re-queued off the ambiguous-kill axis can end with no record at all where the old
+        behaviour would have frozen the crash-shaped one in. The copy lives under ``_runner/``,
+        never beside the results, so no downstream aggregator can glob it up as one.
+        """
+        try:
+            dest = (self.out_root / "_runner" / "killed_records" / str(task.rel_dir)
+                    / f"{task.stem}_seed{task.seed}.{n}.json")
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(task.result_path.read_bytes())
+        except OSError as exc:  # pragma: no cover - best effort
+            log.warning("%s: could not copy the ambiguous record aside: %s", task.key, exc)
 
     def _maybe_quarantine(self, worker: int, backend) -> None:
         limit = int(self.cfg.retry["worker_quarantine_after"])
@@ -534,6 +673,63 @@ def main(argv: Optional[List[str]] = None) -> int:
                "changed, use a fresh output root.")
         log.warning("%s", msg)
         runner.warnings.append(msg)
+    if state.accounting_model_changed():
+        msg = (f"this output root's ledger was written under attempt-accounting epoch "
+               f"{state.accounting_epoch_on_disk}, and this runner uses epoch "
+               f"{state_mod.ACCOUNTING_EPOCH} (DESIGN.md section 6A). The counters are carried "
+               f"over unchanged, but they were charged under different rules -- before epoch 2 "
+               f"every final retryable record charged the `record` axis, including attempts "
+               f"that ended abnormally, which now charge the separate bounded `killed` axis. "
+               f"Routes still in flight may therefore settle after a different number of "
+               f"attempts, and on a different status, than the run that started this tree would "
+               f"have produced. Finished routes are unaffected. The config digest deliberately "
+               f"does NOT cover this -- it answers whether you changed a setting, not whether "
+               f"the runner changed what one means.")
+        log.warning("%s", msg)
+        runner.warnings.append(msg)
+
+    # Applied before planning, because it changes what `decide()` sees: the plan printed by a
+    # dry run would otherwise be a plan for a ledger the real run will not have.
+    #
+    # `--dry-run` is documented, in --help and in DESIGN.md, as "print the plan and exit 0
+    # without running anything". It was not true of the ledger: planning materialises a
+    # TaskState for every route, sets or clears `finished` on each, and `load_or_create` has
+    # already replaced the stored config digest -- then it all got saved. So previewing a run
+    # could create task entries, move settlement bits, and (the sharp one) overwrite the digest,
+    # which ERASES the `config_changed()` warning the operator was about to be shown on the real
+    # run.
+    #
+    # The rule is now simply that **a dry run never calls `state.save()`** -- not here, not in
+    # `run()`. Mutating the in-memory ledger is fine and necessary, since the printed plan has
+    # to be the plan a real run would make; it is the write that must not happen. An earlier
+    # revision snapshotted the file and restored it afterwards, which is strictly worse: it
+    # leaves a window where a SIGKILL freezes the preview on disk, and the restoring write is
+    # itself non-atomic. Every save on the dry-run path is guarded at its call site, so there is
+    # no window to be crash-safe about.
+    #
+    # Applied before planning, because it changes what `decide()` sees. Note the clear is over
+    # the WHOLE ledger, not the planned subset: --limit and a narrowed --routes do not scope it.
+    if getattr(args, "retry_infra_exhausted", False):
+        cleared = state.clear_infra_exhaustion(int(cfg.retry["infra_budget"]))
+        if not args.dry_run:
+            state.save()
+        if cleared:
+            verb = "would clear (--dry-run: nothing was written)" if args.dry_run else "cleared"
+            shown = ", ".join(cleared[:5]) + (" ..." if len(cleared) > 5 else "")
+            msg = (f"--retry-infra-exhausted: {verb} the infrastructure retry counter of "
+                   f"{len(cleared)} route(s) that had hit the gate ({shown}). Nothing else was "
+                   f"touched -- every result file, settlement bit and other budget is as it "
+                   f"was, and the lifetime infra count still records what happened. If the "
+                   f"machine is still broken these routes will simply exhaust the budget again "
+                   f"and be reported unsettled, as before.")
+            log.warning("%s", msg)
+            runner.warnings.append(msg)
+        else:
+            log.info("--retry-infra-exhausted: no route had an exhausted infrastructure budget")
+            runner.warnings.append(
+                "--retry-infra-exhausted was passed but no route had an exhausted "
+                "infrastructure budget, so it changed nothing. Recorded because a flag that "
+                "silently does nothing is worse than one that says so.")
 
     backend = None
     interrupted = False
@@ -562,7 +758,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                 backend.shutdown()
             except Exception as exc:  # pragma: no cover
                 log.warning("backend shutdown failed: %s", exc)
-        state.save()
+        # The last of the three guarded saves. A dry run has now touched nothing on disk: no
+        # ledger written, so none to restore and none left behind on a tree that had none.
+        if not args.dry_run:
+            state.save()
 
     if args.dry_run:
         # The only "success without results" case, and it produces no result files that could

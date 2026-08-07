@@ -17,7 +17,7 @@ import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 # Safe at module level: jobscript imports this module only under TYPE_CHECKING, so there is no
 # import cycle. RESERVED_ENV lives there because that module is what exports the variables.
@@ -87,6 +87,13 @@ SCHEMA: Dict[str, Dict[str, Any]] = {
         "record_budget": ("int", 3),
         "infra_budget": ("int", 3),
         "tickruntime_budget": ("int", 0),
+        # Attempts that ended abnormally (wall-clock kill, fault, quarantine kill) while a
+        # crash-shaped record was on disk -- ambiguous by construction, because that is exactly
+        # what a dying simulator under a surviving evaluator writes. Its own axis so a kill
+        # cannot spend the model's record retries (DESIGN.md 6A.5). >= 2 buys one clean re-run
+        # before the record is accepted as the answer; it MUST stay bounded, because the
+        # alternative is a route that can never settle.
+        "killed_budget": ("int", 2),
         "worker_quarantine_after": ("int", 3),
     },
     "resume": {
@@ -115,6 +122,22 @@ SCHEMA: Dict[str, Dict[str, Any]] = {
         "submit_interval_s": ("number", 1.0),
         "extra_directives": ("strlist", []),
     },
+}
+
+#: Keys added to :data:`SCHEMA` *after* output roots with a stamped config digest existed in
+#: the wild, mapped to the value they were introduced with. While such a key holds exactly that
+#: value it is left out of :meth:`Config.digest`, so a ledger written before the key existed
+#: still matches a configuration that is otherwise identical. See :meth:`Config.digest` for why
+#: the pinned value is written here instead of being read back out of ``SCHEMA``.
+#:
+#: Every entry is a promise that the key's *pinned* value reproduces the behaviour of the build
+#: that had no such key. ``retry.killed_budget: 2`` qualifies on the config's own terms -- a
+#: configuration is the set of knobs the operator turned, and this one turned none. (The
+#: accounting model that the key belongs to did change; that is a change of runner version, and
+#: the runner version is stamped into every report separately.) A key whose default alters
+#: behaviour in a way an operator would want flagged does NOT belong here.
+DIGEST_COMPAT_DEFAULTS: Dict[Tuple[str, str], Any] = {
+    ("retry", "killed_budget"): 2,
 }
 
 VALID_BACKENDS = ("local", "slurm")
@@ -177,6 +200,24 @@ class Config:
 
         Two runs with the same digest were driven by the same effective settings, which is what
         makes a report auditable after the fact.
+
+        **Schema growth must not look like a settings change.** ``build`` materialises every
+        schema key into the resolved config, so adding one silently changed the digest of every
+        configuration that predates it -- and the digest is what the ledger compares on resume,
+        so every pre-existing output root started reporting "this output root was produced by a
+        DIFFERENT configuration ... use a fresh output root". That is a false alarm whose
+        remedy is throwing away 475 routes of finished work, over a key nobody set.
+
+        A key listed in :data:`DIGEST_COMPAT_DEFAULTS` is therefore omitted from the payload
+        *while it holds the pinned value*, and only then. The carve-out is per value, not per
+        key: set ``retry.killed_budget: 3`` and it is hashed like anything else, because that
+        genuinely changes the run. And because the pinned value is written here rather than read
+        from :data:`SCHEMA`, changing a *default* later still moves the digest of every config
+        that omits the key -- which is correct, since their behaviour would change too.
+
+        What the digest deliberately does not encode is the runner's own version; that is
+        stamped separately into every report. The accounting model changing is not the
+        configuration changing.
         """
         payload = {
             k: getattr(self, k)
@@ -186,6 +227,12 @@ class Config:
             )
         }
         payload["gpus"] = [{"cuda": g.cuda, "vulkan": g.vulkan} for g in self.gpus]
+        for (section, key), pinned in DIGEST_COMPAT_DEFAULTS.items():
+            sect = payload.get(section)
+            if isinstance(sect, dict) and sect.get(key) == pinned:
+                sect = dict(sect)
+                sect.pop(key, None)
+                payload[section] = sect
         blob = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
         return hashlib.sha256(blob).hexdigest()
 
@@ -473,9 +520,16 @@ def build(raw: Dict[str, Any], source_path: Optional[str] = None,
             f"got {resolved['resume']['mode']!r}"
         )
 
-    for key in ("record_budget", "infra_budget", "tickruntime_budget"):
+    for key in ("record_budget", "infra_budget", "tickruntime_budget", "killed_budget"):
         if resolved["retry"][key] < 0:
             raise ConfigError(f"retry.{key} must be >= 0")
+    if resolved["retry"]["killed_budget"] < 2:
+        warnings.append(
+            f"retry.killed_budget={resolved['retry']['killed_budget']} buys no clean re-run: an "
+            f"attempt killed while a crash-shaped record was on disk will settle on that record "
+            f"immediately, even though the kill itself may have written it. 2 or more is "
+            f"recommended (DESIGN.md 6A.5)."
+        )
     if resolved["retry"]["worker_quarantine_after"] < 1:
         raise ConfigError("retry.worker_quarantine_after must be >= 1")
 

@@ -10,9 +10,18 @@ from oodbench.report import Report, RouteOutcome
 from oodbench.state import RunState
 
 
-def outcome(key, final, status=None):
+def outcome(key, final, status=None, settled=None):
+    """A route outcome for the exit-contract tests.
+
+    Completeness has two halves since DESIGN.md 6A.8 -- the record is final *on disk* AND the
+    ledger settled it -- so the helper states the second one. It defaults to ``final``, which
+    is the shape every test in this file is about: a route whose record this run produced and
+    settled. The case where the two halves disagree (a record preserved by a failed launch that
+    this run never settled) is the subject of ``tests/test_settlement_model.py``.
+    """
     return RouteOutcome(key=key, route=f"/x/{key}.xml", seed=42,
                         result_path=f"/out/{key}.json", final=final, status=status,
+                        settled=final if settled is None else settled,
                         score_composed=1.0 if final else None)
 
 
@@ -58,17 +67,39 @@ class TestExitContract(unittest.TestCase):
                          quarantined_workers=[0, 1])
         self.assertEqual(r.exit_code(), 4)
 
+    def test_a_final_record_this_run_never_settled_does_not_exit_zero(self):
+        """The OFF-DIAGONAL case, and the reason ``settled`` is a parameter of the helper.
+
+        Completeness has two halves since DESIGN.md 6A.8 -- ``final`` on disk AND settled in the
+        ledger -- and every other test in this file runs on the diagonal where they agree, which
+        is what a route this run produced looks like. The half that carries the exit contract is
+        the one where they DISAGREE: a record preserved by a failed launch is final on disk and
+        was never refreshed, and reading it as a result is cross-review finding 6. A file titled
+        for the exit contract has to state that itself rather than delegate it.
+        """
+        r = self._report([outcome("a", True, "Completed"),
+                          outcome("b", True, "Failed - Agent crashed", settled=False)])
+        self.assertEqual(r.exit_code(), EXIT_PARTIAL,
+                         "a record this run preserved but never settled was counted as a result")
+        self.assertEqual(r.status_counts, {"Completed": 1})
+        self.assertEqual(r.unsettled_counts, {"Failed - Agent crashed": 1})
+
     def test_no_incomplete_route_can_ever_yield_zero(self):
-        # Exhaustive over the flag combinations the runner can produce.
-        for interrupted in (False, True):
-            for fatal in (False, True):
-                for allq in (False, True):
-                    r = self._report([outcome("a", True, "Completed"), outcome("b", False)],
-                                     interrupted=interrupted, fatal_agent=fatal,
-                                     all_workers_quarantined=allq)
-                    self.assertNotEqual(
-                        r.exit_code(), EXIT_OK,
-                        f"interrupted={interrupted} fatal={fatal} all_quarantined={allq}")
+        # Exhaustive over the flag combinations the runner can produce, and over BOTH shapes an
+        # incomplete route can have: nothing on disk, and a final record the ledger never
+        # settled. The second was previously unreachable through this helper.
+        for incomplete in (outcome("b", False),
+                           outcome("b", True, "Failed - Agent crashed", settled=False)):
+            for interrupted in (False, True):
+                for fatal in (False, True):
+                    for allq in (False, True):
+                        r = self._report([outcome("a", True, "Completed"), incomplete],
+                                         interrupted=interrupted, fatal_agent=fatal,
+                                         all_workers_quarantined=allq)
+                        self.assertNotEqual(
+                            r.exit_code(), EXIT_OK,
+                            f"final={incomplete.final} settled={incomplete.settled} "
+                            f"interrupted={interrupted} fatal={fatal} all_quarantined={allq}")
 
     def test_report_serialises_and_carries_the_version_stamp(self):
         r = self._report([outcome("a", True, "Completed")])
@@ -106,7 +137,8 @@ class TestLedger(unittest.TestCase):
         st2 = s2.get("vehicle/x/base/route_1_seed42")
         self.assertEqual(st2.attempts_record, 2)
         self.assertEqual(st2.attempts_infra, 1)
-        self.assertEqual(st2.budgets(), {"record": 2, "tickruntime": 0, "infra": 1})
+        self.assertEqual(st2.budgets(),
+                         {"record": 2, "tickruntime": 0, "infra": 1, "killed": 0})
 
     def test_write_is_atomic_no_tmp_left_behind(self):
         s = RunState.load_or_create(self.path, "d")

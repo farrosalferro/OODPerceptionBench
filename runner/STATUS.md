@@ -8,11 +8,17 @@
 A production runner for this benchmark is 1–2 weeks of work and cannot be finished without a
 machine that runs CARLA. What exists now is the part that is expensive to change later — the
 design decisions in `DESIGN.md` — plus a working implementation of them whose *logic* is
-covered by 153 automated tests, and none of whose *simulator interaction* has ever executed.
+covered by 219 automated tests, and none of whose *simulator interaction* has ever executed.
 
 Nothing below should be read as "tested" unless it says so explicitly.
 
 ### Seven defects found and fixed on review
+
+*(Twenty-three in total, once the four later review rounds below are counted. The numbering
+runs straight through: 1–7 here, 8–11 from the cross-review, 12–17 from the verification pass,
+18–19 from the round that verified **that**, and 20–23 from the different-family cross-review of
+**that**. Every round found real defects in the one before it, without exception; the honest
+reading of the sequence is that the count is a lower bound, not a total.)*
 
 Every one was found by **reading** the code — two on a first correctness pass, five more in an
 independent cross-review of that pass. Each was reproduced with a failing probe before being
@@ -73,6 +79,166 @@ That defects of this kind survived in code this heavily commented is the argumen
 validation, not against it. Items 5–7 in particular are the shape of bug that a real sweep
 surfaces as "throughput is oddly bad" long before anyone suspects correctness.
 
+### Four more, from a second (different-family) cross-review
+
+A later cross-review by two models from other labs returned BLOCKING on nine findings; four of
+them landed in the retry-accounting and settle path that items 1–4 above had already been
+repaired once. They were four symptoms of one missing definition, so they were fixed as one
+model rather than four patches — `DESIGN.md` §6A is that model, and it is normative.
+
+8. **A timeout or fault kill charged the *record* budget** (the same defect as item 4, on the
+   path items 2–4 did not cover: `local.py` reaches TIMEOUT/FAULT through the same `killpg` as
+   Ctrl-C, but with the interrupt flag clear). A kill-manufactured `Simulation crashed` could
+   spend the model's retries, reset the quarantine detector, and freeze in as the result.
+9. **`decide()` ignored the infra budget whenever a final retryable record existed**, so such a
+   route retried past its infrastructure limit for ever.
+10. **An infra-exhausted failed launch still exited 0.** Item 3's repair correctly stopped the
+    failed launch from destroying or settling the preserved record — but the *report* derived
+    completeness from `rec.final` read off disk, and a preserved record is final. Completeness
+    is now `final AND settled`.
+11. **A documented report-time seed re-check did not exist.** Now implemented, over the result
+    *tree* rather than over the planned paths (which carry the seed by construction and are
+    already checked at plan time), as a warning naming the stray files.
+
+Adversarial review of the fix itself then changed it in four further places, each recorded in
+§6A.6: an abnormal end holding a crash-shaped record gets a **bounded** ambiguity budget rather
+than the never-settling infra one (charging infra there would have made six *published* v0.9
+result rows unreproducible at exit 1); the same for an unrecognised status; `NEVER_STARTED`
+outranks the teardown flag in a strict precedence order; and the report's status breakdown was
+split so a route can never be counted as both a result and a gap.
+
+### Six more, from an independent verification pass over that repair
+
+The repair above was then verified by a pass that had not written it, and returned six defects.
+Two are the same *class* as item 11 — a rule stated in one artifact and not implemented in the
+other — so the response includes one structural change and not only six fixes.
+
+12. **The `FAULT` demotion ignored the child's exit status.** The demotion exists because the
+    CARLA server shares the attempt's stderr, so a UE4 crash during *shutdown* must not condemn
+    an evaluator that finished on its own. Written with no test on `rc`, it also swallowed the
+    evaluator itself dying (SIGSEGV / SIGABRT / OOM) with a record already on disk, handing that
+    ambiguous record to the model's own record budget — item 8 again, by a third door. The
+    demotion now requires `rc == 0`. A non-zero exit *alone* is still a clean exit, because the
+    vendored evaluator exits `-1` from its own crash paths.
+13. **The code and the model table disagreed on the ambiguous cell.** The model as pinned sent
+    `ABNORMAL_END × RETRY_RECORD` to the never-settling `infra` budget; the code charges the
+    bounded `killed` axis. The code stands (it is what the table's own dead-end invariant
+    requires, and `infra` there would make six published rows unreproducible), and `DESIGN.md`
+    was moved to it — **and the 24-cell table is now parsed out of `DESIGN.md` by the test
+    suite, which drives the settle path for every cell.** Doc/code drift in this table is a test
+    failure from here on, in either direction.
+14. **The fix for item 10 created a permanent, unrecoverable exit 1.** A route holding a genuine
+    model record whose *infra* budget was spent by failed launches could never settle — on that
+    run or any resume, because budgets are persisted — which violates the model's own invariant
+    that no cell holding a final record may be a dead end. Closed without re-opening item 10
+    (an unrun route still never reports complete): `attempts_infra` now counts *consecutive*
+    failures, so scattered hiccups cannot gate a healthy route mid-run; and the gate has a
+    lossless, first-class release, `--retry-infra-exhausted`, which every message that reports
+    the gate names. `DESIGN.md` §6A.5 now carries the termination argument, with a bound.
+15. **`decide(..., killed_budget=0)` was an unsafe default a caller could reach by forgetting a
+    keyword** — it settled the route on a record the kill may have manufactured. Neither
+    direction of a default is safe there, so the parameter is now required.
+16. **Adding `retry.killed_budget` changed the config digest of every pre-existing config**,
+    which made every existing output root announce "produced by a DIFFERENT configuration ...
+    use a fresh output root" — advice that throws away 475 routes of finished work over a key
+    nobody set. A key holding its pinned introduction value is now excluded from the digest;
+    setting it to anything else still moves the digest.
+17. **`unsettled_reason` collapsed two of its three values.** `rec.final` was tested before
+    "was this route ever reached", so `not_reached` was unreachable for any route with a record
+    on disk — precisely the routes it is for. Now decided ledger-first.
+
+Each of the six has a regression test in `tests/test_verification_findings.py`, and **each of
+those tests was run against the pre-fix tree and observed to fail first**; the recorded failure
+is quoted in the test's own docstring. That is called out because four guards shipped in the
+previous round were never seen red, and a test that has only ever been green does not
+distinguish "the code is right" from "the test and the code were written by the same hand".
+
+### Two more, from a third round over that verification
+
+The verification pass was itself verified, by three independent agents. Two of them re-derived
+the same two defects from different directions and then failed to refute them. Both are the
+familiar shape: a rule stated correctly and implemented over the wrong quantity.
+
+18. **The hard-death gate hung on a stderr substring, and two of the substrings were wrong.**
+    Item 12 gated the *demotion* on `rc == 0`, which is right — but the demotion is only ever
+    reached inside `if fault:`, and `fault` came from matching literal text against a stream.
+    `"Aborted (core dumped)"` was written with a single space and **had never matched anything**,
+    because a shell pads the signal name into a fixed column; SIGKILL's message is the bare word
+    `Killed`, which was in no pattern at all. So an evaluator that died of SIGABRT or was taken
+    by the OOM killer reached `if not fault:` and was recorded as *the process decided to stop* —
+    its crash-shaped record charged to the model's own record budget and settled as the model's
+    verdict, at exit 0, with no warning. Item 8 for the fourth time. Two operationally identical
+    events were accounted opposite ways purely on which signal it was; under
+    `configs/reference_agent.yaml`, which ships `record_budget: 1`, the wrong branch settles on
+    the **first** attempt with no retry at all. Death by signal is now read from the exit status,
+    where it needs no text and no locale — `rc < 0`, or the shell's `128+N` bounded above by
+    `NSIG` so that the evaluator's own `sys.exit(-1)` → 255 stays a self-terminated verdict.
+    The dead patterns were repaired too, because they are still consulted while an attempt is
+    *running*, where there is no exit status yet.
+19. **`retry.infra_budget: 0` was a total dead end** — the very thing item 14 was written to
+    remove, re-created by an off-by-one rather than by a rule. The infra gate is the only one
+    evaluated *before* the axis it bounds has been charged, so `0 >= 0` fired on a virgin ledger
+    and every route was skipped before anything ran: exit 1, zero executions, on a completely
+    healthy machine. Nothing could release it — `--retry-infra-exhausted` clears a counter that
+    was never charged, and deleting the ledger does not help because the gate never consulted it.
+    The value is legal, `tickruntime_budget` ships at `0` so it reads as the idiomatic "no
+    retries", and the shipped config already carries a non-default `infra_budget: 1`. Both gates
+    now use the guarded idiom the killed gate one screen above already used.
+
+Two smaller ones from the same round: `--dry-run --retry-infra-exhausted` spent the recovery it
+was asked to preview (the clear is now rolled back before the ledger is written), and the
+exit-contract tests only ever ran on the diagonal where `final` and `settled` agree, so the
+off-diagonal — a record preserved by a failed launch, which is the case the whole distinction
+exists for — is now asserted directly.
+
+### Four more, from the different-family cross-review of round three
+
+Round three was reviewed by two models from other labs (`gpt-5.6-luna` @ xhigh via codex,
+`cursor-grok-4.5-high` via cursor); cursor returned **BLOCKING**. Record:
+`.reviews/2026-08-07-runner-round3.md`. All four findings were escalated to the user rather than
+fixed by the agent that found them, and the user ruled on each.
+
+20. **The demotion's discriminator was a proxy, and round three made the proxy bite.** Item 12's
+    `rc == 0` stands for *"our process did not die hard"*, but the vendored evaluator's own crash
+    path is `sys.exit(-1)` → status **255**, a self-terminated verdict. Item 18 then made the
+    padded `Aborted` pattern match — correctly — which moved `Failed - Simulation crashed` and
+    `Failed - Agent couldn't be set up` (the status family of **four of the six published v0.9
+    rows**) from the model's record budget onto the ambiguity axis. The discriminator is now
+    `signalled is None`, the exact test item 18 had just created. This **inverts** a round-two
+    regression test; the inversion and its argument are written into that test rather than
+    applied quietly.
+21. **The accounting model is now versioned in the ledger** and a resume across epochs warns.
+    Raised independently by both reviewers *and* by round three's own auditor. The config digest
+    deliberately does not cover it — a key nobody set is not a setting they changed — but the
+    §6A model changed alongside that key, and nothing compared it, so an old output root
+    resumed under new rules in silence.
+22. **`--dry-run` now writes nothing at all.** It was never inert: planning materialises a task
+    entry per route, moves settlement bits, and the digest is replaced on load. The sharp
+    consequence, which is codex's and not obvious: previewing under a changed config *erased*
+    the "produced by a DIFFERENT configuration" warning the real run would have shown.
+23. **The `128 + N` signal inference is documented as an assumption**, not closed — it is safe
+    for the pinned evaluator (only `-1` and `0`) but not for any evaluator you configure. The
+    clean fix is a `trap` in the generated job script and waits for hardware.
+
+**What this round is actually evidence of.** Four rounds of same-family review preceded it, each
+believing itself thorough; two different-family reviewers found four more in one pass, one of
+them a regression the previous round had just introduced. That is the argument for the
+cross-review gate being mandatory rather than advisory, and it is why the record of *this*
+review exists before any of it is committed.
+
+**None of this is hardware validation and none of it upgrades anything below.** These are logic
+tests against a stand-in evaluator. In particular, "an attempt killed by the wall clock while
+holding a final record" — the case the whole `killed` axis exists for — has never been observed
+against real CARLA by this runner. It is reasoned from the evaluator's source, which is why the
+accounting for it is bounded in both directions instead of confident in either. Item 18 sharpens
+that caveat rather than lifting it: no evaluator has ever segfaulted, aborted or been OOM-killed
+under this runner, the exit statuses it reasons about are read from `leaderboard_evaluator.py`
+and from a shell's documented conventions rather than measured against CARLA, and the stderr
+patterns it no longer relies on are precisely the ones that turned out to be wrong for three
+rounds without anyone noticing. **The lesson items 18 and 20 actually teach is that logic tests
+over a stand-in cannot tell you what a real process writes to a real stream — and that fixing
+that blindly moves a population you did not intend to move.**
+
 ---
 
 ## 1. What is implemented and covered by automated tests
@@ -80,7 +246,7 @@ surfaces as "throughput is oddly bad" long before anyone suspects correctness.
 All of these run with no GPU, no CARLA, no network and no third-party packages:
 
 ```
-python -m unittest discover -s tests -t .    ->  153 tests, OK, ~39 s
+python -m unittest discover -s tests -t .    ->  219 tests, OK, ~76 s
 ```
 
 | Area | Covered by | Notes |
@@ -94,6 +260,9 @@ python -m unittest discover -s tests -t .    ->  153 tests, OK, ~39 s
 | Budget accounting | `test_plan.py` | Persisted budgets are honoured across restarts; the infra and record budgets cannot block each other. |
 | Exit contract | `test_report_and_state.py` | Exhaustive over the flag combinations: **no path with an incomplete route yields 0**; model-side failures exit 0; interrupt is never 0. |
 | **Result preservation and budget attribution** | `test_result_preservation.py` (14 tests) | A launch that fails on a busy port leaves an existing record byte-identical; a launch that succeeds still starts from a clean slate; a failed launch spends the **infra** budget and never the record budget, never adopts a stale accepted record, never freezes a preserved record as "the result", and still counts toward quarantine; repeated interrupts never exhaust the infra budget, never charge the record or tickruntime budget, never quarantine a healthy worker, and leave the route planned as RUN; a route that genuinely completed before the interrupt is still accepted; genuine infra failures and genuine retryable records are both still charged. |
+| **Attempt accounting (`DESIGN.md` §6A)** | `test_settlement_model.py` (13 tests) | One test per finding: a wall-clock kill holding a `Simulation crashed` record charges neither the record budget nor the quarantine reset and does not settle; `decide()` refuses to re-run past the infra budget when a final retryable record exists; an infra-exhausted failed launch is reported incomplete at a non-zero exit with the record still byte-identical on disk; a result file carrying a foreign `_seedN` is named in a warning and never counted. Plus the guards on the fix itself: a killed route holding a crash record still settles in *finite* attempts; `NEVER_STARTED` outranks the teardown flag and never reads the restored record (neither an `ACCEPT` nor a `FATAL`); a kill cannot fabricate `ACCEPT` or `TickRuntime`, so those still settle; a degenerate `TickRuntime` row re-planned without a ledger is still complete at exit 0; a fault pattern in the *shared* stderr does not condemn a process that exited on its own with a final record; the status breakdown and the totals cannot contradict each other. |
+| **Verification-pass defects** | `test_verification_findings.py` (22 tests) | One test per defect, each first observed failing against the pre-fix tree: a fault pattern with a **non-zero** exit is still a fault (and a clean exit still demotes, and a non-zero exit alone still does not); the 24-cell normative table in `DESIGN.md` §6A.5 is parsed and every cell driven through `_settle`, checking the budget charged **and** the settlement bit in both directions; a route holding a genuine record whose infra budget is spent is reported unsettled at a non-zero exit and is then recoverable losslessly, in bounded attempts, end to end through `main()`; scattered infra failures no longer accumulate into a gate, while an ambiguous kill still clears nothing; `decide()` refuses to run without `killed_budget`; a key holding its introduction default does not move the config digest while any real change still does; `unsettled_reason` distinguishes all three of its cases. Plus the trap, re-checked on the new path — at unit level (a degenerate `TickRuntime` row and a bare-`Failed` row both still settle at exit 0 when the attempt ends abnormally) and end to end through `main()`, against a stand-in evaluator that segfaults into the stderr it shares with the runner: a three-route `TickRuntime` sweep still exits 0 with no retries, and a crash record under a non-zero exit settles on the bounded ambiguity axis without touching the record or infra budgets. Of those last two, only the `TickRuntime` sweep is a guard; the crash-record one is a genuine regression (reverting `clean_exit = rc == 0` alone gives `2 failed, 21 passed`, and it is the second failure). |
+| **Hard death and the infra-zero dead end** | `test_hard_death_and_infra_zero.py` (27 tests) | Round three, one test per hunk, all red first: an evaluator killed by SIGABRT or by the OOM killer — neither of which any stderr pattern matches — is a fault and not a clean exit, so its record goes to the bounded ambiguity axis and not the model's; a signalled job script (negative `rc`) likewise; `sys.exit(-1)` → 255 is still a self-terminated verdict; the shell's column-padded `Aborted` line matches a pattern that had never matched anything, while a bare `Killed` deliberately still does not; `retry.infra_budget: 0` runs the route instead of gating every one of them before a single attempt, and one real infra failure at that budget still gates and is still releasable; `--dry-run --retry-infra-exhausted` no longer spends the recovery it was asked to preview. Guards: the shared-stderr demotion still applies to a clean exit, the gate is unchanged for every positive budget × spend, and a degenerate `TickRuntime` row whose process is **signalled** still exits 0. Round four adds: `--dry-run` leaves an existing ledger byte-identical, creates none on a fresh tree, and does not swallow the changed-configuration warning; a ledger written under an earlier accounting epoch warns on resume while an ordinary resume stays quiet. |
 | Ledger | `test_report_and_state.py` | Atomic write leaves no `.tmp`; a corrupt ledger is preserved, not silently reset to zero budgets; unknown fields from a future version are ignored. |
 | Config validation | `test_config_and_jobscript.py` | Every required field is genuinely required and named in the error; unknown sections and mistyped keys are errors, not silent defaults; `workers > gpus` needs explicit opt-in; **both** the CUDA index and the Vulkan adapter are unique-checked, including when one side was defaulted; `agent.env` is rejected for every runner-owned name with the field to use instead, while composable ones (`PYTHONPATH`, `LD_LIBRARY_PATH`) stay allowed; digest is stable and sensitive. |
 | Job script | `test_config_and_jobscript.py` | Both CUDA **and** the Vulkan adapter are pinned; allocated ports are used verbatim; `--resume` is never passed; nothing is detached; the seed is independent of worker and port; `agent.pythonpath` wins the ordering; every runner-owned export is emitted **after** `agent.env`, and a reserved name smuggled past config validation still loses to the runner; `environment.activate` still precedes `agent.env`; `bash -n` clean, including paths containing spaces. |
