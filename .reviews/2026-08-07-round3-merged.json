@@ -1,0 +1,130 @@
+{
+  "models": {
+    "codex": {
+      "model": "gpt-5.6-luna",
+      "effort": "xhigh"
+    },
+    "cursor": {
+      "model": "cursor-grok-4.5-high"
+    }
+  },
+  "reviewers": [
+    {
+      "source": "codex",
+      "ok": true,
+      "error": null,
+      "verdict": "concerns",
+      "summary": "The change adds settlement accounting, bounded kill retries, signal detection, and infra recovery; the six-record empirical premise is confirmed. The largest numerical risk is treating relayed exit codes 129\u2013192 as proof of a signal even though the wrapper relays any explicit evaluator exit code unchanged.",
+      "intent_drift": [
+        {
+          "requested": "After rerunning the two verification agents, run `/cross-review` on the repaired result before acceptance.",
+          "implemented": "The account says the verification agents/tests were rerun but also says rounds 1 and 2 were never cross-reviewed; the repository contains only the earlier pre-repair cross-review record.",
+          "impact": "The non-negotiable independent-family review gate in the resume checklist remains unmet, so the release process has not completed the requested validation step.",
+          "source": "codex"
+        }
+      ]
+    },
+    {
+      "source": "cursor",
+      "ok": true,
+      "error": null,
+      "verdict": "blocking",
+      "summary": "Round 3 correctly reads signal death from exit status, but the shared-stderr demotion still keys off `rc == 0`, which can never fire for the evaluator's intentional `sys.exit(-1)` crash paths. Combined with the newly working padded-`Aborted` patterns, ordinary self-terminated `Simulation crashed` / `Agent couldn't be set up` records are misrouted onto the killed axis and can change settled statuses after the extra retries.",
+      "intent_drift": [
+        {
+          "requested": "RESUME_HERE listed `--retry-infra-exhausted` persistence under `--dry-run` as an open human decision still to confirm.",
+          "implemented": "Round 3 unilaterally changed dry-run to apply the clear in memory and roll it back before the final ledger write.",
+          "impact": "Likely the safer behaviour, but it closed a decision the resume brief had reserved for the operator rather than only verifying the killed verification agents and the MAJOR-2 empirical claim.",
+          "source": "cursor"
+        }
+      ]
+    }
+  ],
+  "any_failed": false,
+  "findings": [
+    {
+      "title": "Demotion uses rc==0, so intentional exit-255 crash verdicts with CARLA stderr faults become FAULT/killed",
+      "category": "metric_definition",
+      "severity": "high",
+      "changes_numbers": true,
+      "confidence": "confirmed",
+      "file": "runner/oodbench/backends/local.py",
+      "lines": "206-277",
+      "evidence": "signalled = reap.describe_exit_signal(rc)\nhard = fault or signalled\n...\nclean_exit = rc == 0\n\nif clean_exit and has_record:\n    attempt.outcome = AttemptOutcome.EXITED  # demotion\nelif has_record:\n    attempt.outcome = AttemptOutcome.FAULT",
+      "why_wrong": "The vendored evaluator's crashed=True paths (Simulation crashed; Agent couldn't be set up; sensors invalid) always end in sys.exit(-1) \u2192 rc 255. describe_exit_signal(255) correctly returns None (not a signal). Demotion requires rc == 0, so it is unreachable for those statuses. Round 3 also made Aborted\\s+(core dumped) match the shell's padded column, so Simulation crashed / Agent_init self-terminations that print a normal UE4 abort line\u2014exactly the population that used to miss the dead one-space pattern and fall through to EXITED\u2192record\u2014now become FAULT\u2192ABNORMAL_END\u2192killed. That spends killed_budget (default 2) and re-runs routes whose self-terminated verdict should have charged record; a retry can settle a different status. Signal deaths remain distinguishable via signalled; rc == 0 is a too-narrow proxy for not signalled.",
+      "suggested_fix": "Demote on has_record and fault and signalled is None (process exited with a non-signal status), not on rc == 0. Keep FAULT whenever describe_exit_signal(rc) is set. Optionally stop consulting FAULT_PATTERNS for post-exit classification entirely and use them only for the in-flight kill branch.",
+      "source": "cursor",
+      "_overlap": false
+    },
+    {
+      "title": "Relayed exit codes can misclassify intentional evaluator exits as hard deaths",
+      "category": "state_determinism",
+      "severity": "medium",
+      "changes_numbers": true,
+      "confidence": "likely",
+      "file": "runner/oodbench/reap.py; runner/oodbench/jobscript.py",
+      "lines": "reap.py:56-81; jobscript.py:199-201",
+      "evidence": "`describe_exit_signal` treats `128 < rc <= 128 + _MAX_SIGNAL` as `killed by ...`, while the generated wrapper does `rc=$?` followed by `exit ${rc}`.",
+      "why_wrong": "An evaluator that intentionally exits 134, 139, or another value in that range is indistinguishable from a shell-relayed signal. LocalBackend then classifies a final retryable record as FAULT and charges the bounded killed axis instead of the model record axis, changing retries and potentially the settled result.",
+      "suggested_fix": "Use an explicit signal marker/trap or another side channel for shell-relayed deaths; do not infer signal death from the numeric exit range alone.",
+      "source": "codex",
+      "_overlap": false
+    },
+    {
+      "title": "Dry-run still writes settlement and ledger mutations",
+      "category": "state_determinism",
+      "severity": "medium",
+      "changes_numbers": true,
+      "confidence": "confirmed",
+      "file": "runner/run_benchmark.py",
+      "lines": "187-220, 730-742",
+      "evidence": "Planning mutates `st.finished` for `SKIP_DONE`, `SKIP_EXHAUSTED`, and `RUN`, then calls `state.save()`. The final rollback restores only `attempts_infra` from `infra_clear_undo` before another unconditional `state.save()`.",
+      "why_wrong": "`--dry-run` can create task entries, change settlement bits, and overwrite the stored config digest despite claiming that nothing was written. In particular, previewing a changed config can erase the later `config_changed()` warning, and previewing a fatal/partial plan can change future `not_reached` versus `no_record` reporting.",
+      "suggested_fix": "Snapshot the complete ledger before planning and restore it for dry runs, or avoid all ledger mutation/saves on the dry-run path.",
+      "source": "codex",
+      "_overlap": false
+    },
+    {
+      "title": "Digest compatibility hides an accounting-model migration in legacy ledgers",
+      "category": "config_drift",
+      "severity": "medium",
+      "changes_numbers": true,
+      "confidence": "confirmed",
+      "file": "runner/oodbench/config.py; runner/oodbench/state.py; runner/run_benchmark.py",
+      "lines": "config.py:127-140; state.py:120-129; run_benchmark.py:435-453",
+      "evidence": "The new `retry.killed_budget: 2` is omitted from the digest, legacy task records are loaded with absent fields defaulting `attempts_killed` to zero, and abnormal retryable records now charge `attempts_killed` rather than `attempts_record`.",
+      "why_wrong": "The pre-change runner charged every final retryable record, including abnormal ends, to `attempts_record`; old ledgers therefore contain counts with different semantics and no killed-axis history. Matching their digest silently resumes them under the new model, allowing different retry/settlement behavior without a migration or warning.",
+      "suggested_fix": "Version the accounting model in the ledger/digest and migrate old counters explicitly, or require an explicit legacy-ledger upgrade/replan instead of treating the new default as behavior-compatible.",
+      "source": "codex",
+      "_overlap": false
+    },
+    {
+      "title": "DIGEST_COMPAT_DEFAULTS claims killed_budget:2 reproduces pre-key behaviour; it does not",
+      "category": "config_drift",
+      "severity": "medium",
+      "changes_numbers": true,
+      "confidence": "likely",
+      "file": "runner/oodbench/config.py",
+      "lines": "127-141,230-235",
+      "evidence": "DIGEST_COMPAT_DEFAULTS: Dict[Tuple[str, str], Any] = {\n    (\"retry\", \"killed_budget\"): 2,\n}\n# docstring: \"Every entry is a promise that the key's *pinned* value reproduces\n# the behaviour of the build that had no such key.\"",
+      "why_wrong": "Omitting killed_budget:2 from the digest makes a new runner resume an old output root without a config-changed warning, but pre-key builds charged ABNORMAL_END\u00d7RETRY_RECORD to record, not killed. Mid-sweep ledgers that already have attempts_record from kill-shaped ends are then continued under a different axis with attempts_killed starting at 0, so settlement timing and possible final statuses diverge silently across the runner-version boundary the digest claims is identical.",
+      "suggested_fix": "Drop killed_budget from DIGEST_COMPAT_DEFAULTS (accept re-plan warnings on upgrade), or bump a digest-visible runner_accounting_epoch when the 6A model changes, or migrate old ledgers by copying kill-attributed record charges into attempts_killed on load.",
+      "source": "cursor",
+      "_overlap": false
+    }
+  ],
+  "intent_drift": [
+    {
+      "requested": "After rerunning the two verification agents, run `/cross-review` on the repaired result before acceptance.",
+      "implemented": "The account says the verification agents/tests were rerun but also says rounds 1 and 2 were never cross-reviewed; the repository contains only the earlier pre-repair cross-review record.",
+      "impact": "The non-negotiable independent-family review gate in the resume checklist remains unmet, so the release process has not completed the requested validation step.",
+      "source": "codex"
+    },
+    {
+      "requested": "RESUME_HERE listed `--retry-infra-exhausted` persistence under `--dry-run` as an open human decision still to confirm.",
+      "implemented": "Round 3 unilaterally changed dry-run to apply the clear in memory and roll it back before the final ledger write.",
+      "impact": "Likely the safer behaviour, but it closed a decision the resume brief had reserved for the operator rather than only verifying the killed verification agents and the MAJOR-2 empirical claim.",
+      "source": "cursor"
+    }
+  ]
+}
