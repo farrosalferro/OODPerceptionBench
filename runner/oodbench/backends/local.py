@@ -239,10 +239,10 @@ class LocalBackend(Backend):
             # ambiguous kill. When the process exited by itself, CLEANLY, AND a final record is
             # on disk, the pattern is reported but not believed.
             #
-            # All THREE conditions are load-bearing, and `rc == 0` is the one that was missing.
+            # Both conditions are load-bearing, and the death test is the one that was missing.
             # The demotion's whole justification is "this stream carries a second process's
             # output" -- but that argument only reaches the case where *our* process is fine,
-            # and the only evidence we have of that is its exit status. Without the rc test the
+            # and the only evidence we have of that is how it ended. Without that test the
             # demotion also swallowed an evaluator that died of SIGSEGV / SIGABRT / the OOM
             # killer with a final record already on disk, and handed that ambiguous record to
             # the model's own record budget as a clean verdict -- which is finding 2 again, by a

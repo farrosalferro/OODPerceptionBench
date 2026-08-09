@@ -559,12 +559,18 @@ values, and nothing else, are:
 > three: widening the patterns to match what a shell actually writes was correct in itself, and
 > silently moved a population onto a different budget because nothing asserted independence.
 >
-> **All three conditions are load-bearing, and `rc == 0` is the one that was missing.** The
+> **Both conditions are load-bearing, and the death test is the one that was missing.** The
 > demotion's justification reaches exactly as far as "*our* process is fine, and this pattern is
-> the other one's" — and the only evidence the runner has that our process is fine is the status
-> it exited with. Without the `rc` test the demotion also swallowed the evaluator itself dying
-> hard with a final record already on disk, and then handed that record to the model's own
-> `record` budget as a clean verdict — finding 2 again, through a third door.
+> the other one's" — and the only evidence the runner has that our process is fine is how it
+> ended. Without that test the demotion also swallowed the evaluator itself dying hard with a
+> final record already on disk, and then handed that record to the model's own `record` budget
+> as a clean verdict — finding 2 again, through a third door.
+>
+> *(This paragraph said "all three conditions … and `rc == 0` is the one that was missing" until
+> the 2026-08-09 review. Round four had already replaced `rc == 0` with `signalled is None` two
+> paragraphs above, so the box both superseded the rule and re-asserted it — the exact doc/code
+> drift §6A exists to end, committed inside the section that ends it. Kept visible rather than
+> silently corrected.)*
 >
 > **And a fourth door, which is why the classification no longer depends on the stream at all.**
 > The `rc` test above is inside the fault branch, so it is reached only when a pattern already

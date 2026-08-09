@@ -29,8 +29,21 @@ The records are a few MB. They ship in-repo; no external hosting, no Zenodo.
 ```
 
 The CSV is the faithful artifact and is what the verification scripts compare;
-the parquet is the same data with a real dtype schema (numerics as `float64`
-with IEEE `inf` preserved, flags as nullable booleans) for analysis.
+the parquet carries a real dtype schema (numerics as `float64` with IEEE `inf`
+preserved, flags as nullable booleans) for analysis.
+
+> **⚠ The parquet is NOT byte-equivalent to the CSV, and the CSV is authoritative.**
+> Found by review 2026-08-09 and measured against the shipped files: **232 values
+> present in the CSV are null in the parquet** — 116 each in `reaction_value` and
+> `reaction_threshold`. Those two columns are typed numeric but carry *categorical*
+> strings for lane-change reactions (`reaction_threshold = "lane_change"`,
+> `reaction_value = "-1 -> 2"` and similar), and `to_numeric(errors="coerce")` nulls
+> them. Nothing in `verify.sh` compares the two artifacts, so this shipped silently.
+>
+> No headline number is affected: both columns belong to the TTR/DAR secondary
+> metrics, which the paper does not use, and `Table 1` regenerates exactly from the
+> CSV either way. But if you are analysing reaction data, **read the CSV**, and treat
+> a null in these two parquet columns as "not representable", not as "absent".
 
 The parquet's dtypes come from `typed_frame()` in `build_records.py`, not from
 letting a reader infer them. That distinction matters: identity columns stay

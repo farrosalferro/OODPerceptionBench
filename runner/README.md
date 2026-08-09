@@ -192,10 +192,12 @@ retry semantics agree.
   machine that is broken *now*: any attempt that produces a record of its own clears the count,
   so hiccups scattered hours apart across a long sweep cannot add up to a gate on a route that
   has been running fine. The lifetime total is reported separately (`attempts.infra_total`) and
-  gates nothing. **Read it as "N attempts, then give up on this route", not "N retries."** It is
-  the only budget consulted *before* an attempt runs, so it is one off from the others: at
-  `infra_budget: 1` a route gets a single try, at `3` it gets three. `0` also means one try —
-  the gate needs a counter that was actually charged — but say `1` if that is what you mean.
+  gates nothing. **Read every budget as "N attempts on this axis, then accept or give up", not
+  "N retries."** `record_budget: 3` gives three record-producing attempts; `infra_budget: 3`
+  gives three attempts that wrote nothing. The one place they differ is at zero, and only
+  because this is the sole budget consulted *before* an attempt runs: `infra_budget: 0` still
+  means one try, since the gate needs a counter that was actually charged. Say `1` if that is
+  what you mean.
 - `tickruntime_budget` — its own axis, default **0**, matching the reference sweeps:
   `Failed - TickRuntime` means the agent is slower than CARLA's tick budget, which is a
   model-side property that retrying does not fix.

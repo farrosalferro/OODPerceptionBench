@@ -1,0 +1,215 @@
+{
+  "models": {
+    "codex": {
+      "model": "gpt-5.6-luna",
+      "effort": "xhigh"
+    },
+    "cursor": {
+      "model": "cursor-grok-4.5-high"
+    }
+  },
+  "reviewers": [
+    {
+      "source": "codex",
+      "ok": true,
+      "error": null,
+      "verdict": "blocking",
+      "summary": "The runner covers the intended local bookkeeping model, but several paths can still reuse, destroy, or misclassify results. The biggest risks are stale-result re-adoption after a failed forced rerun and SLURM/local ownership races that can make the final artifact depend on another process.",
+      "intent_drift": []
+    },
+    {
+      "source": "cursor",
+      "ok": true,
+      "error": null,
+      "verdict": "blocking",
+      "summary": "The local settlement and isolation paths look carefully hardened; the SLURM backend still has structural silent-accounting bugs. Biggest risk: `route_timeout_s` is measured from sbatch submit time, so queue delay cancels never-started jobs, destroys the aside checkpoint, and burns infra budget into false incomplete routes.",
+      "intent_drift": []
+    }
+  ],
+  "any_failed": false,
+  "findings": [
+    {
+      "title": "Checkpoint preservation is not durable, and SLURM loses it after accepted-but-never-started jobs",
+      "category": "state_determinism",
+      "severity": "high",
+      "changes_numbers": true,
+      "confidence": "confirmed",
+      "file": "runner/oodbench/backends/base.py; runner/oodbench/backends/slurm.py",
+      "lines": "base.py:49-80; slurm.py:141-187, 203-245",
+      "evidence": "`take_checkpoint_aside()` stores the old bytes only in a local variable and unlinks the result. SLURM discards `stale` after `sbatch` succeeds; `kill()` only calls `scancel` and never restores it.",
+      "why_wrong": "A local SIGKILL between unlink and launch loses the previous valid result. More directly, a SLURM job can remain PENDING until the wall-clock timeout, then be cancelled without ever running; the old checkpoint is gone, the attempt is charged as infrastructure, and the route becomes a false gap.",
+      "suggested_fix": "Use a durable, per-attempt backup/rename with startup recovery, and retain it until the scheduler confirms the job started or a new checkpoint is observed. Restore it for pre-execution cancellation/failure.",
+      "source": "codex",
+      "_overlap": true
+    },
+    {
+      "title": "SLURM route timeout includes queue wait and destroys aside checkpoints",
+      "category": "state_determinism",
+      "severity": "high",
+      "changes_numbers": true,
+      "confidence": "confirmed",
+      "file": "runner/oodbench/backends/slurm.py",
+      "lines": "121-189, 208-214",
+      "evidence": "submit() calls take_checkpoint_aside() before sbatch, discards the blob after success, and stamps Attempt.started_at at submit time. poll() then does: if out: if attempt.duration_s > route_timeout_s: self.kill(...); outcome = TIMEOUT \u2014 with no check that squeue state is RUNNING rather than PENDING.",
+      "why_wrong": "On a busy cluster a job can sit PENDING for longer than route_timeout_s without ever starting CARLA. The runner scancels it as TIMEOUT, settles with no final record (infra charge / possible exhaustion), and cannot restore the pre-attempt checkpoint because that blob was dropped after sbatch succeeded. A route that already had a retryable model record becomes a permanent false gap; a virgin route burns infra budget for queue delay. Local has no analogue because Popen starts immediately. This is not the deferred squeue-exception or node-local-port items.",
+      "suggested_fix": "Start the wall-clock only after the job is RUNNING (squeue %T / sacct Start), or treat PENDING timeout as LAUNCH_FAILED and keep/restore the aside blob until the allocation actually starts. Do not charge TIMEOUT/infra for never-started queue waits.",
+      "source": "cursor",
+      "_overlap": true
+    },
+    {
+      "title": "SLURM kill/timeout settles before scancel finishes",
+      "category": "state_determinism",
+      "severity": "high",
+      "changes_numbers": true,
+      "confidence": "likely",
+      "file": "runner/oodbench/backends/slurm.py",
+      "lines": "208-214, 238-245",
+      "evidence": "kill() only runs subprocess.call([\"scancel\", job_id]) and immediately sets outcome/finished_at. poll()'s timeout path calls kill() then returns True so Runner._settle() reads the checkpoint at once. Local kill() instead waits in reap.terminate_process_tree().",
+      "why_wrong": "scancel is asynchronous. Settlement can observe no final record (charge infra / leave unsettled) while the still-dying job later writes a crash-shaped or ACCEPT checkpoint, or the reverse: settle credits a partial write that the cancel then mutates. That desynchronises the ledger bit from the on-disk record the report re-reads, producing false gaps or false accepts relative to how the attempt actually ended.",
+      "suggested_fix": "After scancel, wait until squeue no longer lists the job (with a grace bound), then settle. Optionally re-read sacct State/ExitCode at that point before choosing TIMEOUT vs FAULT vs EXITED.",
+      "source": "cursor",
+      "_overlap": true
+    },
+    {
+      "title": "SLURM generic FAILED jobs are treated as clean evaluator exits",
+      "category": "state_determinism",
+      "severity": "medium",
+      "changes_numbers": true,
+      "confidence": "likely",
+      "file": "runner/oodbench/backends/slurm.py",
+      "lines": "217-236",
+      "evidence": "Only `CANCELLED`, `TIMEOUT`, `NODE_FAIL`, `OUT_OF_MEMORY`, `PREEMPTED`, and `BOOT_FAIL` become `FAULT`; every other state, including `FAILED`, becomes `AttemptOutcome.EXITED`. The query requests only `State`, not `ExitCode` or signal information.",
+      "why_wrong": "A signalled/nonzero job commonly reaches SLURM as `FAILED`, indistinguishable here from the evaluator's self-terminated nonzero verdict. If a crash-shaped final record exists, `_settle` charges the model's record budget and can settle it as the model result instead of using the bounded abnormal-end path.",
+      "suggested_fix": "Collect `State`, `ExitCode`, and `DerivedExitCode`, enumerate scheduler failure/preemption states, and require evidence that the evaluator itself reached a terminal exit before crediting a final record.",
+      "source": "codex",
+      "_overlap": true
+    },
+    {
+      "title": "A preserved ACCEPT record is re-adopted on the next resume",
+      "category": "state_determinism",
+      "severity": "high",
+      "changes_numbers": true,
+      "confidence": "confirmed",
+      "file": "runner/oodbench/plan.py; runner/run_benchmark.py",
+      "lines": "plan.py:323-331; run_benchmark.py:363-370",
+      "evidence": "`should_skip_on_resume(record, resume_mode)` returns `SKIP_DONE` for any final ACCEPT record, while a failed launch restores the earlier record and leaves `st.finished = False` in `_charge_infra`.",
+      "why_wrong": "Run with `resume.mode: none --force` against an existing Completed result, then fail before launch. The record is restored and correctly reported unsettled in that run, but a later normal resume skips it and sets `finished=True` without ever producing the replacement result. The report can therefore exit 0 on an answer from before the forced rerun.",
+      "suggested_fix": "Pass settlement/provenance into `decide()` and do not skip a final record when the ledger says the prior run left it unsettled; require the owed attempt or explicit infrastructure recovery.",
+      "source": "codex",
+      "_overlap": false
+    },
+    {
+      "title": "Concurrent runner instances race the ledger and checkpoint",
+      "category": "state_determinism",
+      "severity": "high",
+      "changes_numbers": true,
+      "confidence": "confirmed",
+      "file": "runner/run_benchmark.py; runner/oodbench/state.py; runner/oodbench/backends/base.py",
+      "lines": "run_benchmark.py:666; state.py:196-212; base.py:49-69",
+      "evidence": "There is no lock around `RunState.load_or_create`, task execution, or `take_checkpoint_aside`; `state.save()` only does an atomic `os.replace`, and checkpoint ownership is implemented as read-then-unlink.",
+      "why_wrong": "Two invocations using the same output root can load the same ledger, run the same route, overwrite the same checkpoint, and last-writer-win the ledger/report. Atomic replacement prevents torn JSON but does not prevent lost counters or one agent's result being reported for another invocation.",
+      "suggested_fix": "Acquire an exclusive run lock under `_runner` before loading state and hold it through shutdown; separately reserve the configured port block atomically.",
+      "source": "codex",
+      "_overlap": false
+    },
+    {
+      "title": "Dry-run shutdown can kill another CARLA process",
+      "category": "state_determinism",
+      "severity": "high",
+      "changes_numbers": true,
+      "confidence": "confirmed",
+      "file": "runner/run_benchmark.py; runner/oodbench/backends/local.py; runner/oodbench/reap.py",
+      "lines": "run_benchmark.py:740-758; local.py:296-310; reap.py:114-164",
+      "evidence": "`main()` skips `preflight()` for `--dry-run` but always calls `backend.shutdown()`. Local shutdown calls `cleanup_worker()` for every slot, and the reaper selects processes only by current UID, a CARLA-looking command line, and RPC port.",
+      "why_wrong": "A dry run performs no submissions yet still SIGTERMs/SIGKILLs any same-user CARLA using a reserved port, including a simulator belonging to another active benchmark. That run can then write a crash-shaped record or lose its result while the dry run reports success.",
+      "suggested_fix": "Do not run worker cleanup on dry-run, and make reaping owner-scoped using PIDs/PGIDs recorded by this runner rather than UID plus port alone.",
+      "source": "codex",
+      "_overlap": false
+    },
+    {
+      "title": "Fresh SLURM runs do not create the result directory",
+      "category": "state_determinism",
+      "severity": "high",
+      "changes_numbers": true,
+      "confidence": "likely",
+      "file": "runner/oodbench/backends/slurm.py; runner/oodbench/jobscript.py; runner/oodbench/plan.py",
+      "lines": "slurm.py:154-160; jobscript.py:206-210; plan.py:83-86",
+      "evidence": "Local execution calls `jobscript.write()`, which calls `task.mkdirs()`. SLURM calls `jobscript.render()` directly and creates only the wrapper and `task.stdout_path.parent`; it never creates `task.result_path.parent`.",
+      "why_wrong": "On a fresh output root, the per-route `.../results/` directory is absent when the evaluator writes `--checkpoint`. The vendored checkpoint writer writes the endpoint but does not create its parent, so SLURM attempts produce no final records and are reported as infrastructure gaps.",
+      "suggested_fix": "Call `task.mkdirs()` before rendering/submission, or explicitly create the result and agent-log directories in the generated SLURM wrapper.",
+      "source": "codex",
+      "_overlap": false
+    },
+    {
+      "title": "SLURM never classifies signal deaths; FAILED becomes CLEAN_EXIT",
+      "category": "metric_definition",
+      "severity": "high",
+      "changes_numbers": true,
+      "confidence": "likely",
+      "file": "runner/oodbench/backends/slurm.py",
+      "lines": "217-225, 228-236",
+      "evidence": "After leaving the queue, only sacct State is read. CANCELLED/TIMEOUT/NODE_FAIL/OUT_OF_MEMORY/PREEMPTED/BOOT_FAIL \u2192 FAULT; everything else, including FAILED and unknown, \u2192 EXITED. ExitCode is never fetched; reap.describe_exit_signal is never used.",
+      "why_wrong": "Local spent multiple review rounds ensuring SIGKILL/SIGABRT with a crash-shaped record charge the bounded killed axis, not the model's record axis. On SLURM, many hard deaths land as State=FAILED with ExitCode 137/139 rather than OUT_OF_MEMORY. Those are EXITED, so _settle treats them as CLEAN_EXIT and can settle a kill/OOM-fabricated Failed - Simulation crashed / Agent crashed / Agent couldn't be set up as the model's verdict at exit 0. Same agent, local vs SLURM, can disagree on settlement axis and final status. Deferred finding 3 is only the squeue exception\u2192completed path; this is a separate classification hole.",
+      "suggested_fix": "Have _sacct_state also return ExitCode (and use -X). Map signal-class exit codes (and FAILED+signal) to FAULT/KILLED so the \u00a76A abnormal-end cells match local; keep plain FAILED + 255/1/2 as EXITED for evaluator self-termination.",
+      "source": "cursor",
+      "_overlap": false
+    },
+    {
+      "title": "Manifest validation silently accepts manifests without hashes",
+      "category": "leakage_protocol",
+      "severity": "medium",
+      "changes_numbers": true,
+      "confidence": "confirmed",
+      "file": "runner/oodbench/plan.py",
+      "lines": "188-228",
+      "evidence": "The code rejects a manifest only when `'path'` is absent; `sha256` is optional in practice because `isha = None` causes every row's hash check to be skipped.",
+      "why_wrong": "A `strict_manifest` run with a path-only or blank-hash manifest can report `manifest OK` after route XML contents have changed. The route content is part of the benchmark definition, so the runner can evaluate a different protocol while claiming the frozen set.",
+      "suggested_fix": "Require a `sha256` column, require one valid nonempty hash per row, and reject malformed or duplicate manifest entries.",
+      "source": "codex",
+      "_overlap": false
+    },
+    {
+      "title": "SLURM directives are not quoted for paths containing spaces",
+      "category": "other",
+      "severity": "medium",
+      "changes_numbers": true,
+      "confidence": "likely",
+      "file": "runner/oodbench/backends/slurm.py",
+      "lines": "98-119",
+      "evidence": "The wrapper emits raw directives such as `f\"#SBATCH --output={task.stdout_path}\"` and `f\"#SBATCH --error={task.stderr_path}\"` with no quoting.",
+      "why_wrong": "An output root or mirrored route path containing spaces is tokenized by the SLURM directive parser, so submission can fail or logs can be written to a truncated/different path. The runner then reports infrastructure exhaustion instead of a valid route result.",
+      "suggested_fix": "Quote/escape directive values using SLURM-compatible syntax, or reject whitespace-containing paths during config validation and preflight.",
+      "source": "codex",
+      "_overlap": false
+    },
+    {
+      "title": "SLURM forces Vulkan adapter 0 under an unchecked cgroup assumption",
+      "category": "leakage_protocol",
+      "severity": "medium",
+      "changes_numbers": true,
+      "confidence": "speculative",
+      "file": "runner/oodbench/backends/slurm.py",
+      "lines": "28-31, 151-154",
+      "evidence": "Comment claims the per-job cgroup exposes one GPU for both CUDA and Vulkan. submit() then does gpu = GpuSpec(cuda=0, vulkan=0) and jobscript exports CUDA_VISIBLE_DEVICES=0 and GPU_RANK=0 (--gpu-rank).",
+      "why_wrong": "CUDA_VISIBLE_DEVICES remaps the agent; CARLA's -graphicsadapter does not honour it. On multi-GPU nodes where the SLURM cgroup does not also shrink the Vulkan device list, adapter 0 can be a different physical GPU than the allocated CUDA device. Agent and simulator then run on different GPUs with no error \u2014 the exact silent isolation failure the local gpus: validation exists to prevent. Results are still produced and look complete.",
+      "suggested_fix": "Do not assume vulkan=0. Discover the Vulkan index for the allocated device inside the job (or require a site-validated mapping), and fail preflight on multi-GPU nodes when Vulkan isolation cannot be verified.",
+      "source": "cursor",
+      "_overlap": false
+    },
+    {
+      "title": "Invalid agent environment names fail silently in the generated script",
+      "category": "config_drift",
+      "severity": "low",
+      "changes_numbers": true,
+      "confidence": "confirmed",
+      "file": "runner/oodbench/config.py; runner/oodbench/jobscript.py",
+      "lines": "config.py:334-347; jobscript.py:87-89,116-120",
+      "evidence": "Config validation checks only `isinstance(k, str)`, then emits each key directly as `export {name}=...`; the script has `set -o pipefail` but not `set -e`.",
+      "why_wrong": "A key such as `MODEL-FLAG` produces an `export` error, but the script continues to the evaluator with that model setting unset. The run can complete with a plausible score for a different agent configuration.",
+      "suggested_fix": "Validate keys against a POSIX environment-variable identifier pattern before rendering, or pass validated environment entries through a dedicated process launcher.",
+      "source": "codex",
+      "_overlap": false
+    }
+  ],
+  "intent_drift": []
+}

@@ -1,0 +1,103 @@
+{
+  "models": {
+    "codex": {
+      "model": "gpt-5.6-luna",
+      "effort": "xhigh"
+    },
+    "cursor": {
+      "model": "cursor-grok-4.5-high"
+    }
+  },
+  "reviewers": [
+    {
+      "source": "codex",
+      "ok": true,
+      "error": null,
+      "verdict": "blocking",
+      "summary": "The change adds versioned settlement accounting, signal-based death classification, infrastructure recovery, and inert dry-run guards. The biggest risk is that legacy ledgers are warned about but their lifetime infrastructure counter is reused as a consecutive gate, causing valid resumed routes to be falsely reported incomplete.",
+      "intent_drift": []
+    },
+    {
+      "source": "cursor",
+      "ok": true,
+      "error": null,
+      "verdict": "concerns",
+      "summary": "The \u00a76A settle/signal/dry-run repairs look coherent against the machine-checked table, but resuming a pre-epoch ledger can newly infra-gate a still-retryable record that the old planner would have run. The suite\u2019s signature independence test also asserts less than it claims, so the next axis swap could land green.",
+      "intent_drift": []
+    }
+  ],
+  "any_failed": false,
+  "findings": [
+    {
+      "title": "Epoch-1 infrastructure counts are reused as epoch-2 consecutive gates",
+      "category": "config_drift",
+      "severity": "high",
+      "changes_numbers": true,
+      "confidence": "confirmed",
+      "file": "runner/oodbench/state.py",
+      "lines": "148-160; runner/oodbench/plan.py:340-378",
+      "evidence": "The loader says `st.attempts_infra_total = st.attempts_infra` and leaves the old value unchanged because `the gate value is whatever that older ledger recorded`; the new planner then gates on `infra_spent and infra_spent >= infra_budget`. In c67a955, `attempts_infra` was a lifetime count and was never cleared when a later attempt produced a record.",
+      "why_wrong": "For example, an epoch-1 ledger can contain a final retryable record with `attempts_record=1`, `attempts_infra=1`, `finished=false`, and `infra_budget=1` after an earlier failed launch and an interrupted forced rerun. The new planner sees record budget remaining but infra spent, returns unsettled `SKIP_EXHAUSTED`, and exits 1 without retrying. The warning does not correct the state, and the next save stamps epoch 2 so later resumes may stop warning.",
+      "suggested_fix": "Migrate epoch-1 ledgers explicitly, or keep them under legacy accounting until a safe migration is performed. Do not reuse the old lifetime counter as the new streak; preserve it only as the total and establish a separately justified current streak before applying the new gate.",
+      "source": "codex",
+      "_overlap": false
+    },
+    {
+      "title": "Pre-\u00a76A lifetime attempts_infra is loaded as the streak and re-gates records old decide would RUN",
+      "category": "leakage_protocol",
+      "severity": "high",
+      "changes_numbers": true,
+      "confidence": "confirmed",
+      "file": "runner/oodbench/state.py",
+      "lines": "148-154",
+      "evidence": "if \"attempts_infra_total\" not in raw:\n    # ... do NOT seed the streak from anything: the\n    # gate value is whatever that older ledger recorded, unchanged, so upgrading\n    # the runner cannot silently un-gate (or re-gate) a route.\n    st.attempts_infra_total = st.attempts_infra",
+      "why_wrong": "Before \u00a76A, attempts_infra was a lifetime counter and decide() consulted infra only on the no-record branch, so a route could hold a final RETRY_RECORD with record budget left and attempts_infra already at infra_budget and still be planned RUN. Epoch 2 both (a) treats that same field as a consecutive streak and (b) applies the infra gate on the final-record branch. Loading an old ledger therefore preserves the lifetime tally as the streak and SKIP_EXHAUSTED-unsettles a route the previous runner would have retried \u2014 false gap / exit 1. Concrete tuple: (epoch-1 ledger, attempts_infra=infra_budget, RETRY_RECORD on disk, record spent < record_budget, skip_terminal) \u2192 new decide SKIP_EXHAUSTED settled=False; old decide RUN. The accounting-epoch warning only narrates the killed-vs-record split, not this infra lifetime\u2192streak re-gate, and TestAccountingEpochIsAnnounced/_aged_ledger never builds attempts_infra at budget with record budget left. --retry-infra-exhausted recovers, but only if the operator realises the gate is a migration artefact.",
+      "suggested_fix": "On epoch-1\u21922 load, either clear attempts_infra when a final non-fabricable-or-any final record is already on disk (lifetime\u2260streak), or auto-offer the infra recovery for epoch upgrades and make the warning name this case. Add a regression: aged ledger with attempts_infra=infra_budget + RETRY_RECORD + record budget left must plan RUN (or clear loudly), not unsettled SKIP_EXHAUSTED.",
+      "source": "cursor",
+      "_overlap": false
+    },
+    {
+      "title": "Dry-run still mutates a corrupt ledger by renaming it",
+      "category": "state_determinism",
+      "severity": "medium",
+      "changes_numbers": true,
+      "confidence": "confirmed",
+      "file": "runner/run_benchmark.py",
+      "lines": "662-666; runner/oodbench/state.py:124-136",
+      "evidence": "`main()` calls `RunState.load_or_create(...)` before any dry-run branch. On unreadable JSON, `load_or_create` executes `p.replace(backup)` and returns a fresh state. The dry-run fix only guards later `state.save()` calls.",
+      "why_wrong": "A dry run against a corrupt or temporarily unreadable ledger changes the durable output tree despite the documented claim that it writes nothing. The next real run sees no ledger, loses persisted counters and settlement state, and can rerun routes or produce a different completion/report outcome.",
+      "suggested_fix": "Make ledger loading read-only for dry-run: report the parse error in memory without renaming the file, or use a non-mutating preview loader.",
+      "source": "codex",
+      "_overlap": false
+    },
+    {
+      "title": "TestPatternIndependence asserts only attempts_killed==0, not counter equality across stderr",
+      "category": "other",
+      "severity": "medium",
+      "changes_numbers": false,
+      "confidence": "confirmed",
+      "file": "runner/tests/test_verification_findings.py",
+      "lines": "551-587",
+      "evidence": "Once ``signalled`` decides the class, a fault pattern in the (shared) stream must not be\nable to move a single counter after the process has exited.\n...\nself.assertEqual(\n    state.get(task.key).attempts_killed, 0,\n    \"a non-signalled exit charged the ambiguity axis because of text in \"\n    \"a stream the CARLA server shares\")",
+      "why_wrong": "The docstring claims post-exit stderr cannot move any counter, and that this would have caught round three\u2019s pattern-widening budget swap. The body only checks attempts_killed == 0 per (status, rc, stderr) cell. It never snapshots the full budgets() vector and never asserts equality across stderr_text for fixed (status, rc). A regression that demotes/abnormal-classifies into infra or that fails to charge record/tickruntime still passes while killed stays 0 \u2014 the same \u201ctest never went red for the claim\u201d shape that previously let axis bugs through.",
+      "suggested_fix": "For each (status, rc), compute expected budgets once from signalled-only classification, then assert state.get(task.key).budgets() equals that expectation for every stderr_text; optionally also assert outcome class is identical across stderr for non-signalled rcs.",
+      "source": "cursor",
+      "_overlap": false
+    },
+    {
+      "title": "Normative 6A.5 table driver does not check requeue on sets_finished: no rows",
+      "category": "other",
+      "severity": "low",
+      "changes_numbers": false,
+      "confidence": "confirmed",
+      "file": "runner/tests/test_verification_findings.py",
+      "lines": "315-320",
+      "evidence": "elif finished == \"no\":\n    self.assertFalse(st.finished, f\"{klass} x {on_disk}: the table says this never \"\n                                  f\"settles on its own\")\nelse:\n    self.assertEqual(finished, \"when_spent\")\n    ...\n    self.assertTrue(requeue, ...)",
+      "why_wrong": "when_spent rows assert both settlement and requeue while budget remains. finished=no rows (all NEVER_STARTED cells, NO_FINAL_RECORD infra charges, TORN_DOWN non-ACCEPT, FATAL) only assert finished is false after the first settle. A bug that returns requeue=False on the first infra charge under infra_budget=2 \u2014 or requeue=True on TORN_DOWN \u2014 leaves the machine-checked table green. Within-run retry count and drain behaviour are part of the termination argument the table is supposed to pin.",
+      "suggested_fix": "For finished=no: if budget_charged is infra and attempts_infra < infra_budget, assert requeue is True; if budget_charged is none (or FATAL/NEVER_STARTED at exhaustion), assert requeue is False.",
+      "source": "cursor",
+      "_overlap": false
+    }
+  ],
+  "intent_drift": []
+}
