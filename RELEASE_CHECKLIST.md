@@ -82,7 +82,10 @@ is below; this file carries the parts a script cannot judge.
       `setup.sh` → content-pack install → `tests/` green. Nothing else proves the config surface
       is genuinely free of local defaults.
 - [ ] **CI green on `master`**, including the scheduled run — a red overlay job means new users
-      cannot install.
+      cannot install. *It was red from 2026-08-07 to 2026-08-10* (`check_no_cluster_paths`, on
+      review briefs that leaked private infrastructure into the public repo); the history was
+      rewritten and `tools/pre-push` now runs that check before a push rather than after.
+      **Install the hook in every clone:** `ln -sf ../../tools/pre-push .git/hooks/pre-push`.
 - [ ] **The numpy pin decision reviewed.** Upstream has merged a numpy ≥ 1.24 compatibility fix
       *after* our pinned SHA. We stay on the older commit for reproducibility, which means users
       on modern numpy must pin `numpy<1.24`. If the runner or the environment documentation ends

@@ -12,7 +12,25 @@ records. Nothing here is part of a benchmark run.
 | `check_forbidden_tokens.py` | Fails if the repository names the upstream source of a non-redistributable prop. Works from salted digests in `forbidden_tokens.txt`, so the check itself names nothing. |
 | `forbidden_tokens.txt` | The salted denylist the above reads. Digests only — no words. |
 | `check_release_ready.py` | The pre-tag gate. Runs the repository's own verification programs, not just a file-presence sweep, and **exits non-zero while any TODO remains**. |
+| `pre-push` | Git hook. Runs the two leak checks **before** a push instead of after. Not installed by cloning — see below. |
 | `dev/` | Maintainer-only. Regenerates `patches/` from a working checkout; not part of the user flow. |
+
+## `pre-push` — install it, once, per clone
+
+```bash
+ln -sf ../../tools/pre-push .git/hooks/pre-push
+```
+
+Git does not clone hooks, so this is manual and easy to forget. It is worth the thirty seconds.
+
+CI already runs both checks it runs, and CI worked: `overlay-setup` went red on the exact commit
+that pushed eight private references on 2026-08-07. It then stayed red on `master` for three
+days because nobody read it, while the references sat in a public repository. **For a leak, the
+gap between "CI tells you" and "the hook tells you instead" is the only thing that matters** —
+once it is pushed, rewriting the history does not recall what was already fetched, and GitHub
+keeps unreferenced objects reachable by SHA. Both checks take seconds and need no network.
+
+`git push --no-verify` bypasses it, and CI will disagree with you.
 
 ## `check_release_ready.py` — the gate
 

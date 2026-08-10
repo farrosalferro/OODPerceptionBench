@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Refuse a push that would leak private infrastructure into the public repository.
+#
+# Install:  ln -sf ../../tools/pre-push .git/hooks/pre-push
+# Bypass:   git push --no-verify        (say why in the commit, and expect CI to disagree)
+#
+# WHY THIS EXISTS, since a hook that duplicates CI needs a reason:
+# CI already runs both checks below and it worked -- `overlay-setup` went red on the exact
+# commit that introduced eight private references on 2026-08-07. It then stayed red on master
+# for three days because nobody read it, while the leak sat in a public repository. CI tells you
+# afterwards; this tells you instead. The gap between those two is the whole failure mode, and
+# for a leak the gap is the only thing that matters: once it is pushed, force-pushing the
+# history does not un-disclose it.
+#
+# Both checks are seconds long and need no network, so there is no reason to run them late.
+set -uo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT" || exit 0
+
+PY="${PYTHON:-python3}"
+fail=0
+
+for check in tools/check_no_cluster_paths.py tools/check_forbidden_tokens.py; do
+    [ -f "$check" ] || continue
+    if ! out="$("$PY" "$check" 2>&1)"; then
+        echo ""
+        echo "  ✗ PUSH BLOCKED — $check"
+        echo ""
+        echo "$out" | sed 's/^/      /'
+        fail=1
+    fi
+done
+
+if [ "$fail" -ne 0 ]; then
+    cat <<'EOF'
+
+  This repository is PUBLIC. Fix the references above and amend, rather than pushing
+  and cleaning up afterwards: a force-push rewrites the history but does not recall
+  anything already fetched, and GitHub keeps unreferenced objects reachable by SHA.
+
+  If you are certain this is a false positive, `git push --no-verify` and say why.
+
+EOF
+    exit 1
+fi
+
+exit 0
