@@ -4,7 +4,7 @@
 > (replacement assets + re-run) binds to arXiv v2, and scores from the two are **not**
 > comparable. Every report this runner writes carries that stamp.
 >
-> **This is a FIRST CUT.** The supervision logic is covered by 219 automated tests, but nothing
+> **This is a FIRST CUT.** The supervision logic is covered by 222 automated tests, but nothing
 > here has been run against a real CARLA server or a real GPU. Read `STATUS.md` before trusting
 > it with GPU-hours.
 
@@ -31,11 +31,29 @@ python run_benchmark.py --config my_config.yaml
 
    Record the pairs in the config. On a single-GPU machine both are `0` and you can move on.
 
-3. **Copy and edit a config.** `configs/example.yaml` documents every field.
+3. **Build the Python environment the evaluator runs in.** A CARLA-only environment is **not**
+   enough — the evaluator imports `scenario_runner`, which needs `py_trees` and friends, and the
+   failure is `ModuleNotFoundError` *inside the route*, reported as an infrastructure failure
+   rather than as a missing dependency. After `setup.sh`, install both:
+
+   ```bash
+   pip install -r third_party/carla_garage/Bench2Drive/leaderboard/requirements.txt
+   pip install -r third_party/carla_garage/Bench2Drive/scenario_runner/requirements.txt
+   # plus CARLA's own Python API from your CARLA build's PythonAPI/carla/dist/
+   ```
+
+   Sanity-check it in one line before going further — this is much cheaper than finding out
+   nineteen minutes into a route:
+
+   ```bash
+   <your-python> -c "import carla, py_trees, numpy; print('ok')"
+   ```
+
+4. **Copy and edit a config.** `configs/example.yaml` documents every field.
    There are no defaults for paths, hosts, queues or environments — a missing required field is
    an error that names the field, not a fallback to somebody else's filesystem.
 
-4. **Prove the plumbing before spending GPU-hours.** The shipped reference agent
+5. **Prove the plumbing before spending GPU-hours.** The shipped reference agent
    (`reference_agent/constant_velocity_agent.py`) drives forward at a constant speed. It scores
    badly on purpose; its job is to show that CARLA starts on the right GPU, the route loads, the
    agent interface binds, criteria attach, and a finalized checkpoint lands in the right place.
@@ -45,7 +63,7 @@ python run_benchmark.py --config my_config.yaml
    python run_benchmark.py --config configs/reference_agent.yaml --limit 1
    ```
 
-5. **Run the sweep.**
+6. **Run the sweep.**
 
    ```bash
    python run_benchmark.py --config my_config.yaml --workers 4
@@ -61,9 +79,32 @@ skipped and retry budgets carry over.
 
 ## Bringing your own agent
 
-The runner uses the **stock CARLA Leaderboard 2.0 `AutonomousAgent` interface, unchanged**.
-There is no runner-specific API to implement. Anything that already runs under Bench2Drive
-works with no code changes.
+The runner adds **no API of its own**: it drives the pinned Bench2Drive evaluator, which
+drives your agent. Anything that already runs under Bench2Drive works with no code changes.
+
+> **If you are porting a *stock* Leaderboard 2.0 agent, one signature has to change.** This
+> README claimed the stock interface worked unchanged until 2026-08-11, and it was wrong — the
+> first hardware validation caught it. The pinned Bench2Drive evaluator diverges from stock:
+>
+> ```python
+> # self.agent_instance.setup(args.agent_config)          # stock, commented out upstream
+> self.agent_instance.setup(args.agent_config, save_name)  # what actually runs
+> ```
+>
+> A stock `setup(self, path_to_conf_file)` therefore raises
+> `TypeError: setup() takes 2 positional arguments but 3 were given` **before the simulation
+> starts**, and the route settles as `Failed - Agent couldn't be set up`. Because that is a
+> legitimate status, the sweep exits 0 and reports the route complete — so this fails *quietly*
+> unless you read the status. Accept the extra argument with a default:
+>
+> ```python
+> def setup(self, path_to_conf_file, save_name=None):
+> ```
+>
+> That keeps the agent valid under both callers. Every agent in this ecosystem does the same;
+> carla_garage's own `team_code` agents declare
+> `setup(self, path_to_conf_file, route_index=None, traffic_manager=None)`. The shipped
+> reference agent is the worked example.
 
 Model-specific setup goes in the config, never in the runner:
 

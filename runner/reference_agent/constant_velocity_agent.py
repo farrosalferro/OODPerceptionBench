@@ -35,13 +35,49 @@ class ConstantVelocityAgent(AutonomousAgent):
     #: metres per second
     TARGET_SPEED = 4.0
 
-    def setup(self, path_to_conf_file):
+    def setup(self, path_to_conf_file, save_name=None):
+        """Initialise the agent.
+
+        **The second parameter is not optional in practice, despite its default.** The stock
+        Leaderboard 2.0 base class declares ``setup(self, path_to_conf_file)``, and this agent
+        matched it exactly -- which is precisely why it could not run. The pinned Bench2Drive
+        evaluator diverges from stock and calls::
+
+            # self.agent_instance.setup(args.agent_config)      <- stock, commented out upstream
+            self.agent_instance.setup(args.agent_config, save_name)
+
+        so a strictly-stock agent dies with ``TypeError: setup() takes 2 positional arguments
+        but 3 were given`` *before the simulation starts*, and the route settles as
+        ``Failed - Agent couldn't be set up``. Every real agent in this ecosystem defends the
+        same way -- carla_garage's own `team_code` agents declare
+        ``setup(self, path_to_conf_file, route_index=None, traffic_manager=None)``.
+
+        Accepting it with a default keeps this agent valid under BOTH callers. Found by the
+        first hardware validation run, 2026-08-11; see runner/README.md "Bringing your own
+        agent", which documents the requirement for anyone porting a stock agent.
+        """
         self.track = Track.SENSORS
         self._target_speed = float(os.environ.get("OODBENCH_TARGET_SPEED",
                                                   self.TARGET_SPEED))
         # Seed reaches the agent the same way it reaches every other agent in this benchmark:
         # the SEED environment variable, set by the runner from (route, repetition) alone.
         self._seed = int(os.environ.get("SEED", "42"))
+        self._save_name = save_name
+
+        # Prove the SAVE_PATH plumbing too. The runner exports SAVE_PATH and mirrors it into
+        # the result tree; nothing else in the release demonstrates that an agent can actually
+        # write there, and "the agent log directory exists but is empty" is indistinguishable
+        # from "the export was wrong". One tiny file makes the difference observable.
+        save_path = os.environ.get("SAVE_PATH")
+        if save_path:
+            try:
+                os.makedirs(save_path, exist_ok=True)
+                with open(os.path.join(save_path, "reference_agent.txt"), "w",
+                          encoding="utf-8") as fh:
+                    fh.write(f"seed={self._seed}\ntarget_speed={self._target_speed}\n"
+                             f"save_name={save_name}\n")
+            except OSError:
+                pass  # a plumbing probe must never be the reason a route fails
 
     def sensors(self):
         return [

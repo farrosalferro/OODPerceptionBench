@@ -8,7 +8,7 @@
 A production runner for this benchmark is 1–2 weeks of work and cannot be finished without a
 machine that runs CARLA. What exists now is the part that is expensive to change later — the
 design decisions in `DESIGN.md` — plus a working implementation of them whose *logic* is
-covered by 219 automated tests, and none of whose *simulator interaction* has ever executed.
+covered by 222 automated tests, and none of whose *simulator interaction* has ever executed.
 
 Nothing below should be read as "tested" unless it says so explicitly.
 
@@ -246,7 +246,7 @@ that blindly moves a population you did not intend to move.**
 All of these run with no GPU, no CARLA, no network and no third-party packages:
 
 ```
-python -m unittest discover -s tests -t .    ->  219 tests, OK, ~76 s
+python -m unittest discover -s tests -t .    ->  222 tests, OK, ~76 s
 ```
 
 | Area | Covered by | Notes |
