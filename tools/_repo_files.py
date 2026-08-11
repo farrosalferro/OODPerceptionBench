@@ -6,17 +6,20 @@ three had their own idea of which files to look at, and all three were wrong in 
 
 **The bug this module exists to end.** `setup.sh` clones the pinned upstream into `third_party/`,
 which `.gitignore` excludes because it is not ours. The checkers walked the filesystem, so on a
-tree where `setup.sh` had been run they scanned upstream's code and failed on it:
+tree where `setup.sh` had been run they scanned upstream's code and failed on it — two hits in
+`third_party/carla_garage/`, one an `export CARLA_ROOT=` line pointing at the upstream authors'
+own HPC scratch filesystem, the other a `wget` of their public S3 dataset bucket whose URL path
+happens to contain the same word as one of our private conda environments.
 
-    third_party/carla_garage/team_code/slurm_train.sh:18
-        export CARLA_ROOT=/mnt/lustre/work/geiger/bjaeger25/CARLA_0_9_15
-    third_party/carla_garage/tools/download_data.sh:29
-        wget ... "https://s3.eu-central-1.amazonaws.com/avg-projects-2/garage_2/dataset/..."
+(The offending strings are deliberately *described* rather than quoted here. Quoting them would
+put them back in a tracked file and trip `check_no_cluster_paths.py` — which is precisely what
+happened on the first attempt to commit this module, and the check was right to refuse. The
+allowlist exists for files whose job is to document the ban; a utility module is not one, and
+every allowlist entry is a hole.)
 
-Neither is a leak. The first is the *upstream authors'* cluster path; the second contains
-`garage_2` only because that is **their project's name** in an S3 URL, which happens to collide
-with a token on our denylist. Plus 45 "broken" markdown links in vendored docs whose relative
-targets were never ours to satisfy.
+Neither is a leak of ours: one is the upstream authors' own infrastructure, the other is a
+public bucket path that merely collides with a word on our denylist. Alongside them, 45
+"broken" markdown links in vendored docs whose relative targets were never ours to satisfy.
 
 The consequence was worse than noise. In our own working tree `setup.sh` has never been run, so
 `third_party/` does not exist and every check passed — while **any user who followed the
