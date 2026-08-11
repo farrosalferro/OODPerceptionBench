@@ -145,24 +145,24 @@ def self_test(dl: Denylist) -> None:
         raise ValueError("self-test failed: the scanner flagged clean text")
 
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _repo_files import repo_files  # noqa: E402
+
+
 def scan(root: str, dl: Denylist, quiet: bool) -> int:
     cache: dict[str, str | None] = {}
     hits: list[tuple[str, int, int, str]] = []
     scanned = 0
 
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
-        for name in sorted(filenames):
-            path = os.path.join(dirpath, name)
-            if os.path.splitext(name)[1].lower() in SKIP_SUFFIX:
-                continue
+    # Only files this repository SHIPS -- see tools/_repo_files.py.
+    for rel in repo_files(root, skip_suffix=SKIP_SUFFIX):
+            path = os.path.join(root, rel)
             try:
                 with open(path, encoding="utf-8", errors="strict") as fh:
                     lines = fh.readlines()
             except (OSError, UnicodeDecodeError):
                 continue  # binary or unreadable: nothing textual to leak
             scanned += 1
-            rel = os.path.relpath(path, root)
             for lineno, line in enumerate(lines, 1):
                 for n, dig in dl.hits_in(normalise(line), cache):
                     hits.append((rel, lineno, n, dig[:8]))

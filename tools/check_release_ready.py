@@ -195,6 +195,10 @@ def _gate(label: str, cmd: list[str], group: str,
     return label, TODO, group, f"exit {rc}: {tail.splitlines()[-1][:120] if tail else 'no output'}"
 
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _repo_files import repo_files  # noqa: E402
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--strict", action="store_true",
@@ -336,8 +340,14 @@ def main() -> int:
     checks.append(("golden-bundle claims match the filesystem", g_state, "metadata", g_why))
 
     # Every markdown link to a repo-local file must resolve.
+    # Only markdown WE ship. Globbing the tree also linted the vendored upstream docs that
+    # setup.sh installs under third_party/, whose relative targets were never ours to satisfy
+    # -- 45 "broken" links on any correctly-installed checkout. See tools/_repo_files.py.
     broken: list[str] = []
-    for md in glob.glob(os.path.join(REPO, "**", "*.md"), recursive=True):
+    for rel in repo_files(REPO):
+        if not rel.endswith(".md"):
+            continue
+        md = os.path.join(REPO, rel)
         base = os.path.dirname(md)
         for target in re.findall(r"\]\(([^)#:]+?)\)", open(md, encoding="utf-8").read()):
             if target.startswith(("http", "mailto", "#")):

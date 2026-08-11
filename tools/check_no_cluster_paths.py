@@ -57,6 +57,10 @@ ALLOWLIST = {
 }
 
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _repo_files import repo_files, source_description  # noqa: E402
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -66,14 +70,12 @@ def main() -> int:
     hits: list[tuple[str, int, str, str]] = []
     scanned = 0
 
-    for dirpath, dirnames, filenames in os.walk(args.root):
-        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
-        for name in filenames:
-            path = os.path.join(dirpath, name)
-            rel = os.path.relpath(path, args.root)
+    # Only files this repository SHIPS -- see tools/_repo_files.py. Walking the filesystem
+    # scanned `third_party/`, i.e. the upstream clone setup.sh creates, and failed on the
+    # upstream authors' own cluster paths.
+    for rel in repo_files(args.root, skip_suffix=SKIP_SUFFIX):
+            path = os.path.join(args.root, rel)
             if rel in ALLOWLIST:
-                continue
-            if os.path.splitext(name)[1].lower() in SKIP_SUFFIX:
                 continue
             try:
                 with open(path, encoding="utf-8", errors="strict") as fh:
@@ -86,7 +88,7 @@ def main() -> int:
                     if rx.search(line):
                         hits.append((rel, i, why, line.rstrip()[:160]))
 
-    print(f"scanned {scanned} text files under {args.root}")
+    print(f"scanned {scanned} text files under {args.root} ({source_description(args.root)})")
     if hits:
         print(f"\nFAIL — {len(hits)} forbidden reference(s):\n")
         for rel, ln, why, text in hits:
