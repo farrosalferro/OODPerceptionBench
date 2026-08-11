@@ -93,7 +93,9 @@ difference between a number and a meaningless number.
 # terminal 1
 ./CarlaUE4.sh -carla-server -RenderOffScreen -carla-rpc-port=2000
 
-# terminal 2 — needs the `carla` python module from this build's PythonAPI
+# terminal 2 — needs the `carla` python module from this build's PythonAPI.
+# Run it from the REPOSITORY, not from the CARLA root you started the server in.
+cd <this-repository>/assets
 python3 tools/verify_pack.py --port 2000          # add --without-nc if you skipped the NC tarball
 ```
 
