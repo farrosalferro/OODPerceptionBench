@@ -212,7 +212,7 @@ records instead, which is what a reader actually needs.
 
 ```
 routes/       475 canonical route XMLs + MANIFEST.tsv + EXCLUSIONS.md + validator
-records/      per-route baseline records for 17 models + PDM-Lite, seed 42 (CSV + parquet)
+records/      per-route baseline records for 17 models + PDM-Lite, seed 42 (CSV + typed loader)
 runner/       portable serial + local multi-GPU runner, and a de-hardcoded SLURM example
 config/       machine configuration; every path a user must supply lives here
 patches/      the overlay: our changes to the pinned upstream, one patch per file

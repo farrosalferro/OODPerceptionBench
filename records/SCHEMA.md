@@ -8,7 +8,7 @@ to disk. `check_meta.py` asserts it against the CSV header on every run of
 `verify.sh`, so this document and the artifact cannot silently disagree.
 
 `non-null` counts are out of 8,550 and are a property of the data, not of the
-generator — see the notes. The `dtype` column is the **parquet** dtype; the CSV
+generator — see the notes. The `dtype` column is the dtype `load.py` applies; the CSV
 is untyped text so that the literal token `Infinity` (1,367 occurrences in the
 secondary-metric columns) survives a round-trip unchanged.
 

@@ -2,7 +2,7 @@
 """Check 0 — `*.meta.json` describes the artifacts that are actually here.
 
 This check exists because the failure it catches has already happened once: the
-CSV and parquet were regenerated without regenerating `meta.json`, so the file
+the CSV was regenerated without regenerating `meta.json`, so the file
 went on declaring a sha256, a byte count and a 65-entry column list that no
 longer matched anything on disk. Nothing else in the bundle noticed, because
 nothing else read `meta.json`.
@@ -14,8 +14,7 @@ writes them**. This script is the tripwire for the case where it isn't.
 Hard-checked (any mismatch exits non-zero):
 
   * csv     sha256 + byte size
-  * parquet sha256 + byte size
-  * `n_rows`    == the CSV's data-row count == the parquet's row count
+  * `n_rows`    == the CSV's data-row count
   * `n_columns` == the CSV header width
   * `columns`   == the CSV header, in order (an ordering change is a schema
                   change and must be deliberate)
@@ -58,10 +57,16 @@ def check(label: str, got, want, ok: bool, results: list) -> None:
         print(f"          actual:   {got!r}")
 
 
+# The parquet checks below are retained but inert: the release ships a single CSV since
+# 2026-08-11 (it was lossy -- see records/README.md). They SKIP when meta declares no parquet
+# and none is on disk, so this file keeps working if a typed artifact is ever reintroduced.
+# The parquet is OPTIONAL; the CSV is not.
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--records", required=True, type=Path,
-                    help="the released CSV; meta/parquet are found beside it")
+                    help="the released CSV; meta is found beside it")
     args = ap.parse_args()
 
     csv_path: Path = args.records.resolve()

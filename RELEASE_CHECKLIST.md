@@ -29,7 +29,7 @@ is below; this file carries the parts a script cannot judge.
 
 - [x] `routes/` — 475 XMLs + `MANIFEST.tsv` (sha256) + `EXCLUSIONS.md` + `validate_routes.py`
       (**38/38 checks green**, all 475 checksums verified)
-- [x] `records/` — 8,550 rows × 64 columns, CSV + parquet, seed 42, 17 models + PDM-Lite
+- [x] `records/` — 8,550 rows × 64 columns, CSV + `load.py`, seed 42, 17 models + PDM-Lite
 - [x] `runner/` — `run_benchmark.py`, worker pool, resume, SLURM backend (**125 tests green**;
       never executed against a real CARLA — see `runner/STATUS.md`)
 - [x] `docs/` — `replacing-props.md`, `ASSET_TRAPS.md`, the three `import_procedure_*.md`

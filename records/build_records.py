@@ -6,7 +6,7 @@ Single documented entry point that turns the raw closed-loop CARLA result tree
 
     one row per (model, category, scenario, route_id, level, prop, seed)
 
-Emitted as CSV **and** parquet, a few MB, ships in-repo. This is what lets
+Emitted as a single CSV, a few MB, ships in-repo. This is what lets
 anyone re-verify every number in the paper without a GPU and without
 re-simulating anything.
 
@@ -19,7 +19,7 @@ original analysis tools, which are not part of this repository:
 and applies `rename_map.json` (bundled beside this script) so that both the prop
 tokens and the resolved `agent_type` blueprint ids in the records agree with the
 route XMLs and the manifest. The rename is part of the generator, not a
-post-processing step: the released CSV/parquet must be reproducible by running
+post-processing step: the released CSV must be reproducible by running
 this file, with nothing applied to the output afterwards by hand.
 
 Usage
@@ -30,7 +30,7 @@ Usage
     python build_records.py --results-root ... --models tcp --no-write
 
 The results root is READ-ONLY. This script never writes outside --out-dir.
-It writes THREE files in one pass — .csv, .parquet and .meta.json — and the
+It writes TWO files in one pass — .csv and .meta.json — and the
 meta records the sha256 of the other two plus of this script. Regenerate all of
 them together; editing any one of them by hand breaks `check_meta.py`.
 """
@@ -538,56 +538,18 @@ COLUMNS = [
 COLUMNS = list(dict.fromkeys(COLUMNS))
 
 # --------------------------------------------------------------------------
-# Parquet typing.
+# Dtype schema: see load.py.
 #
 # The CSV is written verbatim from the extraction so it reproduces the frozen
 # analysis CSVs cell-for-cell (including the literal token "Infinity", which
 # occurs 1367 times in the secondary-metric columns and must not be lost).
-# The parquet gets a real schema instead: numeric columns become float64 with
-# IEEE inf preserved, flags become nullable booleans, everything else string.
+#
+# A second, typed artifact used to be emitted here as parquet. It was dropped:
+# `reaction_value` and `reaction_threshold` are mixed numeric/categorical, so
+# typing them numeric silently nulled 232 values, and nothing compared the two
+# artifacts. The dtype schema now lives in load.py, applied at read time to the
+# one authoritative file, and `load.py --check` proves it loses nothing.
 # --------------------------------------------------------------------------
-BOOL_COLS = [
-    "success", "ood_agent_hit", "collided_with_ood_agent",
-    "ttr_dar_present", "reaction_detected",
-]
-NUMERIC_COLS = [
-    "seed",
-    "score_composed", "score_route", "score_penalty",
-    "driving_score", "route_completion", "infraction_penalty",
-    "ood_agent_collision_count",
-    *[f"n_{k}" for k in INFRACTION_KEYS], "n_infractions_scoring",
-    "collisions_pedestrians", "collisions_vehicles", "collisions_layout",
-    "off_road_infractions",
-    "route_length", "duration_game", "duration_system",
-    "ttr", "dar", "ttc_at_reaction",
-    "t_obs_frame", "t_react_frame", "closing_velocity",
-    "reaction_value", "reaction_threshold", "v_start", "v_end",
-    "final_distance", "final_closing_velocity", "final_ttc",
-    "num_reactions",
-]
-
-
-def typed_frame(df):
-    """Return a copy of `df` with an explicit, parquet-safe dtype schema."""
-    import pandas as pd
-
-    out = df.copy()
-    for col in NUMERIC_COLS:
-        if col in out.columns:
-            out[col] = pd.to_numeric(out[col], errors="coerce")
-    for col in BOOL_COLS:
-        if col not in out.columns:
-            continue
-        s = out[col].map(
-            lambda v: True if str(v).strip().lower() == "true"
-            else (False if str(v).strip().lower() == "false" else None)
-        )
-        out[col] = s.astype("boolean")
-    for col in out.columns:
-        if col in NUMERIC_COLS or col in BOOL_COLS:
-            continue
-        out[col] = out[col].astype(str).replace({"nan": "", "None": ""})
-    return out
 
 
 def main() -> int:
@@ -716,15 +678,8 @@ def main() -> int:
     out_dir: Path = args.out_dir.resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     csv_path = out_dir / f"{args.basename}_{RECORDS_VERSION}.csv"
-    pq_path = out_dir / f"{args.basename}_{RECORDS_VERSION}.parquet"
 
     df.to_csv(csv_path, index=False)
-    try:
-        typed_frame(df).to_parquet(pq_path, index=False)
-        pq_written = True
-    except Exception as exc:  # noqa: BLE001
-        print(f"WARNING: parquet not written ({exc}); install pyarrow", file=sys.stderr)
-        pq_written = False
 
     def _sha(p: Path) -> str:
         h = hashlib.sha256()
@@ -778,17 +733,10 @@ def main() -> int:
                     "bytes": csv_path.stat().st_size},
         },
     }
-    if pq_written:
-        meta["artifacts"]["parquet"] = {
-            "path": pq_path.name, "sha256": _sha(pq_path),
-            "bytes": pq_path.stat().st_size,
-        }
     (out_dir / f"{args.basename}_{RECORDS_VERSION}.meta.json").write_text(
         json.dumps(meta, indent=2, sort_keys=False) + "\n")
 
     print(f"\nWrote {csv_path}")
-    if pq_written:
-        print(f"Wrote {pq_path}")
     print(f"Wrote {out_dir / f'{args.basename}_{RECORDS_VERSION}.meta.json'}")
     return 0 if (not errors and n_bad == 0) else 1
 

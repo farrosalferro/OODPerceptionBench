@@ -16,8 +16,8 @@ The records are a few MB. They ship in-repo; no external hosting, no Zenodo.
 | File | What |
 |---|---|
 | `ood_perceptionbench_records_v0.9.csv` | the tidy table, 8,550 rows × 64 columns |
-| `ood_perceptionbench_records_v0.9.parquet` | same rows, typed schema |
-| `ood_perceptionbench_records_v0.9.meta.json` | version stamp, provenance, sha256 of each artifact **and of the generator**, reconciliation report |
+| `load.py` | the dtype schema, applied at read time; `python3 load.py` proves it drops nothing |
+| `ood_perceptionbench_records_v0.9.meta.json` | version stamp, provenance, sha256 of the artifact **and of the generator**, reconciliation report |
 | `rename_map.json` | the `ood.*` blueprint rename, applied by the generator and re-derived by check 2 |
 
 **One row per `(model, category, scenario, route_id, level, prop, seed)`.**
@@ -28,31 +28,28 @@ The records are a few MB. They ship in-repo; no external hosting, no Zenodo.
    18  = 17 end-to-end models + PDM-Lite (privileged ceiling)
 ```
 
-The CSV is the faithful artifact and is what the verification scripts compare;
-the parquet carries a real dtype schema (numerics as `float64` with IEEE `inf`
-preserved, flags as nullable booleans) for analysis.
+The CSV is the **only** artifact and is what every verification script compares.
 
-> **⚠ The parquet is NOT byte-equivalent to the CSV, and the CSV is authoritative.**
-> Found by review 2026-08-09 and measured against the shipped files: **232 values
-> present in the CSV are null in the parquet** — 116 each in `reaction_value` and
-> `reaction_threshold`. Those two columns are typed numeric but carry *categorical*
-> strings for lane-change reactions (`reaction_threshold = "lane_change"`,
-> `reaction_value = "-1 -> 2"` and similar), and `to_numeric(errors="coerce")` nulls
-> them. Nothing in `verify.sh` compares the two artifacts, so this shipped silently.
->
-> No headline number is affected: both columns belong to the TTR/DAR secondary
-> metrics, which the paper does not use, and `Table 1` regenerates exactly from the
-> CSV either way. But if you are analysing reaction data, **read the CSV**, and treat
-> a null in these two parquet columns as "not representable", not as "absent".
+`load.py` applies the dtype schema at read time, so you get real dtypes without a second file:
 
-The parquet's dtypes come from `typed_frame()` in `build_records.py`, not from
-letting a reader infer them. That distinction matters: identity columns stay
-**strings** on purpose. `route_id` inferred as `int64` and `weather_id` as
-`float64` are wrong — they are labels, they are never arithmetic, and coercing
-them breaks the join against `../routes/MANIFEST.tsv`. Likewise the float
-columns are carried from the source JSONs rather than re-parsed from the CSV
-text, so no value is a decimal round-trip away from what the simulator emitted.
-`SCHEMA.md` lists the intended dtype for every column.
+```python
+from records.load import load_records
+df = load_records()          # numerics float64, flags nullable boolean,
+                             # identity columns str, mixed columns str
+```
+
+Identity columns stay **strings** on purpose. `route_id` inferred as `int64` and `weather_id` as
+`float64` are wrong — they are labels, they are never arithmetic, and coercing them breaks the
+join against `../routes/MANIFEST.tsv`. `SCHEMA.md` documents every column; `load.py` is the
+executable form of the dtype half, and `python3 load.py` re-proves it drops nothing.
+
+> **A parquet copy used to ship here and was removed on 2026-08-11.** It was lossy and silently
+> so: `reaction_value` and `reaction_threshold` are *mixed* — 4,731 rows hold a number, 116 hold
+> a categorical string (`"lane_change"`, `"-1 -> 2"`) — and typing them numeric coerced all 116
+> to null, so **232 values present in the CSV were absent from the parquet**. Nothing compared
+> the two artifacts, so it shipped that way. One artifact and a documented loader is a better
+> trade than two artifacts and a consistency check we did not have. No headline number was ever
+> affected: both columns are TTR/DAR secondary metrics, which the paper does not use.
 
 ### Version discipline
 
@@ -82,10 +79,10 @@ artifact — `meta.json` records `partial_run: true` when this happens.
 
 ### The generator is the only thing allowed to write these files
 
-One invocation writes **all three** artifacts — `.csv`, `.parquet` and
-`.meta.json` — and the meta records the sha256 and byte size of the first two
-plus the sha256 of `build_records.py` and of `rename_map.json` themselves. So
-the artifact is bound to the exact code that produced it.
+One invocation writes **both** artifacts — `.csv` and `.meta.json` — and the
+meta records the sha256 and byte size of the CSV plus the sha256 of
+`build_records.py` and of `rename_map.json` themselves. So the artifact is bound
+to the exact code that produced it.
 
 **Do not post-process the output.** If the released table needs to change, change
 the generator and re-run it. This is not a style preference: it is the defect
@@ -104,18 +101,19 @@ rename now lives inside `build_records.py`.
 ./verify.sh <paper-repo> <scratch-dir>
 ```
 
-Four independent checks, all of which must pass:
+Five independent checks, all of which must pass:
 
 | # | Script | Asserts | Result |
 |---|---|---|---|
-| 1 | `check_meta.py` | `meta.json` describes the files that are actually here: sha256 + byte size of the CSV and parquet, `n_rows`, `n_columns`, and the `columns` list against the CSV header in order | **PASS** — all digests and the 64-column list match |
-| 2 | `validate_against_frozen.py` | every one of the 8,550 rows matches the frozen per-model CSVs that back the paper, on all 35 metric-bearing columns | **PASS** — 0 undeclared mismatches; 2,910 rows differ by the declared `ood.*` rename (§5.3) and 1 by a declared diagnostic delta (§5.1) |
-| 3 | `reconcile_with_manifest.py` | each model covers each of the 475 canonical routes in `../routes/MANIFEST.tsv` exactly once; blueprint ids agree with the route XMLs | **PASS** — 18 × 475, 0 missing / 0 extra / 0 duplicate; 0 blueprint disagreements on 8,541 checkable rows |
-| 4 | `reproduce_table1.py` | **Table 1 regenerates exactly** — see below | **PASS** — A, B and C |
+| 1 | `check_meta.py` | `meta.json` describes the files that are actually here: sha256 + byte size of the CSV, `n_rows`, `n_columns`, and the `columns` list against the CSV header in order | **PASS** — all digests and the 64-column list match |
+| 2 | `load.py` | the documented loader preserves every non-empty value in the CSV — the check that did not exist when the parquet silently dropped 232 | **PASS** — 8,550 × 64, 0 dropped |
+| 3 | `validate_against_frozen.py` | every one of the 8,550 rows matches the frozen per-model CSVs that back the paper, on all 35 metric-bearing columns | **PASS** — 0 undeclared mismatches; 2,910 rows differ by the declared `ood.*` rename (§5.3) and 1 by a declared diagnostic delta (§5.1) |
+| 4 | `reconcile_with_manifest.py` | each model covers each of the 475 canonical routes in `../routes/MANIFEST.tsv` exactly once; blueprint ids agree with the route XMLs | **PASS** — 18 × 475, 0 missing / 0 extra / 0 duplicate; 0 blueprint disagreements on 8,541 checkable rows |
+| 5 | `reproduce_table1.py` | **Table 1 regenerates exactly** — see below | **PASS** — A, B and C |
 
-Reference environment: `pandas 2.0.3 / numpy 1.22.0 / scipy 1.10.1 / pyarrow
-17.0.0`. Check 4 runs the paper's statistics scripts and therefore needs
-`scipy`; the other three do not.
+Reference environment: `pandas 2.0.3 / numpy 1.22.0 / scipy 1.10.1`. Check 5 runs
+the paper's statistics scripts and therefore needs `scipy`; the others do not.
+`pyarrow` is no longer required by anything here.
 
 The results in that table are what this bundle produces today, not an
 aspiration — they are regenerated by re-running `verify.sh`, and every one of

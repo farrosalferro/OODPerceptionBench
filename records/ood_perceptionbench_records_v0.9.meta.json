@@ -566,11 +566,6 @@
       "path": "ood_perceptionbench_records_v0.9.csv",
       "sha256": "221268092f310ca48f642d68369a972c16a4317b8fb538f8e329f5515d27a248",
       "bytes": 10490519
-    },
-    "parquet": {
-      "path": "ood_perceptionbench_records_v0.9.parquet",
-      "sha256": "14aad8717159af33033bbd52ce0690c800b5a1d9b66333c39eaf1a2ae11b607e",
-      "bytes": 2362445
     }
   }
 }
