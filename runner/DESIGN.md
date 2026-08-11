@@ -1080,7 +1080,7 @@ for — asserted nowhere.
 
 Round three's repair was reviewed by two models from other labs (`gpt-5.6-luna`,
 `cursor-grok-4.5-high`); cursor returned BLOCKING. Record:
-`.reviews/2026-08-07-runner-round3.md`. **All four surviving findings were escalated rather than
+the maintainers' review record (kept internal). **All four surviving findings were escalated rather than
 fixed in place, and the user ruled on each** — the first time in five rounds that a model change
 was made by the person who owns the release rather than by the agent that found it.
 

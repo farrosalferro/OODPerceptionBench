@@ -29,3 +29,6 @@ Intermediate/
 # --- OS ----------------------------------------------------------------------
 .DS_Store
 Thumbs.db
+
+# Internal review records — kept outside the published repo (see release/reviews/)
+.reviews/

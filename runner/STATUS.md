@@ -195,7 +195,7 @@ exists for — is now asserted directly.
 
 Round three was reviewed by two models from other labs (`gpt-5.6-luna` @ xhigh via codex,
 `cursor-grok-4.5-high` via cursor); cursor returned **BLOCKING**. Record:
-`.reviews/2026-08-07-runner-round3.md`. All four findings were escalated to the user rather than
+the maintainers' review record (kept internal). All four findings were escalated to the user rather than
 fixed by the agent that found them, and the user ruled on each.
 
 20. **The demotion's discriminator was a proxy, and round three made the proxy bite.** Item 12's
@@ -333,7 +333,7 @@ of them has been attempted.**
 > every slot at exit 4; and the job script hard-codes `CUDA_VISIBLE_DEVICES=0` / `--gpu-rank 0`,
 > overriding whatever the scheduler allocated, with the config's `gpus:` list silently ignored.
 >
-> Full record: `.reviews/2026-08-09-exhaustive.md`. **Until these are fixed, `execution.backend:
+> Full record kept internally by the maintainers. **Until these are fixed, `execution.backend:
 > slurm` should be treated as unimplemented.** The local backend is unaffected — every one of
 > these lives in `slurm.py` or in a path only it takes.
 

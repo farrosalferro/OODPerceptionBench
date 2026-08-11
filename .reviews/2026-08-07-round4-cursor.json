@@ -1,6 +1,0 @@
-{
-  "verdict": "clean",
-  "summary": "Round 4 correctly implements the four user rulings: demotion on `signalled is None`, ledger `ACCOUNTING_EPOCH`, inert `--dry-run` snapshot/restore, and documented `128+N` assumption. Attacking the demotion opposite last time finds no path where a runner kill-manufactured record is credited to the model (kills preset FAULT/TIMEOUT/KILLED before demotion runs), and the post-exit pattern-independence invariant holds in `poll`/`_settle` even though the test only asserts `attempts_killed == 0` for non-signalled×final-record cells.",
-  "findings": [],
-  "intent_drift": []
-}
