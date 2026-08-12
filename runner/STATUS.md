@@ -351,7 +351,16 @@ This table records observations, not intentions; everything not listed is still 
 | H7 — a real `Failed - TickRuntime` flows through retry and reporting | **CLOSED** | 3 of 8 smoke routes settled that way on real hardware and were correctly counted **complete at exit 0** — the degenerate-model contract, confirmed outside the test harness for the first time |
 | H10 — fresh clone installs and passes | **PARTIAL** | clone → `setup.sh` (26/26 patches, idempotent) → gate → 222 tests all pass on the published artifact; the content-pack half is done, the smoke split is not yet golden-checked |
 | H3 — Vulkan adapter pins the simulator to the intended GPU | **OPEN — cannot be closed here** | needs ≥2 physical GPUs; on one GPU `cuda:0/vulkan:0` is the only configuration and the failure mode is unobservable |
-| H5, H6, H8, H9 | **OPEN** | H5/H6 not yet reached; H8 (full 475) not attempted; H9 (SLURM) known broken |
+| H6 — real Ctrl-C reaps children *and* their CARLA servers, then resumes correctly | **CLOSED** | one Ctrl-C mid-sweep reaped both worker CARLA trees, wrote state and report, exited **3**; no process or listener survived. Interrupted routes charged **zero** on every axis and stayed unfinished — cross-review findings 2 and 4, confirmed on real processes for the first time. The resume then ran exactly the 8 unfinished routes and adopted nothing |
+| H5, H8, H9 | **OPEN** | H5 (goldens) not yet reached; H8 (full 475) not attempted; H9 (SLURM) known broken |
+
+**Measured 2026-08-12, and it changed a shipped default.** At the previously-shipped
+`infra_budget: 1`, a worker's own RPC port was still occupied after the reaper ran *and* after
+`post_kill_cooldown_s` elapsed. Refusing to launch on a dirty port is correct; exhausting the
+whole infrastructure budget on that one self-clearing event is not. The route was left unsettled,
+the sweep exited 1, and recovery needed a manual `--retry-infra-exhausted`. Frequency was about
+1 launch in 30 — a 475-route sweep would meet it a dozen times. `configs/reference_agent.yaml`
+now uses the schema defaults (3/3); see the comment there for the reasoning.
 
 Throughput, for planning only: **0.044–0.079 physical GPU-hours per route** across the two
 sweeps. That is *below* the 0.12 planning figure, but it was measured with the constant-velocity
