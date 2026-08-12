@@ -8,7 +8,8 @@
 A production runner for this benchmark is 1–2 weeks of work and cannot be finished without a
 machine that runs CARLA. What exists now is the part that is expensive to change later — the
 design decisions in `DESIGN.md` — plus a working implementation of them whose *logic* is
-covered by 222 automated tests, and none of whose *simulator interaction* has ever executed.
+covered by 222 automated tests, and whose *simulator interaction* was first executed against
+real CARLA on 2026-08-11 — partially, and the table in §2 says exactly how far.
 
 Nothing below should be read as "tested" unless it says so explicitly.
 
@@ -336,6 +337,26 @@ of them has been attempted.**
 > Full record kept internally by the maintainers. **Until these are fixed, `execution.backend:
 > slurm` should be treated as unimplemented.** The local backend is unaffected — every one of
 > these lives in `slurm.py` or in a path only it takes.
+
+### Hardware validation: what has actually run (as of 2026-08-11)
+
+Three tickets of the step-2 plan are done on a **single-GPU** host (1× RTX 3090, CARLA 0.9.15).
+This table records observations, not intentions; everything not listed is still unvalidated.
+
+| Item | State | Evidence |
+|---|---|---|
+| H1 — a real route runs end to end | **CLOSED** | `Completed`, `score_composed 50.0`, `duration_game 41.85` s, criteria attached and `ttr_dar` populated, finalized checkpoint at the mirrored path |
+| H2 — `--workers N` with no port collision, N > physical GPUs | **CLOSED** | 2 workers on 1 GPU, 8/8 settled, twice. Worker 0 owned RPC 20000–20002 / TM 30000, worker 1 owned 20010–20012 / TM 30010; no port ever observed owned twice |
+| H4 — orphan reaping | **CLOSED** | no CARLA process or listener remained after either sweep; the runner logged each process tree it reaped before reusing a worker |
+| H7 — a real `Failed - TickRuntime` flows through retry and reporting | **CLOSED** | 3 of 8 smoke routes settled that way on real hardware and were correctly counted **complete at exit 0** — the degenerate-model contract, confirmed outside the test harness for the first time |
+| H10 — fresh clone installs and passes | **PARTIAL** | clone → `setup.sh` (26/26 patches, idempotent) → gate → 222 tests all pass on the published artifact; the content-pack half is done, the smoke split is not yet golden-checked |
+| H3 — Vulkan adapter pins the simulator to the intended GPU | **OPEN — cannot be closed here** | needs ≥2 physical GPUs; on one GPU `cuda:0/vulkan:0` is the only configuration and the failure mode is unobservable |
+| H5, H6, H8, H9 | **OPEN** | H5/H6 not yet reached; H8 (full 475) not attempted; H9 (SLURM) known broken |
+
+Throughput, for planning only: **0.044–0.079 physical GPU-hours per route** across the two
+sweeps. That is *below* the 0.12 planning figure, but it was measured with the constant-velocity
+reference agent, which does no inference — it does **not** confirm the figure for a real model,
+and should not be quoted as if it did.
 
 **Recommended validation order** (cheapest first, each gates the next):
 

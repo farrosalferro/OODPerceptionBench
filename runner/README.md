@@ -4,9 +4,11 @@
 > (replacement assets + re-run) binds to arXiv v2, and scores from the two are **not**
 > comparable. Every report this runner writes carries that stamp.
 >
-> **This is a FIRST CUT.** The supervision logic is covered by 222 automated tests, but nothing
-> here has been run against a real CARLA server or a real GPU. Read `STATUS.md` before trusting
-> it with GPU-hours.
+> **This is a FIRST CUT, now partially validated on hardware.** The supervision logic is covered
+> by 222 automated tests. As of 2026-08-11 a real CARLA 0.9.15 server has executed routes under
+> it: single routes, and 8-route two-worker sweeps with GPU stacking and port isolation observed
+> live. **The full 475-route set has never been run, the SLURM backend is broken, and the
+> multi-GPU mapping is unproven** — read `STATUS.md` §2 before trusting it with GPU-hours.
 
 Evaluate a CARLA Leaderboard 2.0 agent on the OOD-PerceptionBench route set, on one machine or
 on a SLURM cluster, from a single configuration file.
