@@ -38,6 +38,14 @@ Any deterministic reference agent works. If you use a different one, say so in
 | Agent | PDM-Lite, reachable through a runner config |
 | GPU | one is enough; the replicates are sequential by design |
 
+> **Use an explicit interpreter path everywhere below, not a bare `python3`.** `conda activate`
+> does not reliably win against an inherited `PATH`: on the first real golden run it silently
+> selected the system Python 3.8, which cannot `import carla`, and the replicate died as an
+> infrastructure failure rather than as a wrong-interpreter error. Set `environment.python` in
+> the config to the absolute interpreter, and invoke `make_golden.py` with **that same
+> interpreter** — the bundle stamps the interpreter that *built* it, so running the generator
+> under a different one records a version that never ran a route.
+
 The content pack matters more than any other line in that table. **A golden generated against a
 build with a missing asset is worse than no golden**: it pins the broken value, and from then on
 the acceptance test certifies the breakage. Step 3 exists to make that impossible.
@@ -149,6 +157,39 @@ measured spread of zero. A zero-tolerance golden would fail on any other machine
 python3 check_acceptance.py --results-root /scratch/smoke_rep1 --json /scratch/report.json
 echo "exit: $?"     # 0 now, instead of 3
 ```
+
+### The negative test — the only thing that proves the guard works
+
+A golden bundle whose assertions have never been seen to **fail** is decoration. Prove A1 fires
+before you trust it:
+
+```bash
+# 1. take one shipped prop out of the CARLA content directory
+mv "$CARLA_ROOT/CarlaUE4/Content/RoadClosedBarricade" /tmp/negtest_barricade
+
+# 2. RE-RUN the affected route with the asset missing -- this step is the whole test
+<your-python> ../runner/run_benchmark.py --config <golden_gen.yaml> \
+    --out /tmp/smoke_negative --force        # resume.mode: none, workers: 1
+
+# 3. now check it
+<your-python> check_acceptance.py --results-root /tmp/smoke_negative
+echo "exit: $?"          # MUST be non-zero, failing A1 on that one route
+
+# 4. put it back, and re-probe
+mv /tmp/negtest_barricade "$CARLA_ROOT/CarlaUE4/Content/RoadClosedBarricade"
+```
+
+**Step 2 is not optional, and skipping it produces a test that cannot fail.**
+`check_acceptance.py` is offline — it re-reads result JSON that is already on disk. Moving an
+asset cannot change a record written yesterday, so checking an *existing* results root after
+removing a prop passes every time and proves nothing.
+
+What the real test showed when it was first run: the route **completed with Driving Score
+100.0** while `ttr_dar.agent_type` recorded `vehicle.tesla.model3` instead of
+`static.prop.roadclosedbarricade`. CARLA had silently substituted a fallback vehicle. Nothing in
+the score, the status or the exit code betrayed it — A1 was the only thing that noticed. That is
+exactly the failure this directory exists to catch, and it is why the goldens are the point of
+the smoke split rather than its scores.
 
 Commit the bundle to `tests/goldens/`. The CI job `acceptance-goldens` flips from
 skipped-with-reason to running on the next push — it validates the bundle's integrity and its

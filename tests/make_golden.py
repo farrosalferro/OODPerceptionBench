@@ -130,6 +130,15 @@ def main() -> int:
     print(f"OOD-PerceptionBench golden builder  [{BUNDLE_VERSION}, binds to {BINDS_TO}]")
 
     reps = list(dict.fromkeys(args.replicate))
+    # Replicate roots are scratch directories on the machine that generated the bundle. Their
+    # ABSOLUTE PATHS were written into every route record until 2026-08-12, which put 27 private
+    # paths into a shipped artifact and was caught by the repository's own pre-push guard --
+    # after the bundle had already passed every acceptance check, because nothing downstream
+    # reads this field. It is provenance, and provenance in a published file has to be portable.
+    #
+    # The index is what actually carries meaning to a reader ("these are three independent
+    # runs"); the local path carries none. The operator's own log maps index back to directory.
+    rep_label = {d: f"replicate_{i}" for i, d in enumerate(reps, 1)}
     if len(reps) < 2 and not args.allow_single_replicate:
         print(f"\nERROR: {len(reps)} replicate given. At least 2 are required so the tolerance "
               f"can be measured rather than guessed.\n"
@@ -203,7 +212,7 @@ def main() -> int:
                 continue
             scores = rec.get("scores") or {}
             per_rep.append({
-                "replicate": d,
+                "replicate": rep_label[d],
                 "status": status,
                 "driving_score": round(float(ds), 4),
                 "route_completion": scores.get("score_route"),
