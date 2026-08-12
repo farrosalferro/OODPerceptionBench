@@ -4,10 +4,11 @@
 > (replacement assets + re-run) binds to arXiv v2, and scores from the two are **not**
 > comparable. Every report this runner writes carries that stamp.
 >
-> **This is a FIRST CUT, now partially validated on hardware.** The supervision logic is covered
-> by 222 automated tests. As of 2026-08-11 a real CARLA 0.9.15 server has executed routes under
-> it: single routes, and 8-route two-worker sweeps with GPU stacking and port isolation observed
-> live. **The full 475-route set has never been run, the SLURM backend is broken, and the
+> **This is a hardware-validated local first cut, not a production-scale runner.** The
+> supervision logic is covered by 222 automated tests. On 2026-08-11/12 CARLA 0.9.15 executed
+> single routes, two 8-route/two-worker sweeps with one-GPU stacking and port isolation observed
+> live, a real Ctrl-C/reap/resume cycle, and three independent nine-route PDM-Lite golden
+> replicates. **The full 475-route set has never been run, the SLURM backend is broken, and
 > multi-GPU mapping is unproven** — read `STATUS.md` §2 before trusting it with GPU-hours.
 
 Evaluate a CARLA Leaderboard 2.0 agent on the OOD-PerceptionBench route set, on one machine or
@@ -392,3 +393,4 @@ What they do **not** cover is anything that requires a running simulator. See `S
 
 - `DESIGN.md` — the locked decisions, with rationale. Read before changing anything structural.
 - `STATUS.md` — what is done, what is untested, and what must be validated on hardware.
+- `../docs/HARDWARE_VALIDATION_ISSUES.md` — measured defects and decisions; no silent repairs.

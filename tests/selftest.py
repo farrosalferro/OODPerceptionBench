@@ -250,7 +250,10 @@ class TestHarnessWithoutGoldens(TempCase):
     def test_example_golden_is_not_picked_up(self):
         """The shipped EXAMPLE must never be mistaken for a real bundle."""
         out = build_results(self.path("run"))
-        p = check(out)  # default --golden-dir is tests/goldens, which holds EXAMPLE.golden.json
+        golden_dir = self.path("example_only_goldens")
+        os.makedirs(golden_dir)
+        shutil.copy(os.path.join(HERE, "goldens", "EXAMPLE.golden.json"), golden_dir)
+        p = check(out, "--golden-dir", golden_dir)
         self.assertEqual(p.returncode, EXIT_INCONCLUSIVE, p.stdout + p.stderr)
 
 

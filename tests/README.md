@@ -140,21 +140,15 @@ could not check" is precisely what the evidence looks like.
 
 ## Goldens
 
-There is no golden bundle at v0.9 — **none, at any level**. Generating one needs a GPU, a running
-CARLA 0.9.15 and the installed content pack; none of that exists in CI or in the environment this
-release was assembled in, and a fabricated golden would be worse than none.
+v0.9 ships [`goldens/pdmlite_seed42_v0.9.golden.json`](goldens/pdmlite_seed42_v0.9.golden.json),
+measured on 2026-08-12 from three independent PDM-Lite output roots on CARLA 0.9.15. Every route
+had replicate scores `[100.0, 100.0, 100.0]`; the largest spread was 0.0 DS and the resulting
+tolerance is ±1.0 DS. The bundle covers `base` for all three categories, plus `visual_shift` and
+`geometric_shift` for **pedestrian** and `geometric_shift` for **static** — every level the six
+redistributable v0.9 assets permit. Static `visual_shift` and both vehicle shifts remain v1.0
+work because their twelve assets do not ship.
 
-> **Superseded claim, corrected 2026-08-04.** An earlier draft of this file said the v0.9 goldens
-> "cover the base level only, because 12 of 18 OOD props are not redistributable". Both halves
-> were wrong by the time they shipped. There are no goldens at any level, base included; and
-> **six of the eighteen props do ship**, so the level coverage a future bundle can reach is not
-> base-only. When a bundle is generated it covers the split above — `base` for all three
-> categories, plus `visual_shift` and `geometric_shift` for **pedestrian** and `geometric_shift`
-> for **static**, which is every level that a v0.9 install can actually run. What remains out of
-> reach is static `visual_shift` and both vehicle shifts, because those need the twelve props
-> that are not redistributable. Do not restate this as a base-level limitation.
-
-What ships is the format, the generator and the procedure:
+The measured bundle ships alongside its format, generator, and procedure:
 
 - [`goldens/README.md`](goldens/README.md) — what a golden is, and is not
 - [`goldens/GENERATING.md`](goldens/GENERATING.md) — the full procedure, PDM-Lite as reference
@@ -186,9 +180,9 @@ against it as INFO only.
 | `probe_blueprints.py` | pre-flight: registration + spawn + `type_id`, per blueprint. Needs CARLA, not a GPU sweep |
 | `check_acceptance.py` | the harness: A1–A4 over a run's output |
 | `make_golden.py` | build a golden bundle from replicate runs |
-| `selftest.py` | 30 tests of the harness itself; no CARLA, no GPU, runs in CI |
+| `selftest.py` | 34 tests of the harness itself; no CARLA, no GPU, runs in CI |
 | `configs/golden_generation.yaml.template` | runner config for the golden-generation runs |
-| `goldens/` | format, procedure, example — empty of real goldens at v0.9 |
+| `goldens/` | measured v0.9 bundle, format, regeneration procedure, and ignored example |
 | `reference/` | published seed-42 observations, for orientation only |
 
 The split's routes are **not** committed a second time. They are materialised on demand from
@@ -220,7 +214,8 @@ Honest list of what this does **not** cover, and what closes it:
 3. **Scenario families** — 2 of the 12 canonical scenarios are exercised. The split is a smoke
    test, not coverage; `tools/check_route_coverage.py` is what asserts every scenario class
    resolves.
-4. **The goldens themselves** — absent, so A4 has never run against real data anywhere.
+4. **Cross-machine spread** — the bundle has three independent roots on one RTX 3090 host; its
+   ±1.0 floor has not yet been confirmed by running the split on a second hardware/driver stack.
 
 None of these weaken A1 on the routes that *are* in the split, which is where the defensive value
 sits.

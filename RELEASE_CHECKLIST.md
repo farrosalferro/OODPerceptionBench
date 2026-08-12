@@ -30,12 +30,14 @@ is below; this file carries the parts a script cannot judge.
 - [x] `routes/` — 475 XMLs + `MANIFEST.tsv` (sha256) + `EXCLUSIONS.md` + `validate_routes.py`
       (**38/38 checks green**, all 475 checksums verified)
 - [x] `records/` — 8,550 rows × 64 columns, CSV + `load.py`, seed 42, 17 models + PDM-Lite
-- [x] `runner/` — `run_benchmark.py`, worker pool, resume, SLURM backend (**125 tests green**;
-      never executed against a real CARLA — see `runner/STATUS.md`)
+- [x] `runner/` — `run_benchmark.py`, worker pool, resume, SLURM backend (**222 tests green**;
+      local backend exercised against real CARLA; multi-GPU/full-scale open and SLURM broken —
+      see `runner/STATUS.md`)
 - [x] `docs/` — `replacing-props.md`, `ASSET_TRAPS.md`, the three `import_procedure_*.md`
       and the parameterised `stages/` scripts
 - [x] `classifier/` — the three dimension-checker notebooks (the admissibility rule itself)
-- [x] `tests/` — smoke split + harness + self-tests (**34 tests green**); goldens still absent
+- [x] `tests/` — smoke split + harness + self-tests (**34 tests green**) plus the measured
+      nine-route PDM-Lite v0.9 golden
 - [x] `assets/` — install / verify / attribution / checksums for the six shippable props
 
 ### Scope notes recorded at integration
@@ -78,14 +80,17 @@ is below; this file carries the parts a script cannot judge.
       build.
 - [ ] **The `EXCLUDED.md` §D judgement calls reviewed by a human.** Three files were excluded on
       a judgement call rather than a rule; a reviewer should agree before the set is frozen.
-- [ ] **A fresh clone on a machine with none of our infrastructure** completes
-      `setup.sh` → content-pack install → `tests/` green. Nothing else proves the config surface
-      is genuinely free of local defaults.
-- [ ] **CI green on `master`**, including the scheduled run — a red overlay job means new users
-      cannot install. *It was red from 2026-08-07 to 2026-08-10* (`check_no_cluster_paths`, on
-      review briefs that leaked private infrastructure into the public repo); the history was
-      rewritten and `tools/pre-push` now runs that check before a push rather than after.
-      **Install the hook in every clone:** `ln -sf ../../tools/pre-push .git/hooks/pre-push`.
+- [x] **Fresh GitHub clone validation** completed 2026-08-11/12: `setup.sh` applied all 26
+      patches and was idempotent; the release gate/hygiene checks and 222 runner tests passed;
+      explicit config paths drove real smoke routes and the nine-route golden flow. The stricter
+      “internal mounts do not exist on the host” H10 proof remains open and is not claimed here.
+- [x] **Push CI green on `master`** as of 2026-08-12: both `overlay-setup` and `acceptance`
+      passed on the pre-H6 head. The H6 commit must receive the same two green checks before this
+      ticket closes. **Install the hook in every clone:**
+      `ln -sf ../../tools/pre-push .git/hooks/pre-push`.
+- [ ] **First scheduled `overlay-setup` after the 2026-08-10 repair is green.** The latest
+      scheduled run is still the pre-repair failure; push CI is green, but a scheduled event has
+      not run on the repaired history yet. Do not silently count the old red schedule as green.
 - [ ] **The numpy pin decision reviewed.** Upstream has merged a numpy ≥ 1.24 compatibility fix
       *after* our pinned SHA. We stay on the older commit for reproducibility, which means users
       on modern numpy must pin `numpy<1.24`. If the runner or the environment documentation ends

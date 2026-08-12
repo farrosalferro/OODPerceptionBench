@@ -5,9 +5,11 @@
 > to arXiv v2; scores produced by the two are **not** comparable and the runner stamps which
 > one it targeted into every report it writes.
 >
-> **Status of the accompanying code: FIRST CUT. Not validated on real hardware.** See
-> `STATUS.md` for exactly what is and is not done. This document is the part meant to be
-> durable — it fixes the decisions that are expensive to change later.
+> **Status of the accompanying code: local first cut with bounded hardware validation.** Real
+> CARLA 0.9.15 runs have exercised local single/two-worker execution, ports, reaping,
+> interrupt/resume, failure reporting, and the nine-route acceptance split. Multi-GPU mapping,
+> the full 475-route scale, and SLURM remain unvalidated. See `STATUS.md` §2 for the exact
+> evidence. This document is the durable part: decisions that are expensive to change later.
 
 ---
 
@@ -597,8 +599,9 @@ values, and nothing else, are:
 > The `rc < 0` half has no such ambiguity. Raised by cross-review (`gpt-5.6-luna`, 2026-08-07)
 > and accepted as documented rather than closed: the clean fix is a `trap` in
 > `jobscript.render` writing the signal to a side channel, which removes the inference
-> entirely — but it changes the generated job script, the one artifact that has never run
-> against real CARLA, so it is deferred to first hardware validation (STATUS.md §2). That source is ours alone — nothing but this attempt's own
+> entirely — but it changes the generated job script, which has now run against real CARLA but
+> has not been measured with this signal side channel, so the change remains deferred pending a
+> dedicated hard-death experiment (STATUS.md §2). That source is ours alone — nothing but this attempt's own
 > wrapper sets its exit status — so it is never a shared-stderr artefact and, having a non-zero
 > `rc` by construction, it can never reach the demotion. `FAULT_PATTERNS` survives as a
 > *secondary* signal because the in-flight branch, where a simulator crashes under a hung
@@ -1323,13 +1326,11 @@ deliberately not results.
   settlement is reported as a warning naming the status and the attempt count, and earlier
   copies of the record are kept under `_runner/killed_records/`, so the ambiguity is visible in
   the artifact rather than silently resolved.
-- **Unvalidated.** Every claim here about what the evaluator writes and when is read from source
-  (`leaderboard_evaluator.py`, `statistics_manager.py`, `scenario_manager.py`) and from the
-  status distribution of the reference sweep. None of it has been exercised against real CARLA
-  by this runner. In particular, "an attempt killed by the wall clock while holding a final
-  record" has never been observed here; it is reasoned about, not measured — which is precisely
-  why the accounting for it is bounded on both sides rather than confident in either direction.
-  `STATUS.md` is not upgraded by this section.
+- **Partly observed, exact corner still unvalidated.** Real CARLA runs have exercised finalized
+  `Completed`, `Failed - TickRuntime`, and agent-setup-failure records plus interrupt-without-a-
+  record accounting. The specific case "an attempt killed by the wall clock while holding a
+  final record" has not been observed; it remains reasoned about rather than measured, which is
+  why its accounting is bounded on both sides. `STATUS.md` §2 is the evidence boundary.
 
 ---
 

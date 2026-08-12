@@ -2,31 +2,35 @@
 
 **Bundle version:** v0.9 · **Binds to:** arXiv v1
 
-## Status at v0.9: **empty by design**
+## Status at v0.9: **measured bundle present**
 
-There is no golden bundle in this directory. Goldens require a GPU, a running CARLA 0.9.15 and
-the installed content pack; none of that exists in CI or in the environment this release was
-assembled in. Shipping a fabricated one would be worse than shipping none.
+`pdmlite_seed42_v0.9.golden.json` was measured on 2026-08-12 using CARLA 0.9.15 and the installed
+v0.9 content pack. It contains three sequential one-worker replicates from separate output roots:
+all nine route scores are 100.0, maximum observed spread is 0.0 DS, and the policy floor gives
+an absolute tolerance of ±1.0 DS. The bundle itself carries the complete environment and agent
+provenance used to generate it.
 
-What ships instead:
+What ships:
 
 | File | What it is |
 |---|---|
 | [`GENERATING.md`](GENERATING.md) | the procedure, using PDM-Lite as reference agent |
 | [`golden_schema.json`](golden_schema.json) | the file format, field by field |
 | [`EXAMPLE.golden.json`](EXAMPLE.golden.json) | a worked example — **not usable**, see below |
+| [`pdmlite_seed42_v0.9.golden.json`](pdmlite_seed42_v0.9.golden.json) | the measured v0.9 smoke-split bundle |
 
 `check_acceptance.py` skips any file starting with `EXAMPLE`, so the example cannot be picked up
 by accident. Its numbers are placeholders and its provenance fields say so.
 
-## Consequence: the harness cannot report a pass
+## Consequence: the harness can report a measured pass
 
-With no golden bundle present, `check_acceptance.py` still runs assertions A1–A3 — which is
-where nearly all of the defensive value is, because A1 is the one that catches a missing asset —
-but it prints an `INCONCLUSIVE` banner and **exits 3**. Never 0.
+With the compatible bundle present, `check_acceptance.py` runs A1–A4 and exits 0 only when every
+route passes. Hardware validation removed a shipped static asset, executed its route into a fresh
+root, and observed CARLA silently substitute `vehicle.tesla.model3`; A1 failed even though the
+route status was `Completed` and its score was 100.0.
 
-That is deliberate. A benchmark harness that exits 0 when it could not check anything is exactly
-the failure mode this directory exists to prevent, one level up.
+If no compatible bundle is available, the harness still runs A1–A3 but exits 3
+(`INCONCLUSIVE`), never 0. That remains deliberate: unavailable A4 evidence is not a pass.
 
 ## What a golden is
 

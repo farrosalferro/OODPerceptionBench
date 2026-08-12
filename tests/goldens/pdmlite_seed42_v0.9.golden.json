@@ -1,0 +1,386 @@
+{
+  "schema": "ood-perceptionbench/golden/1",
+  "bundle_version": "v0.9",
+  "binds_to": "arXiv v1",
+  "reportable": false,
+  "split": {
+    "name": "smoke",
+    "tier": "all",
+    "path": "SMOKE_SPLIT.tsv",
+    "sha256": "a906fbd8a4cfdb3a872006f312a459625acf42d642fb59150bb9a51cfb586040",
+    "n_routes": 9
+  },
+  "reference_agent": {
+    "name": "pdmlite",
+    "version": "f6cbfb63de16192ac7742918377a9ee20a846354"
+  },
+  "environment": {
+    "carla_version": "0.9.15",
+    "content_pack_version": "v0.9",
+    "content_pack_sha256": "c9378dcb5758339aebfba536c47c847dcc7f5645cfb3a1949b83fe92a4d7f735",
+    "gpu": "NVIDIA GeForce RTX 3090, driver 580.82.09",
+    "os": "Linux-5.15.0-139-generic-x86_64-with-glibc2.31",
+    "python": "3.10.15",
+    "runner_version": "991591ac8534b1ee822ec8dc40d43f4ed313715c"
+  },
+  "protocol": {
+    "seed": 42,
+    "repetitions": 1,
+    "n_replicates": 3
+  },
+  "tolerance": {
+    "driving_score_abs": 1.0,
+    "policy": "max(1.0, 2.0 x largest observed run-to-run spread). Largest spread across 3 replicate(s) was 0.0 DS points.",
+    "max_observed_spread": 0.0
+  },
+  "generated": {
+    "utc": "2026-08-12T06:07:22Z",
+    "by": "tests/make_golden.py",
+    "procedure": "tests/goldens/GENERATING.md",
+    "notes": null
+  },
+  "routes": {
+    "static/construction_obstacle/base/route_24795_trafficwarning.xml": {
+      "route_sha256": "e7f89d918efc95291d2a1d71bf2e9c3cbcb3333a673dfbf4c425b51a0bf8095d",
+      "expected_blueprint_id": "static.prop.trafficwarning",
+      "observed_agent_type": "static.prop.trafficwarning",
+      "status": "Completed",
+      "driving_score": 100.0,
+      "route_completion": 100,
+      "infraction_penalty": 1.0,
+      "replicates": [
+        {
+          "replicate": "replicate_1",
+          "status": "Completed",
+          "driving_score": 100.0,
+          "route_completion": 100,
+          "infraction_penalty": 1.0,
+          "observed_agent_type": "static.prop.trafficwarning"
+        },
+        {
+          "replicate": "replicate_2",
+          "status": "Completed",
+          "driving_score": 100.0,
+          "route_completion": 100,
+          "infraction_penalty": 1.0,
+          "observed_agent_type": "static.prop.trafficwarning"
+        },
+        {
+          "replicate": "replicate_3",
+          "status": "Completed",
+          "driving_score": 100.0,
+          "route_completion": 100,
+          "infraction_penalty": 1.0,
+          "observed_agent_type": "static.prop.trafficwarning"
+        }
+      ],
+      "ds_spread": 0.0,
+      "published_seed42_driving_score": 100.0,
+      "published_seed42_delta": 0.0
+    },
+    "static/construction_obstacle/geometric_shift/route_24795_concreteroadbarrier.xml": {
+      "route_sha256": "7acc950c1d349ac20d9497e0ce5a5811ca517fa550d976d574eeff31ea239429",
+      "expected_blueprint_id": "static.prop.concreteroadbarrier",
+      "observed_agent_type": "static.prop.concreteroadbarrier",
+      "status": "Completed",
+      "driving_score": 100.0,
+      "route_completion": 100,
+      "infraction_penalty": 1.0,
+      "replicates": [
+        {
+          "replicate": "replicate_1",
+          "status": "Completed",
+          "driving_score": 100.0,
+          "route_completion": 100,
+          "infraction_penalty": 1.0,
+          "observed_agent_type": "static.prop.concreteroadbarrier"
+        },
+        {
+          "replicate": "replicate_2",
+          "status": "Completed",
+          "driving_score": 100.0,
+          "route_completion": 100,
+          "infraction_penalty": 1.0,
+          "observed_agent_type": "static.prop.concreteroadbarrier"
+        },
+        {
+          "replicate": "replicate_3",
+          "status": "Completed",
+          "driving_score": 100.0,
+          "route_completion": 100,
+          "infraction_penalty": 1.0,
+          "observed_agent_type": "static.prop.concreteroadbarrier"
+        }
+      ],
+      "ds_spread": 0.0,
+      "published_seed42_driving_score": 100.0,
+      "published_seed42_delta": 0.0
+    },
+    "static/construction_obstacle/geometric_shift/route_24795_roadclosedbarricade.xml": {
+      "route_sha256": "1b015b9d2d7193c431c2ef9659b9186b3dfab94453022ab6a8e6faa1d109c0d8",
+      "expected_blueprint_id": "static.prop.roadclosedbarricade",
+      "observed_agent_type": "static.prop.roadclosedbarricade",
+      "status": "Completed",
+      "driving_score": 100.0,
+      "route_completion": 100,
+      "infraction_penalty": 1.0,
+      "replicates": [
+        {
+          "replicate": "replicate_1",
+          "status": "Completed",
+          "driving_score": 100.0,
+          "route_completion": 100,
+          "infraction_penalty": 1.0,
+          "observed_agent_type": "static.prop.roadclosedbarricade"
+        },
+        {
+          "replicate": "replicate_2",
+          "status": "Completed",
+          "driving_score": 100.0,
+          "route_completion": 100,
+          "infraction_penalty": 1.0,
+          "observed_agent_type": "static.prop.roadclosedbarricade"
+        },
+        {
+          "replicate": "replicate_3",
+          "status": "Completed",
+          "driving_score": 100.0,
+          "route_completion": 100,
+          "infraction_penalty": 1.0,
+          "observed_agent_type": "static.prop.roadclosedbarricade"
+        }
+      ],
+      "ds_spread": 0.0,
+      "published_seed42_driving_score": 100.0,
+      "published_seed42_delta": 0.0
+    },
+    "pedestrian/dynamic_object_crossing/base/route_24224_0001.xml": {
+      "route_sha256": "89139f08bcc450439c6b679203b1f8d301a11ccba85a143b02e84b7ad26af4f1",
+      "expected_blueprint_id": "walker.pedestrian.0001",
+      "observed_agent_type": "walker.pedestrian.0001",
+      "status": "Completed",
+      "driving_score": 100.0,
+      "route_completion": 100,
+      "infraction_penalty": 1.0,
+      "replicates": [
+        {
+          "replicate": "replicate_1",
+          "status": "Completed",
+          "driving_score": 100.0,
+          "route_completion": 100,
+          "infraction_penalty": 1.0,
+          "observed_agent_type": "walker.pedestrian.0001"
+        },
+        {
+          "replicate": "replicate_2",
+          "status": "Completed",
+          "driving_score": 100.0,
+          "route_completion": 100,
+          "infraction_penalty": 1.0,
+          "observed_agent_type": "walker.pedestrian.0001"
+        },
+        {
+          "replicate": "replicate_3",
+          "status": "Completed",
+          "driving_score": 100.0,
+          "route_completion": 100,
+          "infraction_penalty": 1.0,
+          "observed_agent_type": "walker.pedestrian.0001"
+        }
+      ],
+      "ds_spread": 0.0,
+      "published_seed42_driving_score": 100.0,
+      "published_seed42_delta": 0.0
+    },
+    "pedestrian/dynamic_object_crossing/visual_shift/route_24224_astronaut.xml": {
+      "route_sha256": "b1b5b4c10554fc39cedecb06cfd9582f4a9b1da9d5fe88a79badca656e35a83c",
+      "expected_blueprint_id": "walker.pedestrian.astronaut",
+      "observed_agent_type": "walker.pedestrian.astronaut",
+      "status": "Completed",
+      "driving_score": 100.0,
+      "route_completion": 100,
+      "infraction_penalty": 1.0,
+      "replicates": [
+        {
+          "replicate": "replicate_1",
+          "status": "Completed",
+          "driving_score": 100.0,
+          "route_completion": 100,
+          "infraction_penalty": 1.0,
+          "observed_agent_type": "walker.pedestrian.astronaut"
+        },
+        {
+          "replicate": "replicate_2",
+          "status": "Completed",
+          "driving_score": 100.0,
+          "route_completion": 100,
+          "infraction_penalty": 1.0,
+          "observed_agent_type": "walker.pedestrian.astronaut"
+        },
+        {
+          "replicate": "replicate_3",
+          "status": "Completed",
+          "driving_score": 100.0,
+          "route_completion": 100,
+          "infraction_penalty": 1.0,
+          "observed_agent_type": "walker.pedestrian.astronaut"
+        }
+      ],
+      "ds_spread": 0.0,
+      "published_seed42_driving_score": 100.0,
+      "published_seed42_delta": 0.0
+    },
+    "pedestrian/dynamic_object_crossing/visual_shift/route_24224_firefighter.xml": {
+      "route_sha256": "29e225365400ce69bfb2925679513d18e5359fe7d999ef3b522c78bfb21bd1f2",
+      "expected_blueprint_id": "walker.pedestrian.firefighter",
+      "observed_agent_type": "walker.pedestrian.firefighter",
+      "status": "Completed",
+      "driving_score": 100.0,
+      "route_completion": 100,
+      "infraction_penalty": 1.0,
+      "replicates": [
+        {
+          "replicate": "replicate_1",
+          "status": "Completed",
+          "driving_score": 100.0,
+          "route_completion": 100,
+          "infraction_penalty": 1.0,
+          "observed_agent_type": "walker.pedestrian.firefighter"
+        },
+        {
+          "replicate": "replicate_2",
+          "status": "Completed",
+          "driving_score": 100.0,
+          "route_completion": 100,
+          "infraction_penalty": 1.0,
+          "observed_agent_type": "walker.pedestrian.firefighter"
+        },
+        {
+          "replicate": "replicate_3",
+          "status": "Completed",
+          "driving_score": 100.0,
+          "route_completion": 100,
+          "infraction_penalty": 1.0,
+          "observed_agent_type": "walker.pedestrian.firefighter"
+        }
+      ],
+      "ds_spread": 0.0,
+      "published_seed42_driving_score": 100.0,
+      "published_seed42_delta": 0.0
+    },
+    "pedestrian/dynamic_object_crossing/geometric_shift/route_24224_boar.xml": {
+      "route_sha256": "7a9071fb86a6a62913dea1318af3d0aad0ec03db04234971e7a7304a73cfc7b1",
+      "expected_blueprint_id": "walker.pedestrian.boar",
+      "observed_agent_type": "walker.pedestrian.boar",
+      "status": "Completed",
+      "driving_score": 100.0,
+      "route_completion": 100,
+      "infraction_penalty": 1.0,
+      "replicates": [
+        {
+          "replicate": "replicate_1",
+          "status": "Completed",
+          "driving_score": 100.0,
+          "route_completion": 100,
+          "infraction_penalty": 1.0,
+          "observed_agent_type": "walker.pedestrian.boar"
+        },
+        {
+          "replicate": "replicate_2",
+          "status": "Completed",
+          "driving_score": 100.0,
+          "route_completion": 100,
+          "infraction_penalty": 1.0,
+          "observed_agent_type": "walker.pedestrian.boar"
+        },
+        {
+          "replicate": "replicate_3",
+          "status": "Completed",
+          "driving_score": 100.0,
+          "route_completion": 100,
+          "infraction_penalty": 1.0,
+          "observed_agent_type": "walker.pedestrian.boar"
+        }
+      ],
+      "ds_spread": 0.0,
+      "published_seed42_driving_score": 100.0,
+      "published_seed42_delta": 0.0
+    },
+    "pedestrian/dynamic_object_crossing/geometric_shift/route_24224_deliveryrobot.xml": {
+      "route_sha256": "d2a5a00e667da18589d0012658a731f32a7a504cff86f1f5becbde6f15c190e1",
+      "expected_blueprint_id": "walker.pedestrian.deliveryrobot",
+      "observed_agent_type": "walker.pedestrian.deliveryrobot",
+      "status": "Completed",
+      "driving_score": 100.0,
+      "route_completion": 100,
+      "infraction_penalty": 1.0,
+      "replicates": [
+        {
+          "replicate": "replicate_1",
+          "status": "Completed",
+          "driving_score": 100.0,
+          "route_completion": 100,
+          "infraction_penalty": 1.0,
+          "observed_agent_type": "walker.pedestrian.deliveryrobot"
+        },
+        {
+          "replicate": "replicate_2",
+          "status": "Completed",
+          "driving_score": 100.0,
+          "route_completion": 100,
+          "infraction_penalty": 1.0,
+          "observed_agent_type": "walker.pedestrian.deliveryrobot"
+        },
+        {
+          "replicate": "replicate_3",
+          "status": "Completed",
+          "driving_score": 100.0,
+          "route_completion": 100,
+          "infraction_penalty": 1.0,
+          "observed_agent_type": "walker.pedestrian.deliveryrobot"
+        }
+      ],
+      "ds_spread": 0.0,
+      "published_seed42_driving_score": 100.0,
+      "published_seed42_delta": 0.0
+    },
+    "vehicle/hard_break/base/route_26456_mkz_2020.xml": {
+      "route_sha256": "f016ffac65681c6b3099254a993a97dfb301497159463423e311869423753d57",
+      "expected_blueprint_id": "vehicle.lincoln.mkz_2020",
+      "observed_agent_type": "vehicle.lincoln.mkz_2020",
+      "status": "Completed",
+      "driving_score": 100.0,
+      "route_completion": 100,
+      "infraction_penalty": 1.0,
+      "replicates": [
+        {
+          "replicate": "replicate_1",
+          "status": "Completed",
+          "driving_score": 100.0,
+          "route_completion": 100,
+          "infraction_penalty": 1.0,
+          "observed_agent_type": "vehicle.lincoln.mkz_2020"
+        },
+        {
+          "replicate": "replicate_2",
+          "status": "Completed",
+          "driving_score": 100.0,
+          "route_completion": 100,
+          "infraction_penalty": 1.0,
+          "observed_agent_type": "vehicle.lincoln.mkz_2020"
+        },
+        {
+          "replicate": "replicate_3",
+          "status": "Completed",
+          "driving_score": 100.0,
+          "route_completion": 100,
+          "infraction_penalty": 1.0,
+          "observed_agent_type": "vehicle.lincoln.mkz_2020"
+        }
+      ],
+      "ds_spread": 0.0,
+      "published_seed42_driving_score": 100.0,
+      "published_seed42_delta": 0.0
+    }
+  }
+}

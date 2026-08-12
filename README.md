@@ -7,8 +7,9 @@
 >
 > Twelve of the eighteen OOD props are still being replaced for licensing reasons, and their
 > routes re-run — so any score produced from the tree as it stands **will not be comparable**
-> to the table in the paper. The evaluation runner has also not been validated against real
-> hardware, and no acceptance goldens exist yet.
+> to the table in the paper. The local evaluation runner has now been exercised against CARLA
+> 0.9.15 on one RTX 3090, and a measured nine-route PDM-Lite acceptance golden ships. That does
+> **not** validate the full 475-route scale, cross-GPU placement, or the broken SLURM backend.
 >
 > A `v0.9.0` tag, a Zenodo DOI, and a citable record arrive when the paper goes to arXiv.
 
@@ -53,21 +54,21 @@ cells at p < 0.001.
 | Import procedures (static / walker / vehicle) | ✅ | ✅ |
 | Overlay patches + `setup.sh` + CI | ✅ | ✅ |
 | Content pack | 6 of 18 OOD props | replacement props for the other 12 |
-| Acceptance harness (`tests/`) | ✅ assertions A1–A3 | ✅ A1–A4 |
-| Acceptance goldens | **none** — see below | measured bundle for the smoke split |
+| Acceptance harness (`tests/`) | ✅ assertions A1–A4 | ✅ A1–A4 |
+| Acceptance goldens | measured PDM-Lite bundle for the 9-route smoke split | regenerate for v1.0 |
 | Zenodo DOI | — | ✅ |
 
-> **There is no golden bundle at v0.9, and `tests/goldens/` is empty of real goldens.** What
-> ships is the format, the generator and the procedure. Generating a golden needs a GPU, a
-> running CARLA 0.9.15 and the installed content pack; none of that existed where this release
-> was assembled, and a fabricated golden is worse than none — it would pin whatever was broken
-> at the moment it was minted and make the harness certify it forever.
+> **v0.9 ships `tests/goldens/pdmlite_seed42_v0.9.golden.json`.** It was measured on 2026-08-12
+> from three sequential, forced, one-worker PDM-Lite replicates with separate output roots on
+> CARLA 0.9.15. All nine routes scored 100.0 in all three replicates; maximum observed spread
+> was 0.0 DS and the policy floor gives a tolerance of **±1.0 DS**. The bundle retains every
+> replicate value and stamps the agent commit, content-pack digest, runner commit, Python, GPU,
+> and driver.
 >
-> The consequence is deliberate and load-bearing: with no goldens, `tests/check_acceptance.py`
-> runs assertions A1–A3 and exits **3 (INCONCLUSIVE)**, never 0. **A1 — did the intended
-> blueprint actually spawn — needs no golden and is where nearly all the defensive value sits**;
-> only A4 (driving score within tolerance) is blocked. Treat exit 3 as "this install is not known
-> to be good", not as a pass. Procedure to close it:
+> With that bundle, `tests/check_acceptance.py` runs A1–A4 and exits 0 only when all nine routes
+> pass. A1 directly caught CARLA silently substituting a Tesla when a shipped static asset was
+> removed during validation. Exit 3 remains meaningful when no compatible bundle is supplied:
+> it is **INCONCLUSIVE**, never a pass. Regeneration procedure:
 > [`tests/goldens/GENERATING.md`](tests/goldens/GENERATING.md).
 >
 > `tests/goldens/EXAMPLE.golden.json` is a worked example of the file format, not a golden. It
@@ -108,8 +109,9 @@ exactly one repository to clone. Full detail in [`patches/UPSTREAM.txt`](patches
 > **The pin is deliberately not upstream's current tip.** Upstream has since merged a
 > numpy ≥ 1.24 compatibility fix. Our patches apply cleanly to that newer commit too — the two
 > change sets are file-disjoint — but it modifies PDM-Lite internals, and PDM-Lite is the
-> reference agent the acceptance goldens will be generated with, so we pin the tree the
-> published records were produced against.
+> reference agent the acceptance golden was generated with, so we pin the tree the
+> published records were produced against. The shipped v0.9 golden is pinned to that measured
+> agent checkout.
 >
 > **Practical consequence:** at this pin, Bench2Drive still uses numpy aliases that numpy 1.24
 > removed. **Pin `numpy<1.24` in your evaluation environment.** Alternatively advance the pin
@@ -269,9 +271,11 @@ and carla_garage use. In short:
 2. Point `--agent` at that file and set the environment-activation command in your config, so
    the runner can launch your agent in its own environment.
 3. Run the acceptance test first (`tests/`) — it verifies your install spawns the right
-   blueprints before you spend GPU-hours on a wrong-but-plausible sweep. At v0.9 it ends at
-   exit **3 (INCONCLUSIVE)** because there is no golden bundle to compare scores against; a
-   failure of A1 (`blueprint_spawned`) still exits 1 and still means stop.
+   blueprints before you spend GPU-hours on a wrong-but-plausible sweep. The shipped v0.9
+   PDM-Lite golden enables A4 for a PDM-Lite smoke run; a run from another agent is not made
+   comparable merely by sharing the route paths. If no compatible golden is available, the
+   harness must end at exit **3 (INCONCLUSIVE)**. A failure of A1 (`blueprint_spawned`) still
+   exits 1 and still means stop.
 4. Report which route subset you ran. With the v0.9 content pack that is 237 of 475, and a
    number computed over a different subset is not comparable to ours.
 

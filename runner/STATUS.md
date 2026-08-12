@@ -1,15 +1,18 @@
-# Runner status — FIRST CUT
+# Runner status — local backend hardware-validated first cut
 
 > **Artifact version:** runner v0.9.0.dev0, for **OOD-PerceptionBench release v0.9**, which
 > binds to **arXiv v1**.
 >
 > **Read this before trusting the runner with GPU-hours.**
 
-A production runner for this benchmark is 1–2 weeks of work and cannot be finished without a
-machine that runs CARLA. What exists now is the part that is expensive to change later — the
-design decisions in `DESIGN.md` — plus a working implementation of them whose *logic* is
-covered by 222 automated tests, and whose *simulator interaction* was first executed against
-real CARLA on 2026-08-11 — partially, and the table in §2 says exactly how far.
+A production runner for this benchmark includes scale and multi-GPU evidence that this release
+does not yet have. What exists now is the part that is expensive to change later — the design
+decisions in `DESIGN.md` — plus a working local implementation whose *logic* is covered by 222
+automated tests and whose *simulator interaction* was exercised against CARLA 0.9.15 on
+2026-08-11 and 2026-08-12. Single-route execution, two-worker one-GPU stacking, exact port
+isolation, real Ctrl-C/reaping/resume, failure accounting, and a nine-route PDM-Lite golden were
+observed. The table in §2 states the remaining limits; notably multi-GPU placement, the full
+475-route scale, and SLURM are not validated.
 
 Nothing below should be read as "tested" unless it says so explicitly.
 
@@ -285,23 +288,24 @@ Also verified by hand:
 
 ---
 
-## 2. What is NOT done, and must be validated on real hardware
+## 2. Hardware-validation criteria and current evidence
 
-These are the acceptance criteria that no amount of local testing can discharge. **None
-of them has been attempted.**
+These criteria require observation rather than a stand-in evaluator. Dates and states below are
+the hardware evidence as of 2026-08-12. **CLOSED** means the stated criterion was observed;
+**PARTIAL** and **OPEN** name exactly what remains.
 
-| # | Must validate | Why it cannot be faked | Risk if wrong |
+| # | State | Observed evidence | Remaining limit or risk |
 |---|---|---|---|
-| H1 | A real route runs end to end: CARLA boots from `carla.root`, the agent binds, criteria attach, a finalized checkpoint lands in the mirrored path | Needs a CARLA server and a GPU | The whole thing is untested plumbing |
-| H2 | `--workers N` really runs N concurrent CARLA servers with no port collision, **demonstrated with N > physical GPU count** | The *allocator* is proven at N=64; whether CARLA honours the RPC port it is given under concurrency is empirical | Two routes silently share a simulator; results are garbage but plausible |
-| H3 | The **Vulkan adapter mapping** actually pins the simulator to the intended GPU | Requires watching `nvidia-smi` while N routes run | Every simulator lands on one GPU: throughput collapses, nothing errors |
-| H4 | Orphan reaping by RPC port finds and kills a real orphaned `CarlaUE4-Linux-Shipping` | The regex is written against the observed command line but never matched against a live process | VRAM piles up across retries until the node wedges |
-| H5 | `find_free_port` really returns our port unchanged when it is free | Read from the vendored source, not observed | The evaluator wanders into the next worker's window |
-| H6 | Real `Ctrl-C` mid-sweep reaps children *and their CARLA servers*, then resumes correctly | The integration test simulates interruption by deleting result files, which is **not** the same thing | Orphans + a torn view of what completed |
-| H7 | A real `Failed - TickRuntime` / `Agent crashed` route flows through retry and reporting as designed | Only synthetic records have been seen | Retry accounting may misclassify real failures |
-| H8 | The full 475-route set runs to completion at the expected ~0.12 GPU-h/route | — | Unknown scaling behaviour, undiscovered leaks |
-| H9 | **The entire SLURM backend** | Never executed against a scheduler | Everything — **and see the box below: it is now known-defective, not merely unvalidated** |
-| H10 | A fresh checkout on a machine with none of the internal storage runs the smoke split from the config file alone | The frozen routes and the smoke split now exist and are wired into `configs/reference_agent.yaml`, but the end-to-end run has never been executed | The headline acceptance criterion is unmet |
+| H1 | **CLOSED — 2026-08-11** | A real route reached `Completed`, DS 50.0, `duration_game` 41.85 s, attached criteria and populated `ttr_dar`; its finalized checkpoint and reference-agent log landed in the mirrored paths. | This proves plumbing, not useful model quality. |
+| H2 | **CLOSED — 2026-08-11** | Two workers ran eight real routes on one physical GPU twice. Both CARLA processes were live together; worker 0 exclusively owned RPC 20000–20002/TM 30000 and worker 1 owned 20010–20012/TM 30010. | Larger worker counts and multi-node execution are unmeasured. |
+| H3 | **OPEN / one-GPU partial — 2026-08-11** | On the one-GPU host, both agent and simulator used CUDA 0/Vulkan 0 and both CARLA commands carried `-graphicsadapter=0`. | Requires at least two physical GPUs to prove distinct mappings do not collapse onto adapter 0. |
+| H4 | **CLOSED — 2026-08-11/12** | Normal teardown and a real mid-sweep Ctrl-C reaped both evaluator/CARLA trees. No process or assigned listener survived before resume. | A brief self-clearing busy port was measured separately; refusing that dirty launch was correct. |
+| H5 | **CLOSED — 2026-08-11** | Live listener and generated-job observations showed the evaluator retained each configured free RPC/TM base exactly; no silent relocation crossed a worker window. | Only the local backend was measured. |
+| H6 | **CLOSED — 2026-08-12** | Ctrl-C exited 3 after writing state/report; interrupted routes charged no retry axis and stayed unfinished. Resume ran exactly the unfinished routes, then a third invocation launched nothing. | None for the measured local two-worker case. |
+| H7 | **CLOSED — 2026-08-11/12** | Three real `Failed - TickRuntime` records were settled and reported complete at the configured zero retry budget. Eight deliberate setup failures each charged exactly one record attempt; rerun changed no counters and still exited 0 with all routes settled. | Hard-death/fault-pattern cases were not induced on hardware. |
+| H8 | **OPEN** | The largest run was nine smoke routes. Eight-route constant-velocity sweeps measured 0.044–0.079 physical GPU-hours/route. | The full 475-route run and the ~0.12 GPU-h/route figure for an inference model remain unvalidated. |
+| H9 | **OPEN — known broken** | No scheduler run was attempted. Stand-in-scheduler review already proves fatal defects described below. | Do not use `execution.backend: slurm`. |
+| H10 | **PARTIAL — 2026-08-11/12** | A fresh GitHub clone ran setup twice (26/26 patches, idempotent), 222 runner tests, a strict 475-route dry run, real smoke routes, and the nine-route PDM-Lite golden/acceptance flow with every path supplied by config. | The host still had the maintainers' internal mounts available; the stronger “those mounts do not exist” portability proof must be repeated externally. |
 
 > ### ⚠ The SLURM backend is BROKEN. Do not use it.
 >
@@ -338,21 +342,15 @@ of them has been attempted.**
 > slurm` should be treated as unimplemented.** The local backend is unaffected — every one of
 > these lives in `slurm.py` or in a path only it takes.
 
-### Hardware validation: what has actually run (as of 2026-08-11)
+### Hardware-validation measurement notes
 
-Three tickets of the step-2 plan are done on a **single-GPU** host (1× RTX 3090, CARLA 0.9.15).
-This table records observations, not intentions; everything not listed is still unvalidated.
-
-| Item | State | Evidence |
-|---|---|---|
-| H1 — a real route runs end to end | **CLOSED** | `Completed`, `score_composed 50.0`, `duration_game 41.85` s, criteria attached and `ttr_dar` populated, finalized checkpoint at the mirrored path |
-| H2 — `--workers N` with no port collision, N > physical GPUs | **CLOSED** | 2 workers on 1 GPU, 8/8 settled, twice. Worker 0 owned RPC 20000–20002 / TM 30000, worker 1 owned 20010–20012 / TM 30010; no port ever observed owned twice |
-| H4 — orphan reaping | **CLOSED** | no CARLA process or listener remained after either sweep; the runner logged each process tree it reaped before reusing a worker |
-| H7 — a real `Failed - TickRuntime` flows through retry and reporting | **CLOSED** | 3 of 8 smoke routes settled that way on real hardware and were correctly counted **complete at exit 0** — the degenerate-model contract, confirmed outside the test harness for the first time |
-| H10 — fresh clone installs and passes | **PARTIAL** | clone → `setup.sh` (26/26 patches, idempotent) → gate → 222 tests all pass on the published artifact; the content-pack half is done, the smoke split is not yet golden-checked |
-| H3 — Vulkan adapter pins the simulator to the intended GPU | **OPEN — cannot be closed here** | needs ≥2 physical GPUs; on one GPU `cuda:0/vulkan:0` is the only configuration and the failure mode is unobservable |
-| H6 — real Ctrl-C reaps children *and* their CARLA servers, then resumes correctly | **CLOSED** | one Ctrl-C mid-sweep reaped both worker CARLA trees, wrote state and report, exited **3**; no process or listener survived. Interrupted routes charged **zero** on every axis and stayed unfinished — cross-review findings 2 and 4, confirmed on real processes for the first time. The resume then ran exactly the 8 unfinished routes and adopted nothing |
-| H5, H8, H9 | **OPEN** | H5 (goldens) not yet reached; H8 (full 475) not attempted; H9 (SLURM) known broken |
+All observations above came from one **single-GPU** host (1× RTX 3090, driver 580.82.09,
+CARLA 0.9.15). The PDM-Lite acceptance bundle was generated on 2026-08-12 from three forced,
+sequential, one-worker replicates in separate roots. All nine routes completed at DS 100.0 in
+all three replicates; maximum spread was 0.0 and the bundle tolerance is ±1.0 DS. Removing one
+shipped static asset and rerunning its route produced a plausible `Completed`, DS 100.0 result
+with a Tesla fallback, which A1 correctly rejected. The active defects and decisions found by
+these runs are consolidated in [`../docs/HARDWARE_VALIDATION_ISSUES.md`](../docs/HARDWARE_VALIDATION_ISSUES.md).
 
 **Measured 2026-08-12, and it changed a shipped default.** At the previously-shipped
 `infra_budget: 1`, a worker's own RPC port was still occupied after the reaper ran *and* after
@@ -367,14 +365,15 @@ sweeps. That is *below* the 0.12 planning figure, but it was measured with the c
 reference agent, which does no inference — it does **not** confirm the figure for a real model,
 and should not be quoted as if it did.
 
-**Recommended validation order** (cheapest first, each gates the next):
+**Remaining validation order** (cheapest first, each gates the next):
 
-1. `--dry-run` against the real route tree — confirms discovery and the manifest check. Free.
-2. Reference agent, `--limit 1`, `--workers 1`. Covers H1, H3 (partially), H5. ~15 min.
-3. Reference agent, `--limit 8`, `--workers 4`, watching `nvidia-smi`. Covers H2, H3, H4. ~30 min.
-4. `Ctrl-C` mid-run, then re-run. Covers H6. ~15 min.
-5. A real model on one category (70 static routes). Covers H7, H8. ~8 GPU-h.
-6. Only then the SLURM backend, one route at a time.
+1. Repeat the nine-route acceptance run on a host where the maintainers' internal mounts do not
+   exist. Closes the remaining H10 wording.
+2. Repeat the two-worker live GPU observation on a host with at least two physical GPUs. Closes
+   H3 if agents and simulators spread together.
+3. Run a real inference model on one category, then the full 475-route set if stable. Measures
+   the remaining H8 scale and throughput claim.
+4. Do not attempt SLURM until its known defects are deliberately repaired and reviewed.
 
 ---
 
@@ -382,9 +381,9 @@ and should not be quoted as if it did.
 
 | Gap | Impact | Suggested disposition |
 |---|---|---|
-| **Smoke split never run through this runner** | The smoke split now exists (`tests/smoke/SMOKE_SPLIT.tsv`, materialized by `tests/smoke/materialize.py`), and `configs/reference_agent.yaml` is wired to it — but the headline acceptance criterion ("a fresh checkout runs the smoke split end to end") has still never been executed, because nothing here has touched a real CARLA server. | Run it on a machine with CARLA 0.9.15 before the tag. This is the single highest-value outstanding check. |
+| **Fresh-host portability is only partially closed** | The fresh GitHub clone ran real smoke routes and the golden flow, but on a host where internal mounts still existed. Config paths were explicit and no internal default was observed. | Repeat the nine-route flow on a genuinely external host; tracked as HV-09. |
 | **No liveness probe** | A CARLA server that hangs without exiting is caught only by `execution.route_timeout_s`, so a hung route burns the full timeout. A checkpoint-mtime stall detector would cut that to minutes. | Designed, not implemented. Worth adding before a 475-route sweep. |
-| **`environment.activate` is unvalidated shell** | A typo produces a confusing failure inside the job script rather than a config error. | Add a preflight that runs the activation lines plus `python -c "import carla"` once, before the sweep. Cheap and high value. |
+| **`environment.activate` does not prove interpreter selection** | H5 measured bare `python3` resolving to system Python even after activation, leading to no-record retries and quarantine. | Decide on exact-interpreter documentation or a dependency preflight; tracked as HV-01. |
 | **No CARLA version assertion** | The content pack is hard-locked to CARLA 0.9.15 (the factory assets overwrite base content). A user on 0.9.14 gets missing props, which **fail silently with a plausible score**. | Add a preflight that reads the CARLA version and hard-fails on mismatch. This is the §3.3 failure class and belongs in the runner, not only in the acceptance harness. |
 | **No blueprint-spawn assertion** | Same failure class: the runner cannot tell whether the intended OOD prop actually spawned. | That is what `tests/` is for. The runner should eventually surface that check as an opt-in flag. |
 | **An unexpected exception mid-sweep exits 2 and writes no report** | `main()` catches everything not already handled and returns `EXIT_CONFIG`. Non-zero, so the exit contract holds and `state.json` is still saved — but exit 2 means "configuration or preflight error", which sends an operator debugging their config when the sweep actually died 300 routes in. The per-route results on disk are fine and a re-run resumes correctly; only the diagnosis and the report are lost. | Split the handler: before the sweep starts keep exit 2; once `runner.run()` is under way, build and write the report, then exit 1. Small, worth doing before a 475-route sweep. |
@@ -427,10 +426,14 @@ from the internal orchestrators' behaviour, and should be confirmed rather than 
   against it: the classes of bug that survive review are exactly the ones only a real sweep
   surfaces. **The cross-review found more than the first pass did, which is itself a reason to
   treat the untested surfaces below as likelier to be wrong than they look.**
-- **Validation:** zero hardware validation. Every interaction with CARLA is written from a
-  careful reading of the vendored evaluator, not from observation.
-- **Not started:** SLURM execution, the smoke split, the CARLA-version and blueprint-spawn
-  preflights.
+- **Validation:** the local backend has real CARLA evidence for single-route plumbing,
+  two-worker one-GPU stacking and ports, reaping/interrupt/resume, real settled failures, and the
+  nine-route PDM-Lite acceptance bundle. The exact boundaries are the §2 table, not a general
+  production claim.
+- **Not started or still open:** multi-GPU placement, the full 475-route scale run, a genuinely
+  external-host H10 repeat, and all SLURM execution. CARLA-version and blueprint-spawn runner
+  preflights remain design gaps; the separate acceptance probe has been exercised live.
 
-Estimated remaining effort to the acceptance bar: **3–5 days of hands-on time on a
-machine with GPUs**, most of it in items H1–H6, plus whatever the first real sweep exposes.
+The next decisions are listed in
+[`docs/HARDWARE_VALIDATION_ISSUES.md`](../docs/HARDWARE_VALIDATION_ISSUES.md); this consolidation
+does not silently turn any of them into implementation work.

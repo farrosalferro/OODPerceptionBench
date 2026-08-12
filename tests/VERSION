@@ -7,12 +7,11 @@ split_routes: 9
 split_tiers:
   core: 6
   all: 9
-goldens_present: false
+goldens_present: true
 goldens_reason: >
-  Goldens require a GPU, a running CARLA 0.9.15 and the installed content pack. None of that
-  was available where this release was assembled, and a fabricated golden is worse than none.
-  check_acceptance.py therefore exits 3 (INCONCLUSIVE) rather than 0 until a bundle lands.
-  Procedure: goldens/GENERATING.md
+  The PDM-Lite seed-42 v0.9 bundle was generated on CARLA 0.9.15 from three independent
+  one-worker replicates with separate output roots. check_acceptance.py now runs A1-A4 against
+  that measured bundle. Procedure and provenance: goldens/GENERATING.md and the bundle itself.
 reportable: false
 reportable_reason: >
   Nine routes cannot approximate a claim computed over 55 base routes. Smoke-split scores must
