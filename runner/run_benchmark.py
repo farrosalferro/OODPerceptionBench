@@ -534,8 +534,24 @@ class Runner:
         """
         task = attempt.task
         infra_budget = int(self.cfg.retry["infra_budget"])
-        self.consecutive_infra[attempt.worker] = self.consecutive_infra.get(
-            attempt.worker, 0) + 1
+        # The quarantine streak tracks ONE population: attempts where *nothing ran at all*.
+        # An attempt that launched, loaded the map and drove before breaching route_timeout_s
+        # produced no record -- so the ROUTE's budget is charged, because it still has to settle
+        # in a finite number of attempts -- but it is not evidence against the WORKER.
+        #
+        # This is the call 6A.5 already makes one cell over, for an abnormal end holding a
+        # crash-shaped record: a worker that ran a route is not demonstrably wedged, and has not
+        # proved itself either, so the streak is left ALONE rather than advanced or cleared.
+        # Advancing it here let three slow routes in a row quarantine a healthy worker and abort
+        # the sweep -- reporting a wedged GPU, on a machine whose GPU was idle and fine.
+        #
+        # The test is the TIMEOUT outcome specifically, not `never_started`. An attempt that
+        # launched and then died without a record is a *fast* failure: it looks far more like a
+        # sick worker than like a route that drove for a full route_timeout_s, so it still
+        # advances the streak. Only breaching the wall clock proves the worker was working.
+        if attempt.outcome is not AttemptOutcome.TIMEOUT:
+            self.consecutive_infra[attempt.worker] = self.consecutive_infra.get(
+                attempt.worker, 0) + 1
         # The streak is the gate; the total is the audit trail and is never cleared.
         st.attempts_infra += 1
         st.attempts_infra_total += 1
@@ -590,9 +606,17 @@ class Runner:
         if self.consecutive_infra.get(worker, 0) < limit or worker in self.quarantined:
             return
         self.quarantined.append(worker)
-        msg = (f"worker {worker} quarantined after {limit} consecutive infrastructure failures. "
-               f"That pattern -- one worker failing while others progress -- is the signature of "
-               f"a wedged GPU. Re-probe that device before reusing it.")
+        # Say only what the counter actually counted. The old text asserted "one worker failing
+        # while others progress", which is not a pattern that can occur at workers: 1 -- the
+        # configuration a single-GPU machine is required to use -- and named a wedged GPU as the
+        # sole cause, sending operators to re-probe a device that was healthy every time. A
+        # squatted port block was always the other cause; _charge_infra says so, the message did
+        # not.
+        msg = (f"worker {worker} quarantined after {limit} consecutive launch failures -- "
+               f"attempts where nothing ran at all. The two causes are a wedged GPU and a port "
+               f"block that stays occupied; check both before reusing this worker. Re-probe the "
+               f"device, and confirm the worker's ports are free in EVERY TCP state, not just "
+               f"LISTEN -- a socket in TIME_WAIT refuses the bind exactly like a live server.")
         log.error(msg)
         self.warnings.append(msg)
         try:

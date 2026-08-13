@@ -262,9 +262,13 @@ def build_tasks(xmls: Sequence[Path], routes_root: Path, out_root: Path, base_se
 #: through it, because a recovery an operator cannot find is not a recovery (DESIGN.md 6A.5,
 #: the termination argument, and 6A.8).
 INFRA_RECOVERY_HINT = (
-    "Repair the infrastructure, then re-run with --retry-infra-exhausted, which clears ONLY "
-    "the infrastructure counter of routes that hit this gate; every record on disk and every "
-    "other budget is left untouched."
+    "If you have actually repaired something -- freed the ports, fixed or swapped the GPU -- "
+    "re-run with --retry-infra-exhausted, which clears ONLY the infrastructure counter of "
+    "routes that hit this gate; every record on disk and every other budget is left untouched. "
+    "Do NOT pass it unconditionally from a restart loop. It hands these routes a fresh budget "
+    "whether or not anything was repaired, so a route that hangs rather than fails is retried "
+    "for as long as the loop runs, at one execution.route_timeout_s per attempt, while the loop "
+    "reports progress."
 )
 
 

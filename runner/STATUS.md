@@ -382,7 +382,7 @@ and should not be quoted as if it did.
 | Gap | Impact | Suggested disposition |
 |---|---|---|
 | **Fresh-host portability is only partially closed** | The fresh GitHub clone ran real smoke routes and the golden flow, but on a host where internal mounts still existed. Config paths were explicit and no internal default was observed. | Repeat the nine-route flow on a genuinely external host; tracked as HV-09. |
-| **No liveness probe** | A CARLA server that hangs without exiting is caught only by `execution.route_timeout_s`, so a hung route burns the full timeout. A checkpoint-mtime stall detector would cut that to minutes. | Designed, not implemented. Worth adding before a 475-route sweep. |
+| **No liveness probe** | A CARLA server that hangs without exiting is caught only by `execution.route_timeout_s`, so a hung route burns the full timeout. A checkpoint-mtime stall detector would cut that to minutes. **Measured on hardware (2026-08-13):** a hung route emits `> Running the route`, one agent tick at `Ratio = 0.000x`, then nothing for the remaining ~39 min of a 3600 s budget. At `infra_budget: 3` a permanently hanging route costs **three wall-clock hours** before it is skipped. | Designed, not implemented. Now the largest remaining cost in this class — the two accounting defects around it were fixed 2026-08-13 (see below). |
 | **`environment.activate` does not prove interpreter selection** | H5 measured bare `python3` resolving to system Python even after activation, leading to no-record retries and quarantine. | Decide on exact-interpreter documentation or a dependency preflight; tracked as HV-01. |
 | **No CARLA version assertion** | The content pack is hard-locked to CARLA 0.9.15 (the factory assets overwrite base content). A user on 0.9.14 gets missing props, which **fail silently with a plausible score**. | Add a preflight that reads the CARLA version and hard-fails on mismatch. This is the §3.3 failure class and belongs in the runner, not only in the acceptance harness. |
 | **No blueprint-spawn assertion** | Same failure class: the runner cannot tell whether the intended OOD prop actually spawned. | That is what `tests/` is for. The runner should eventually surface that check as an opt-in flag. |
@@ -390,6 +390,34 @@ and should not be quoted as if it did.
 | SLURM: no array jobs | One `sbatch` per route is 475 submissions. Works, but an array job would be kinder to the scheduler. | Deferred. |
 | SLURM: node-level port collisions | Ports come from the deterministic allocator, but two *independent* runs by different users on one node could still collide. | Document; consider deriving the base from the SLURM job ID. |
 | No structured progress output | Progress is log lines only; long sweeps want a machine-readable heartbeat. | `state.json` is already written continuously and can be polled. Good enough for v0.9. |
+
+### Fixed 2026-08-13 — hang accounting
+
+Found by the first real ML model to run through this runner (TFPP, seed 42), 14 routes into a
+70-route static sweep. Three defects, none reachable without hardware:
+
+1. **A wall-clock timeout advanced the worker-quarantine streak.** Three hanging routes in a row
+   therefore quarantined the *only* worker and aborted the sweep, leaving every remaining route
+   unattempted. The streak's own docstring says it tracks attempts where *nothing ran at all*; a
+   route that drove for a full `route_timeout_s` is the opposite of that. It now advances on
+   every no-record outcome **except** `TIMEOUT` — a fast death without a record still counts,
+   because that does look like a sick worker. Regression test:
+   `test_timeouts_do_not_quarantine_a_worker_that_is_demonstrably_running`.
+2. **The quarantine message asserted a pattern that cannot occur at `workers: 1`** — "one worker
+   failing while others progress" — and named a wedged GPU as the only cause. Both halves sent
+   the operator to re-probe a device that was healthy every time; the real cause was a socket
+   still in `TIME_WAIT`. `_charge_infra` had always named the port block as the other cause; the
+   user-facing text had not. Fixed in the log line and in the report section.
+3. **`INFRA_RECOVERY_HINT` coached an unconditional retry loop.** The runner prints it on every
+   quarantine, so the natural response is to script `--retry-infra-exhausted`. But a timeout is
+   charged to `attempts_infra`, which is exactly the counter that flag clears, so a hung route
+   gets a fresh budget on every restart and is retried forever at one `route_timeout_s` per
+   attempt — while the loop reports progress. The flag's mechanics are unchanged and correct
+   after a genuine repair; the guidance now says plainly not to pass it unconditionally.
+
+Note the interaction: `killed_budget` sounds like the budget that governs a killed route, but a
+wall-clock kill is charged to `attempts_infra`, so `killed_budget` never applies to a hang. That
+is unchanged and still worth knowing when reading a ledger.
 | Windows / macOS | `/proc` scanning and `killpg` are Linux-only. | Out of scope; CARLA + this benchmark are Linux. |
 
 ---

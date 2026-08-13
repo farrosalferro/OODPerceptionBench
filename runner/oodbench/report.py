@@ -294,8 +294,11 @@ class Report:
         if self.quarantined_workers:
             lines += ["", f"## Quarantined workers: {self.quarantined_workers}",
                       "",
-                      "Repeated infrastructure failures on the same worker are the signature of "
-                      "one wedged GPU. Re-probe that device before reusing it."]
+                      "Repeated *launch* failures on one worker -- attempts where nothing ran "
+                      "at all -- point at a wedged GPU or at a port block that stays occupied. "
+                      "Check both: re-probe the device, and confirm the worker's ports are free "
+                      "in every TCP state, not just LISTEN. A socket lingering in TIME_WAIT "
+                      "refuses the bind exactly like a live server would."]
 
         if self.warnings:
             lines += ["", "## Warnings", ""] + [f"- {w}" for w in self.warnings]

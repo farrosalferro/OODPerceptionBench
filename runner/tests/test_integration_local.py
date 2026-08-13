@@ -367,6 +367,36 @@ class TestFailureHandling(IntegrationBase):
         rep = self.report()
         self.assertEqual(rep["quarantined_workers"], [0])
 
+    def test_timeouts_do_not_quarantine_a_worker_that_is_demonstrably_running(self):
+        """A route that drove for a full ``route_timeout_s`` proves the worker WORKS.
+
+        Charging the wall-clock kill to the quarantine streak let slow routes in a row pull a
+        healthy worker and abort the whole sweep -- reported to the operator as the signature
+        of a wedged GPU, on a machine whose GPU was idle and error-free. Found on hardware 14
+        routes into a real 70-route sweep: three consecutive hanging routes quarantined the
+        only worker, and every remaining route went unattempted.
+
+        The routes still do not settle -- a hang produces no result and must stay unsettled --
+        so this is EXIT_PARTIAL. What must NOT happen is the no-usable-GPU abort, because that
+        stops the sweep dead on routes that have nothing wrong with the machine.
+
+        Contrast with the test above: an attempt that launches and dies *fast* without a record
+        still advances the streak. Only breaching the wall clock is proof the worker ran.
+        """
+        for i in range(4):
+            self.site.add_route(f"static/s1/base/route_{i}_a.xml")
+        cfg = self.site.config(
+            execution={"route_timeout_s": 3, "poll_interval_s": 1, "post_kill_cooldown_s": 0},
+            retry={"infra_budget": 1, "worker_quarantine_after": 2})
+        code = self.run_cli(cfg, mode="hang")
+        rep = self.report()
+        self.assertEqual(rep["quarantined_workers"], [],
+                         "a timeout means the route ran; that is not evidence of a wedged GPU")
+        self.assertEqual(code, EXIT_PARTIAL)
+        self.assertEqual(len(self.site.trace_rows()), 4,
+                         "every route must still be attempted -- quarantine aborted the sweep "
+                         "before reaching the later ones")
+
 
 class TestPreflightAndConfig(IntegrationBase):
 
