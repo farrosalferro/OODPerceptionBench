@@ -12,6 +12,39 @@ version.
 
 ---
 
+## 0. Prerequisite — CARLA's additional maps
+
+**Before the asset pack, your CARLA build needs `AdditionalMaps_0.9.15`.** The packaged CARLA
+0.9.15 release ships Town01–Town07 and Town10 only. Town11, Town12 and Town13 are a separate
+download, and **63% of this benchmark's routes are set in them**:
+
+| category | routes needing the additional maps |
+|---|---|
+| static | 49 of 70 (70%) |
+| pedestrian | 90 of 162 (55%) |
+| vehicle | 162 of 243 (66%) |
+| **total** | **301 of 475 (63%)** |
+
+```bash
+cd /path/to/CARLA_0.9.15
+mkdir -p Import && cd Import
+wget https://carla-releases.s3.us-east-005.backblazeb2.com/Linux/AdditionalMaps_0.9.15.tar.gz
+cd .. && ./ImportAssets.sh
+```
+
+Verify before going further — this must list `Town11`, `Town12` and `Town13`:
+
+```bash
+ls /path/to/CARLA_0.9.15/CarlaUE4/Content/Carla/Maps/ | grep -E '^Town1[123]$'
+```
+
+> **The nine-route golden bundle cannot catch this.** Its routes are set in Town02, Town03 and
+> Town04, all of which are in the base build. A CARLA install without the additional maps passes
+> every golden and then fails on roughly two thirds of the benchmark. Run the check above rather
+> than inferring map coverage from a green golden run.
+
+---
+
 ## 1. What you get
 
 | Tarball | Contents | Licence | Download |

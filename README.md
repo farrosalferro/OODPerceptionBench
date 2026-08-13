@@ -102,6 +102,7 @@ and weekly on a schedule. If that badge is red, do not trust a fresh install.
 | Commit date | 2025-12-28 |
 | **Pinned on** | **2026-08-03** |
 | Simulator | CARLA **0.9.15** (must match exactly — see [`assets/INSTALL.md`](assets/INSTALL.md)) |
+| Maps | CARLA **+ `AdditionalMaps_0.9.15`** — Town11/12/13 are not in the base build and **301 of 475 routes (63%)** are set in them. The golden bundle is Town02/03/04 and cannot detect the omission |
 
 Bench2Drive is vendored *inside* carla_garage upstream-side; it is not a submodule, so there is
 exactly one repository to clone. Full detail in [`patches/UPSTREAM.txt`](patches/UPSTREAM.txt).
@@ -149,7 +150,8 @@ cd OODPerceptionBench
 #    rejected hunk; safe to re-run (idempotent).
 ./setup.sh --upstream-dir ./third_party/carla_garage
 
-# 2. Install CARLA 0.9.15 yourself, then the content pack:
+# 2. Install CARLA 0.9.15 yourself, THEN AdditionalMaps_0.9.15 (Town11/12/13 are
+#    not in the base build and 63% of routes need them), then the content pack:
 #    see assets/INSTALL.md  <-- do not skip, see "Silent failure" below
 
 # 3. Run. Every path comes from your config file; there are no built-in defaults.
