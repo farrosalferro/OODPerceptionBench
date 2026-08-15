@@ -329,7 +329,9 @@ the hardware evidence as of 2026-08-12. **CLOSED** means the stated criterion wa
 > preserved and each job's configured Vulkan adapter selected, held disjoint RPC/TM ports, and were
 > reaped with no orphan. Against the local backend, SLURM matched status and every §6A axis for the
 > same nine routes and seed. C1 (checkpoint parent) and C2 (signal→bounded-axis, not model verdict)
-> are closed on hardware; a cancelled job charges the bounded axis and publishes no model verdict.
+> are closed on hardware: a cancel or signal maps to the bounded *killed* axis rather than the
+> model's record budget, and a crash-shaped record is only accepted as the verdict after that
+> budget is spent — exactly as the local backend settles it.
 >
 > **Measured limits.** Validation is at two-way concurrency on a single node; the full 475-route
 > scale and larger multi-node fan-out are unmeasured. There is no early liveness probe (§3), so a

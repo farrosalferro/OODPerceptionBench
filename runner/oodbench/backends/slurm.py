@@ -1,8 +1,11 @@
 """SLURM backend -- one job per route.
 
-**FIRST CUT, NEVER EXECUTED.** It shares the planning, resume, retry and reporting logic with
-the local backend and is written against the same interface, but no part of it has been run
-against a real scheduler. Treat every line as unverified.
+**Validated 2026-08-15 (STATUS.md H9).** It shares the planning, resume, retry and reporting
+logic with the local backend and is written against the same interface. It has been run against a
+real scheduler at two-way concurrency on one node (one full route category, seed 42), matching the
+local backend's status and section-6A axes. Not yet measured at the full 475-route scale or larger
+multi-node fan-out, and it has no early liveness probe (a transient simulator freeze is caught only
+by ``execution.route_timeout_s``).
 
 Design notes (DESIGN.md section 10):
 
@@ -114,9 +117,9 @@ class SlurmBackend(Backend):
                       "execution.workers=%d is not used by this backend",
                       self.concurrency, self.cfg.workers)
         self.log.warning(
-            "the SLURM backend is a FIRST CUT and has never been run against a real scheduler. "
-            "Submit a single route first and read the generated job script before launching a "
-            "full sweep."
+            "the SLURM backend is validated at two-way concurrency on one node, not at the full "
+            "475-route scale or larger multi-node fan-out. Submit a single route first and read "
+            "the generated job script before launching a large sweep."
         )
 
     # -- submit -------------------------------------------------------------------------

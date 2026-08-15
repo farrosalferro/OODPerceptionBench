@@ -143,6 +143,7 @@ SCHEMA: Dict[str, Dict[str, Any]] = {
 DIGEST_COMPAT_DEFAULTS: Dict[Tuple[str, str], Any] = {
     ("retry", "killed_budget"): 2,
     ("slurm", "vulkan_index_scope"): "host",
+    ("execution", "port_release_timeout_s"): 90,
 }
 
 VALID_BACKENDS = ("local", "slurm")
