@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import subprocess
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -23,6 +24,18 @@ from .base import (Attempt, AttemptOutcome, Backend, restore_checkpoint,
 
 class LocalBackendError(Exception):
     pass
+
+
+@dataclass
+class _PortRelease:
+    """A worker held idle while the previous CARLA socket finishes draining."""
+
+    started_at: float
+    not_before: float
+    deadline: float
+    kill_after: float
+    kill_sent: bool
+    busy: List[int]
 
 
 def _hard_death_phrase(fault: Optional[str], signalled: Optional[str]) -> str:
@@ -60,6 +73,7 @@ class LocalBackend(Backend):
             i: cfg.gpus[i % len(cfg.gpus)] for i in range(cfg.workers)
         }
         self._open_files: Dict[int, List] = {}
+        self._port_release: Dict[int, _PortRelease] = {}
 
     # -- lifecycle ----------------------------------------------------------------------
     def preflight(self) -> None:
@@ -88,6 +102,87 @@ class LocalBackend(Backend):
         self.log.info("port preflight OK: %d ports free across %d worker(s)",
                       sum(len(p.all_ports) for p in self.pairs), len(self.pairs))
 
+    def can_submit(self, worker: int) -> bool:
+        """Hold an idle slot until its exact evaluator ports are bindable again.
+
+        CARLA's RPC+1 streaming socket can remain unavailable after its processes have exited.
+        That is teardown state owned by the previous attempt, not a launch failure belonging to
+        the next route. Readiness is therefore checked before the runner pops a task. A bounded
+        deadline preserves the fail-closed behaviour for a port block that is genuinely stuck;
+        once it expires, :meth:`submit` performs the existing defensive probe and reports one
+        real ``LAUNCH_FAILED`` if the block is still occupied.
+        """
+        if not self.cfg.ports["probe"]:
+            return True
+
+        pair = self.pairs[worker]
+        release = self._port_release.get(worker)
+        now = time.monotonic()
+
+        if release is not None:
+            if not release.kill_sent and now >= release.kill_after:
+                killed = reap.kill_carla_on_ports(pair.all_ports)
+                release.kill_sent = True
+                cooldown = int(self.cfg.execution["post_kill_cooldown_s"])
+                # A late supervisor tick must not collapse SIGKILL and the launch decision into
+                # one call. Preserve the full quiet period from the *actual* signal time and
+                # retain the slot until a later probe. Extending an already-reached deadline by
+                # this cooldown is still bounded and prevents teardown from becoming the next
+                # route's infrastructure debt.
+                release.not_before = max(release.not_before, now + cooldown)
+                release.deadline = max(release.deadline, release.not_before)
+                if killed:
+                    self.log.warning(
+                        "worker %d: CARLA pid(s) %s ignored SIGTERM on reserved ports; "
+                        "sent SIGKILL without blocking peer workers",
+                        worker, killed)
+                return False
+            if now < release.not_before:
+                return False
+            busy = ports_mod.probe(pair.all_ports)
+            if not busy:
+                elapsed = now - release.started_at
+                self._port_release.pop(worker, None)
+                self.log.info("worker %d: reserved ports released after %.1fs", worker, elapsed)
+                return True
+            release.busy = busy
+            if now < release.deadline:
+                return False
+
+            elapsed = now - release.started_at
+            self._port_release.pop(worker, None)
+            self.log.warning(
+                "worker %d: ports %s still occupied after %.1fs release timeout; the next "
+                "launch will fail closed if its final probe still finds them busy",
+                worker, busy, elapsed)
+            return True
+
+        busy = ports_mod.probe(pair.all_ports)
+        if not busy:
+            return True
+
+        terminated = reap.terminate_carla_on_ports(pair.all_ports)
+        if terminated:
+            self.log.warning(
+                "worker %d: sent SIGTERM to orphaned CARLA pid(s) %s on its own ports",
+                worker, terminated)
+        started = time.monotonic()
+        cooldown = int(self.cfg.execution["post_kill_cooldown_s"])
+        timeout = int(self.cfg.execution["port_release_timeout_s"])
+        self._port_release[worker] = _PortRelease(
+            started_at=started,
+            not_before=started + cooldown,
+            deadline=started + timeout,
+            kill_after=started + min(reap.PORT_REAP_TERM_GRACE_S, timeout),
+            kill_sent=False,
+            busy=busy,
+        )
+        self.log.warning(
+            "worker %d: ports %s remain occupied before the next launch; holding the slot "
+            "for up to %ds without charging a route attempt",
+            worker, busy, timeout)
+        return False
+
     # -- submit -------------------------------------------------------------------------
     def submit(self, task: RouteTask, worker: int) -> Attempt:
         pair = self.pairs[worker]
@@ -105,21 +200,22 @@ class LocalBackend(Backend):
             attempt.finished_at = time.time()
             return attempt
 
-        # Reap anything still bound to this worker's own window, then re-verify. If it is still
-        # busy we refuse to launch: the evaluator would scan upward into the next worker's
-        # window and quietly share a simulator.
-        reaped = reap.reap_ports(pair.all_ports)
-        if reaped:
-            self.log.warning("worker %d: reaped orphaned CARLA pid(s) %s on its own ports",
-                             worker, reaped)
-            time.sleep(max(1, int(self.cfg.execution["post_kill_cooldown_s"])))
+        # With probing enabled, Runner.can_submit has already reaped and cooled this worker
+        # without assigning a task. This final probe closes the check-to-launch race. Operators
+        # who disable probing retain the old synchronous best-effort cleanup path.
+        if not self.cfg.ports["probe"]:
+            reaped = reap.reap_ports(pair.all_ports)
+            if reaped:
+                self.log.warning("worker %d: reaped orphaned CARLA pid(s) %s on its own ports",
+                                 worker, reaped)
+                time.sleep(max(1, int(self.cfg.execution["post_kill_cooldown_s"])))
         if self.cfg.ports["probe"]:
             still_busy = ports_mod.probe(pair.all_ports)
             if still_busy:
                 restore_checkpoint(task, stale)
                 attempt.outcome = AttemptOutcome.LAUNCH_FAILED
-                attempt.detail = (f"worker {worker} ports {still_busy} still occupied after "
-                                  f"reaping; refusing to launch")
+                attempt.detail = (f"worker {worker} ports {still_busy} occupied at launch; "
+                                  f"refusing to launch")
                 attempt.finished_at = time.time()
                 return attempt
 
@@ -294,6 +390,7 @@ class LocalBackend(Backend):
         self._close(attempt)
 
     def cleanup_worker(self, worker: int) -> None:
+        self._port_release.pop(worker, None)
         pair = self.pairs[worker]
         pids = reap.reap_ports(pair.all_ports)
         if pids:

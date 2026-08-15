@@ -25,10 +25,14 @@ Kept, because each was a real incident:
 * bounded resubmission with the same two-budget accounting as local;
 * finalized-result skipping on resume, same predicate.
 
-Under SLURM the per-job cgroup normally exposes exactly one GPU, so the in-job CUDA index is 0
-and CARLA's Vulkan enumeration is likewise restricted to that device. The worker's `cuda`/
-`vulkan` values are therefore *not* applied here; ``--gres`` does the pinning. Ports still come
-from the deterministic allocator so that two jobs landing on one node cannot collide.
+SLURM owns ``CUDA_VISIBLE_DEVICES`` and may remap the allocated global device to a logical index
+inside the job cgroup. The wrapper never overwrites it. ``SLURM_JOB_GPUS`` remains a global ID,
+so the wrapper uses it only to select the matching site-validated ``gpus: {cuda, vulkan}`` pair
+for CARLA's independent Vulkan adapter. ``slurm.vulkan_index_scope`` states whether those Vulkan
+indices address the host or each isolated allocation; allocation scope requires exactly one
+visible GPU/job and may legitimately reuse adapter 0 across different physical allocations.
+Ports still come from the deterministic allocator so that two jobs landing on one node cannot
+collide.
 """
 
 from __future__ import annotations
@@ -37,16 +41,33 @@ import re
 import shlex
 import subprocess
 import time
-from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
-from .. import jobscript, ports as ports_mod
-from ..config import Config, GpuSpec
+from .. import jobscript, ports as ports_mod, reap
+from ..config import Config
 from ..plan import RouteTask
 from .base import (Attempt, AttemptOutcome, Backend, restore_checkpoint,
                    take_checkpoint_aside)
 
-_JOBID_RE = re.compile(r"(\d+)\s*$")
+_JOBID_RE = re.compile(
+    r"\s*(?P<job>\d+)(?:;(?P<cluster>[A-Za-z0-9_.-]+))?\s*\Z"
+)
+_JOBID_PREFIX_RE = re.compile(
+    r"\A\s*(?P<job>\d+)(?:;(?P<cluster>[A-Za-z0-9_.-]+))?(?=\s|\Z)"
+)
+
+_NONTERMINAL_STATES = frozenset({
+    "CONFIGURING", "COMPLETING", "PENDING", "REQUEUED", "REQUEUE_FED", "REQUEUE_HOLD",
+    "RESIZING", "RUNNING", "SIGNALING", "STAGE_OUT", "STOPPED", "SUSPENDED",
+})
+
+_FAULT_STATES = frozenset({
+    "BOOT_FAIL", "CANCELLED", "DEADLINE", "NODE_FAIL", "OUT_OF_MEMORY", "PREEMPTED",
+    "REVOKED", "TIMEOUT",
+})
+
+_CANCEL_WAIT_S = 60.0
+_CANCEL_POLL_S = 0.2
 
 
 class SlurmBackendError(Exception):
@@ -55,6 +76,7 @@ class SlurmBackendError(Exception):
 
 class SlurmBackend(Backend):
     name = "slurm"
+    stable_worker_slots = False
 
     def __init__(self, cfg: Config, log) -> None:
         self.cfg = cfg
@@ -76,6 +98,9 @@ class SlurmBackend(Backend):
         )
         self._last_submit = 0.0
         self._submitted: List[str] = []
+        self._running: set[str] = set()
+        self._started: set[str] = set()
+        self._paused_at: Dict[str, float] = {}
 
     def preflight(self) -> None:
         for tool in ("sbatch", "squeue"):
@@ -98,25 +123,96 @@ class SlurmBackend(Backend):
     def _sbatch_header(self, task: RouteTask) -> str:
         s = self.cfg.slurm
         job_name = f"oodbench-{task.stem}"[:60]
+
+        def directive(flag: str, value: object) -> str:
+            return f"#SBATCH {flag}={shlex.quote(str(value))}"
+
         lines = [
             "#!/bin/bash",
-            f"#SBATCH --job-name={job_name}",
-            f"#SBATCH --output={task.stdout_path}",
-            f"#SBATCH --error={task.stderr_path}",
+            directive("--job-name", job_name),
+            directive("--output", task.stdout_path),
+            directive("--error", task.stderr_path),
             "#SBATCH --nodes=1",
             "#SBATCH --ntasks=1",
             f"#SBATCH --cpus-per-task={int(s['cpus_per_task'])}",
-            f"#SBATCH --mem={s['mem']}",
-            f"#SBATCH --time={s['time']}",
+            directive("--mem", s["mem"]),
+            directive("--time", s["time"]),
         ]
         if s["gres"]:
-            lines.append(f"#SBATCH --gres={s['gres']}")
+            lines.append(directive("--gres", s["gres"]))
         for key, flag in (("partition", "--partition"), ("account", "--account"),
                           ("qos", "--qos"), ("nodelist", "--nodelist"), ("exclude", "--exclude")):
             if s[key]:
-                lines.append(f"#SBATCH {flag}={s[key]}")
+                lines.append(directive(flag, s[key]))
         lines.extend(s["extra_directives"])
         return "\n".join(lines) + "\n"
+
+    def _job_body(self, task: RouteTask, worker: int) -> str:
+        """Render the shared job body while leaving CUDA placement owned by SLURM."""
+        inner = jobscript.render(task, self.cfg, self.cfg.gpus[0], self.pairs[worker])
+        generated_gpu_exports = (
+            "export CUDA_VISIBLE_DEVICES=", "export NVIDIA_VISIBLE_DEVICES=", "export GPU_RANK=",
+        )
+        lines: List[str] = []
+        for line in inner.splitlines()[1:]:  # drop the inner ``#!/bin/bash``
+            if line.startswith(generated_gpu_exports):
+                continue
+            lines.append(line)
+            if line == "set -o pipefail":
+                lines.extend(self._scheduler_gpu_capture())
+            if line.startswith("# GPU pinning:"):
+                lines.extend(self._scheduler_gpu_exports())
+        return "\n".join(lines) + "\n"
+
+    @staticmethod
+    def _scheduler_gpu_capture() -> List[str]:
+        """Capture allocation-owned values before caller-controlled activation runs."""
+        return [
+            "# Preserve SLURM's job-entry allocation across environment.activate.",
+            'if [ -z "${CUDA_VISIBLE_DEVICES:-}" ]; then',
+            '  echo "[runner] SLURM did not set CUDA_VISIBLE_DEVICES for this GPU job" >&2',
+            "  exit 2",
+            "fi",
+            'if [ -z "${SLURM_JOB_GPUS:-}" ]; then',
+            '  echo "[runner] SLURM did not identify the global allocation in '
+            'SLURM_JOB_GPUS" >&2',
+            "  exit 2",
+            "fi",
+            'readonly OODBENCH_SLURM_CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES}"',
+            'readonly OODBENCH_SLURM_JOB_GPUS="${SLURM_JOB_GPUS}"',
+            "",
+        ]
+
+    def _scheduler_gpu_exports(self) -> List[str]:
+        """Fail-closed CUDA-allocation to site-validated Vulkan-adapter mapping."""
+        lines = [
+            'export CUDA_VISIBLE_DEVICES="${OODBENCH_SLURM_CUDA_VISIBLE_DEVICES}"',
+            'export NVIDIA_VISIBLE_DEVICES="${OODBENCH_SLURM_CUDA_VISIBLE_DEVICES}"',
+            'export SLURM_JOB_GPUS="${OODBENCH_SLURM_JOB_GPUS}"',
+        ]
+        if self.cfg.slurm["vulkan_index_scope"] == "allocation":
+            lines.extend([
+                '# Allocation-local Vulkan indices are safe only for one physical GPU/job.',
+                'case "${CUDA_VISIBLE_DEVICES}" in',
+                '  *,*) echo "[runner] allocation-scoped Vulkan requires exactly one visible '
+                'CUDA device, got ${CUDA_VISIBLE_DEVICES}" >&2; exit 2 ;;',
+                'esac',
+                'case "${SLURM_JOB_GPUS}" in',
+                '  *,*) echo "[runner] allocation-scoped Vulkan requires exactly one global '
+                'SLURM GPU, got ${SLURM_JOB_GPUS}" >&2; exit 2 ;;',
+                'esac',
+            ])
+        lines.append('case "${SLURM_JOB_GPUS}" in')
+        for gpu in self.cfg.gpus:
+            lines.append(f"  {gpu.cuda}) export GPU_RANK={gpu.vulkan} ;;")
+        lines.extend([
+            '  *) echo "[runner] allocated global GPU ${SLURM_JOB_GPUS} has no matching cuda '
+            'entry in gpus:" >&2; exit 2 ;;',
+            "esac",
+            'echo "[runner] SLURM gpu global=${SLURM_JOB_GPUS} '
+            'cuda_visible=${CUDA_VISIBLE_DEVICES} vulkan_adapter=${GPU_RANK}"',
+        ])
+        return lines
 
     def submit(self, task: RouteTask, worker: int) -> Attempt:
         attempt = Attempt(task=task, worker=worker,
@@ -138,6 +234,12 @@ class SlurmBackend(Backend):
             self.log.error("%s: %s", task.key, attempt.detail)
             return attempt
 
+        # ``jobscript.render`` is deliberately pure; unlike ``jobscript.write`` it does not
+        # materialise the paths named by the script. The real statistics manager opens its
+        # checkpoint directly and creates no parent directory, so a fresh SLURM output root
+        # otherwise loses every route at its first write.
+        task.mkdirs()
+
         # Keep the old record in hand: sbatch refusing a submission (full queue, QOS limit) is
         # routine, and must not destroy a valid result. See backends.base.take_checkpoint_aside.
         try:
@@ -148,14 +250,10 @@ class SlurmBackend(Backend):
             attempt.finished_at = time.time()
             return attempt
 
-        pair = self.pairs[worker]
-        # Under a per-job cgroup the visible device is index 0 for both CUDA and Vulkan.
-        gpu = GpuSpec(cuda=0, vulkan=0, vulkan_assumed=False)
-        inner = jobscript.render(task, self.cfg, gpu, pair)
         wrapper = task.job_script.with_suffix(".sbatch")
         wrapper.parent.mkdir(parents=True, exist_ok=True)
         task.stdout_path.parent.mkdir(parents=True, exist_ok=True)
-        body = inner.split("\n", 1)[1]  # drop the inner "#!/bin/bash"
+        body = self._job_body(task, worker)
         wrapper.write_text(self._sbatch_header(task) + body, encoding="utf-8")
         wrapper.chmod(0o750)
 
@@ -166,8 +264,10 @@ class SlurmBackend(Backend):
         self._last_submit = time.time()
 
         try:
-            out = subprocess.check_output(["sbatch", str(wrapper)], text=True,
-                                          stderr=subprocess.STDOUT).strip()
+            # Keep diagnostics off stdout: ``--parsable`` gives stdout a machine-readable
+            # contract, while site wrappers and SLURM itself may still warn on stderr.
+            out = subprocess.check_output(["sbatch", "--parsable", str(wrapper)], text=True,
+                                          stderr=subprocess.PIPE).strip()
         except (subprocess.CalledProcessError, OSError) as exc:
             restore_checkpoint(task, stale)
             attempt.outcome = AttemptOutcome.LAUNCH_FAILED
@@ -175,77 +275,243 @@ class SlurmBackend(Backend):
             attempt.finished_at = time.time()
             return attempt
 
-        m = _JOBID_RE.search(out)
+        m = _JOBID_RE.fullmatch(out)
         if not m:
+            # Exit zero means the scheduler accepted a job. Trailer noise violates the strict
+            # parsable contract, but a leading identifier remains safe to recover. Supervise
+            # that accepted job through positive terminal evidence before restoring the old
+            # checkpoint or returning an outcome that the runner may requeue.
+            recovered = _JOBID_PREFIX_RE.match(out)
+            if recovered is None:
+                raise SlurmBackendError(
+                    "sbatch accepted a job but returned no recoverable job identity; "
+                    f"output was {out!r}. Refusing to restore the prior checkpoint or requeue "
+                    "while an unidentified scheduler job may still write it; operator "
+                    "intervention is required"
+                )
+            job_ref = recovered.group(0).strip()
+            attempt.handle = job_ref
+            self._submitted.append(job_ref)
+            self.log.error(
+                "%s: sbatch accepted SLURM job %s with malformed parsable output %r; "
+                "cancelling it before retry is allowed", task.key, job_ref, out,
+            )
+            self._cancel_and_wait(job_ref)
             restore_checkpoint(task, stale)
             attempt.outcome = AttemptOutcome.LAUNCH_FAILED
-            attempt.detail = f"could not parse a job id from sbatch output: {out!r}"
+            attempt.detail = (
+                f"sbatch returned malformed parsable output {out!r}; recovered and "
+                f"cancelled job {job_ref} before allowing retry"
+            )
             attempt.finished_at = time.time()
             return attempt
-        job_id = m.group(1)
-        attempt.handle = job_id
-        self._submitted.append(job_id)
-        self.log.info("submitted %s as SLURM job %s", task.key, job_id)
+        job_ref = m.group(0).strip()
+        attempt.handle = job_ref
+        self._submitted.append(job_ref)
+        self.log.info("submitted %s as SLURM job %s", task.key, job_ref)
         return attempt
 
     # -- poll ---------------------------------------------------------------------------
     def poll(self, attempt: Attempt) -> bool:
         if attempt.outcome is not None:
             return True
-        job_id = attempt.handle
-        if not isinstance(job_id, str):
+        job_ref = attempt.handle
+        if not isinstance(job_ref, str):
             attempt.outcome = AttemptOutcome.LAUNCH_FAILED
             attempt.finished_at = time.time()
             return True
+        job_id, cluster_args = self._job_id_and_cluster(job_ref)
 
         # Gate on *our* job ids, never on a name grep -- see the module docstring.
         try:
             out = subprocess.check_output(
-                ["squeue", "-h", "-j", job_id, "-o", "%T"], text=True,
+                ["squeue", "-h", "-j", job_id, "-o", "%T"] + cluster_args, text=True,
                 stderr=subprocess.DEVNULL).strip()
         except (subprocess.CalledProcessError, OSError):
             out = ""
         if out:
-            if attempt.duration_s > float(self.cfg.execution["route_timeout_s"]):
-                self.kill(attempt, "wall-clock timeout")
-                attempt.outcome = AttemptOutcome.TIMEOUT
-                attempt.detail = f"scancelled after {attempt.duration_s:.0f}s"
-                attempt.finished_at = time.time()
-                return True
-            return False
+            queue_state = self._base_state(out.splitlines()[0])
+            # A state still visible in squeue is active scheduler ownership. PENDING,
+            # COMPLETING, REQUEUED and SUSPENDED pause the evaluator clock; only RUNNING
+            # advances it. Terminal accounting below remains the source of truth.
+            return self._poll_active_state(attempt, job_ref, queue_state)
 
-        attempt.finished_at = time.time()
-        state = self._sacct_state(job_id)
-        if state and state.startswith(("CANCELLED", "TIMEOUT", "NODE_FAIL", "OUT_OF_MEMORY",
-                                       "PREEMPTED", "BOOT_FAIL")):
+        accounting = self._sacct_state(job_ref)
+        state, exit_code = accounting if accounting is not None else (None, None)
+        base_state = self._base_state(state or "")
+        if base_state in _NONTERMINAL_STATES:
+            return self._poll_active_state(attempt, job_ref, base_state)
+
+        finished_at = time.time()
+        self._close_route_clock(attempt, job_ref, finished_at)
+        attempt.finished_at = finished_at
+        if exit_code:
+            attempt.exit_code = self._exit_code(exit_code)
+        signalled = (reap.describe_exit_signal(attempt.exit_code)
+                     if attempt.exit_code is not None else None)
+        if signalled:
+            attempt.outcome = AttemptOutcome.FAULT
+            attempt.detail = f"SLURM state {state or 'unknown'}; {signalled}"
+            self._forget(job_ref)
+            return True
+        if base_state in _FAULT_STATES:
             attempt.outcome = AttemptOutcome.FAULT
             attempt.detail = f"SLURM state {state}"
         else:
             attempt.outcome = AttemptOutcome.EXITED
             attempt.detail = f"SLURM state {state or 'unknown'}"
+        self._forget(job_ref)
         return True
 
+    def _poll_active_state(self, attempt: Attempt, job_ref: str, state: str) -> bool:
+        """Advance only RUNNING time; scheduler-owned residence pauses the route clock."""
+        now = time.time()
+        if state != "RUNNING":
+            if job_ref in self._running:
+                self._running.remove(job_ref)
+                self._paused_at[job_ref] = now
+            return False
+
+        entered_running = job_ref not in self._running
+        if job_ref not in self._started:
+            # Attempt.started_at was created before sbatch. The first RUNNING observation
+            # excludes initial queue residence, conservatively by at most one poll interval.
+            self._started.add(job_ref)
+            attempt.started_at = now
+        elif entered_running:
+            # Preserve earlier RUNNING time while removing the complete suspended/requeued
+            # interval from Attempt.duration_s and the persisted duration audit.
+            paused_at = self._paused_at.pop(job_ref, now)
+            attempt.started_at += max(0.0, now - paused_at)
+        self._running.add(job_ref)
+
+        # As on the original first-RUNNING path, start/resume observations do not immediately
+        # consume a poll interval from the route's budget.
+        if entered_running:
+            return False
+        duration = attempt.duration_s
+        if duration > float(self.cfg.execution["route_timeout_s"]):
+            self.kill(attempt, "wall-clock timeout")
+            attempt.outcome = AttemptOutcome.TIMEOUT
+            attempt.detail = f"scancelled after {duration:.0f}s RUNNING"
+            return True
+        return False
+
+    def _close_route_clock(self, attempt: Attempt, job_ref: str, now: float) -> None:
+        """Exclude a final scheduler-owned paused interval from the duration audit."""
+        paused_at = self._paused_at.pop(job_ref, None)
+        if paused_at is not None:
+            attempt.started_at += max(0.0, now - paused_at)
+
+    def _route_runtime_at(self, attempt: Attempt, job_ref: str, now: float) -> float:
+        """Return observed RUNNING time without mutating state needed by cancellation."""
+        if job_ref not in self._started:
+            return 0.0
+        running_until = self._paused_at.get(job_ref, now)
+        return max(0.0, running_until - attempt.started_at)
+
     @staticmethod
-    def _sacct_state(job_id: str) -> Optional[str]:
+    def _base_state(state: str) -> str:
+        """The stable state token, without a reason suffix or SLURM truncation marker."""
+        return state.strip().split(None, 1)[0].rstrip("+").upper() if state.strip() else ""
+
+    @staticmethod
+    def _job_id_and_cluster(job_ref: str) -> Tuple[str, List[str]]:
+        """Return the numeric ID and explicit cluster-routing arguments."""
+        match = _JOBID_RE.fullmatch(job_ref)
+        if match is None:  # handles are admitted only through this regex in submit()
+            raise SlurmBackendError(f"invalid supervised SLURM job reference {job_ref!r}")
+        cluster = match.group("cluster")
+        return match.group("job"), (["-M", cluster] if cluster else [])
+
+    @staticmethod
+    def _sacct_state(job_ref: str) -> Optional[Tuple[str, str]]:
+        job_id, cluster_args = SlurmBackend._job_id_and_cluster(job_ref)
         try:
             out = subprocess.check_output(
-                ["sacct", "-j", job_id, "--format=State", "-n", "-P"], text=True,
+                ["sacct", "-X", "-j", job_id, "--format=State,ExitCode", "-n", "-P"]
+                + cluster_args,
+                text=True,
                 stderr=subprocess.DEVNULL).strip()
         except (subprocess.CalledProcessError, OSError):
             return None
-        return out.splitlines()[0].strip() if out else None
+        if not out:
+            return None
+        fields = out.splitlines()[0].strip().split("|")
+        state = fields[0].strip()
+        exit_code = fields[1].strip() if len(fields) > 1 else ""
+        return state, exit_code
+
+    @staticmethod
+    def _exit_code(value: str) -> Optional[int]:
+        """Translate SLURM's ``status:signal`` into the shape used by local ``Popen``."""
+        try:
+            status_text, signal_text = value.split(":", 1)
+            status, signum = int(status_text), int(signal_text)
+        except (TypeError, ValueError):
+            return None
+        return -signum if signum else status
 
     def kill(self, attempt: Attempt, reason: str) -> None:
-        job_id = attempt.handle
-        if isinstance(job_id, str):
-            subprocess.call(["scancel", job_id])
+        job_ref = attempt.handle
+        finished_at = time.time()
+        route_runtime = None
+        if isinstance(job_ref, str):
+            # Capture the route-only clock before positive-terminal cancellation calls
+            # ``_forget`` and discards the RUNNING/paused markers. The scheduler's asynchronous
+            # teardown latency is not evaluator runtime either.
+            route_runtime = self._route_runtime_at(attempt, job_ref, finished_at)
+            self._cancel_and_wait(job_ref)
         if attempt.outcome is None:
             attempt.outcome = AttemptOutcome.KILLED
             attempt.detail = reason
-            attempt.finished_at = time.time()
+            attempt.finished_at = finished_at
+            if route_runtime is not None:
+                attempt.started_at = finished_at - route_runtime
 
     def shutdown(self) -> None:
         if not self._submitted:
             return
         self.log.info("cancelling %d submitted SLURM job(s)", len(self._submitted))
-        subprocess.call(["scancel"] + self._submitted)
+        for job_ref in list(self._submitted):
+            try:
+                self._cancel_and_wait(job_ref)
+            except SlurmBackendError as exc:  # best effort, but never silently
+                self.log.warning("%s", exc)
+
+    def _cancel_and_wait(self, job_ref: str) -> None:
+        job_id, cluster_args = self._job_id_and_cluster(job_ref)
+        subprocess.call(["scancel"] + cluster_args + [job_id])
+        deadline = time.time() + _CANCEL_WAIT_S
+        while True:
+            try:
+                queued = subprocess.check_output(
+                    ["squeue", "-h", "-j", job_id, "-o", "%T"] + cluster_args, text=True,
+                    stderr=subprocess.DEVNULL).strip()
+            except (subprocess.CalledProcessError, OSError):
+                queued = ""
+
+            accounting = self._sacct_state(job_ref) if not queued else None
+            state = self._base_state(accounting[0]) if accounting is not None else ""
+            # An empty/failed status query is absence of evidence, not evidence that the job's
+            # cgroup has finished. Require a positive terminal accounting state before any
+            # caller may read and settle a checkpoint after asynchronous scancel.
+            if not queued and state and state not in _NONTERMINAL_STATES:
+                self._forget(job_ref)
+                return
+            if time.time() >= deadline:
+                raise SlurmBackendError(
+                    f"SLURM job {job_ref} has no confirmed terminal state "
+                    f"{_CANCEL_WAIT_S:.0f}s after scancel; "
+                    f"refusing to settle it while it may still write its checkpoint"
+                )
+            time.sleep(_CANCEL_POLL_S)
+
+    def _forget(self, job_ref: str) -> None:
+        self._running.discard(job_ref)
+        self._started.discard(job_ref)
+        self._paused_at.pop(job_ref, None)
+        try:
+            self._submitted.remove(job_ref)
+        except ValueError:
+            pass

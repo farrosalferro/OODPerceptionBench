@@ -52,6 +52,11 @@ _RPC_PORT_RE = re.compile(rb"-carla-rpc-port[= ](\d+)")
 #: ``NSIG`` as 65, so signals run 1..64.
 _MAX_SIGNAL = getattr(signal, "NSIG", 65) - 1
 
+#: How long the synchronous cleanup helper gives CARLA to honour SIGTERM before SIGKILL.
+#: LocalBackend's between-route readiness state machine uses the same interval without sleeping
+#: in the supervisor thread.
+PORT_REAP_TERM_GRACE_S = 10.0
+
 
 def describe_exit_signal(rc: int) -> Optional[str]:
     """Name the signal that killed a process, read from its exit status alone, or ``None``.
@@ -144,26 +149,38 @@ def find_carla_on_ports(ports: Sequence[int]) -> List[int]:
     return hits
 
 
-def reap_ports(ports: Sequence[int], grace_s: float = 10.0) -> List[int]:
-    """SIGTERM then SIGKILL any CARLA bound to ``ports``. Returns the PIDs acted on."""
+def _signal_carla_on_ports(ports: Sequence[int], sig: signal.Signals) -> List[int]:
+    """Signal our CARLA processes on ``ports`` once, without waiting for their exit."""
     pids = find_carla_on_ports(ports)
-    if not pids:
-        return []
     for pid in pids:
         try:
-            os.kill(pid, signal.SIGTERM)
+            os.kill(pid, sig)
         except OSError:
             pass
+    return pids
+
+
+def terminate_carla_on_ports(ports: Sequence[int]) -> List[int]:
+    """Send SIGTERM to our CARLA processes on ``ports`` and return immediately."""
+    return _signal_carla_on_ports(ports, signal.SIGTERM)
+
+
+def kill_carla_on_ports(ports: Sequence[int]) -> List[int]:
+    """Send SIGKILL to our CARLA processes on ``ports`` and return immediately."""
+    return _signal_carla_on_ports(ports, signal.SIGKILL)
+
+
+def reap_ports(ports: Sequence[int], grace_s: float = PORT_REAP_TERM_GRACE_S) -> List[int]:
+    """SIGTERM then SIGKILL any CARLA bound to ``ports``. Returns the PIDs acted on."""
+    pids = terminate_carla_on_ports(ports)
+    if not pids:
+        return []
     deadline = time.time() + grace_s
     while time.time() < deadline:
         if not find_carla_on_ports(ports):
             return pids
         time.sleep(0.5)
-    for pid in find_carla_on_ports(ports):
-        try:
-            os.kill(pid, signal.SIGKILL)
-        except OSError:
-            pass
+    kill_carla_on_ports(ports)
     return pids
 
 

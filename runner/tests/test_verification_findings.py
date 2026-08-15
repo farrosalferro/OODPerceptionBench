@@ -670,6 +670,14 @@ class TestKilledBudgetHasNoUnsafeDefault(ModelBase):
 # =======================================================================================
 class TestDigestCompatibility(ModelBase):
 
+    @staticmethod
+    def _payload_before_compat_keys(cfg):
+        """Resolved payload as it stood before any compatibility-pinned key existed."""
+        payload = copy.deepcopy(cfg.as_dict())
+        for section, key in config_mod.DIGEST_COMPAT_DEFAULTS:
+            payload[section].pop(key, None)
+        return payload
+
     def test_every_compat_pin_equals_the_schema_default_it_stands_for(self):
         """The carve-out is safe only while the pinned value IS the schema default.
 
@@ -718,8 +726,7 @@ class TestDigestCompatibility(ModelBase):
         cfg = config_mod.load(path)
         self.assertEqual(cfg.retry["killed_budget"], 2, "the default under test")
 
-        legacy_payload = copy.deepcopy(cfg.as_dict())
-        del legacy_payload["retry"]["killed_budget"]
+        legacy_payload = self._payload_before_compat_keys(cfg)
 
         self.assertEqual(cfg.digest(), self._digest_of(legacy_payload),
                          "every output root created before retry.killed_budget existed now "
@@ -728,8 +735,7 @@ class TestDigestCompatibility(ModelBase):
     def test_a_ledger_written_before_the_key_existed_resumes_without_a_false_alarm(self):
         path = self.site.config()
         cfg = config_mod.load(path)
-        legacy_payload = copy.deepcopy(cfg.as_dict())
-        del legacy_payload["retry"]["killed_budget"]
+        legacy_payload = self._payload_before_compat_keys(cfg)
         legacy_digest = self._digest_of(legacy_payload)
 
         ledger = Path(cfg.output["root"]) / "_runner" / "state.json"

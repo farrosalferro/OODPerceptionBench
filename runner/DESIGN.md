@@ -109,10 +109,11 @@ execution:
   route_timeout_s: 3600
   poll_interval_s: 10
   post_kill_cooldown_s: 10
+  port_release_timeout_s: 90  # worker cooldown; no route attempt exists until ports release
   allow_gpu_stacking: false
 
 gpus:                    # ordered list; worker i uses gpus[i % len(gpus)].
-                         # Both `cuda` and `vulkan` must be unique across the list.
+                         # `cuda` is always unique; host-scoped `vulkan` is also unique.
   - cuda: 0
     vulkan: 0
 
@@ -153,6 +154,7 @@ slurm:                   # only read when backend == slurm
   gres: "gpu:1"
   max_parallel: 8      # concurrency under this backend (NOT execution.workers)
   submit_interval_s: 1.0
+  vulkan_index_scope: host  # host | allocation
   extra_directives: []
 ```
 
@@ -244,9 +246,16 @@ Two defences, both required:
    is what the CARLA server itself binds. If any port is busy, abort with the offending port
    number and the suggestion to move `ports.rpc_base`. Never auto-shift the base — silently
    relocating means two concurrent runs on the same host can overlap.
-2. **Reap and re-verify the worker's own window immediately before every launch.** If it is
-   still busy after the reap and cooldown, that worker is quarantined rather than allowed to
-   wander upward.
+2. **Reap and re-verify the worker's own window before assigning another route.** A busy window
+   holds only that worker slot idle; no attempt or checkpoint belongs to the pending route yet,
+   so teardown cannot consume its infrastructure budget. The supervisor sends SIGTERM without
+   waiting, re-probes on later ticks, escalates surviving owned CARLA processes to SIGKILL after
+   10 s, and waits up to `execution.port_release_timeout_s` for the evaluator-equivalent bind
+   probe to pass. That timeout must cover the 10 s TERM grace plus the configured post-kill
+   cooldown, and the SIGKILL tick always retains the slot for a later probe even if supervisor
+   polling reached the deadline late. The final pre-launch probe closes the readiness-to-launch
+   race. Persistent occupation still fails closed and reaches the ordinary bounded
+   infra/quarantine path; it is never allowed to wander upward.
 
 Given a genuinely free port, `find_free_port` returns it unchanged, so the port the runner
 allocated is the port CARLA binds — which is also what makes reaping by port possible (§7).
@@ -283,13 +292,19 @@ is an assumption about the host, not a fact. `run_benchmark.py --check-gpus` pri
 device list with PCI bus IDs beside the Vulkan adapter list so the user can write the mapping
 down once.
 
-**Both indices must be unique across the list**, and for asymmetric reasons. A repeated `cuda`
-is an obvious duplicate entry. A repeated `vulkan` is the silent one: it puts two CARLA
-*servers* on one physical GPU while their agents sit on different ones — exactly the collapse
-described above, with nothing to notice it by except throughput. Validating only `cuda` (as the
-first cut did) leaves the more dangerous half of the pair unchecked, so both are now errors.
-Several workers per GPU is expressed by listing the GPU **once** and setting
-`execution.allow_gpu_stacking`, not by repeating an adapter index.
+**CUDA indices must be unique. Host-scoped Vulkan indices must also be unique**, and for an
+asymmetric reason: a repeated host adapter puts two CARLA servers on one physical GPU while
+their agents sit on different ones. Several local workers per GPU is expressed by listing the
+GPU once and setting `execution.allow_gpu_stacking`, not by repeating a host adapter index.
+
+SLURM device cgroups introduce a second legitimate scope. A scheduler-global GPU may be remapped
+to logical CUDA 0 while the same isolated physical device is independently enumerated as Vulkan
+adapter 0. Two one-GPU jobs can therefore use different physical GPUs even though both wrappers
+pass `-graphicsadapter=0`. Sites that prove this by matching in-job CUDA/NVML and Vulkan UUID or
+PCI identity set `slurm.vulkan_index_scope: allocation`; repeated Vulkan indices are then valid
+across allocations. The generated wrapper still looks up the scheduler-global ID, preserves
+scheduler CUDA, and fails closed unless exactly one GPU is visible. `host` remains the default
+and preserves prior configuration digests and validation.
 
 Worker→GPU is `gpus[i % len(gpus)]` — deterministic. If `workers > len(gpus)` the runner
 refuses unless `execution.allow_gpu_stacking: true`, because two CARLA servers on one GPU is a

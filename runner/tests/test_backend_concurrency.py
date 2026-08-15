@@ -21,6 +21,7 @@ import logging
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import run_benchmark
 from oodbench import config as config_mod, plan as plan_mod
@@ -118,6 +119,87 @@ class TestLocalConcurrency(BackendBase):
         self.assertEqual(backend.concurrency, 3)
         self.assertEqual(len(backend.pairs), 3)
 
+    def test_persistently_busy_ports_are_released_to_the_fail_closed_submit_path(self):
+        cfg = config_mod.load(self.site.config(
+            execution={"post_kill_cooldown_s": 0, "port_release_timeout_s": 10}))
+        backend = LocalBackend(cfg, self.log)
+        busy = backend.pairs[0].rpc + 1
+
+        with patch("oodbench.backends.local.time.monotonic",
+                   side_effect=[0.0, 0.0, 10.0, 11.0]), \
+             patch("oodbench.backends.local.ports_mod.probe", return_value=[busy]), \
+             patch("oodbench.backends.local.reap.terminate_carla_on_ports",
+                   return_value=[12345]) as terminate_ports, \
+             patch("oodbench.backends.local.reap.kill_carla_on_ports",
+                   return_value=[12345]) as kill_ports:
+            self.assertFalse(backend.can_submit(0),
+                             "the first busy observation must start worker cooldown")
+            self.assertFalse(backend.can_submit(0),
+                             "SIGKILL escalation must retain the slot until another tick")
+            self.assertTrue(backend.can_submit(0),
+                            "a permanently busy worker must not wait without a bound")
+            terminate_ports.assert_called_once_with(backend.pairs[0].all_ports)
+            kill_ports.assert_called_once_with(backend.pairs[0].all_ports)
+
+    def test_busy_worker_readiness_never_calls_the_blocking_reaper(self):
+        cfg = config_mod.load(self.site.config(
+            execution={"workers": 2, "allow_gpu_stacking": True,
+                       "post_kill_cooldown_s": 0}))
+        backend = LocalBackend(cfg, self.log)
+        busy = backend.pairs[0].rpc + 1
+
+        def probe_worker(owned_ports):
+            return [busy] if tuple(owned_ports) == backend.pairs[0].all_ports else []
+
+        with patch("oodbench.backends.local.ports_mod.probe", side_effect=probe_worker), \
+             patch("oodbench.backends.local.reap.reap_ports") as blocking_reap:
+            blocking_reap.side_effect = AssertionError(
+                "can_submit stalled the single-threaded supervisor in reap_ports")
+            self.assertFalse(backend.can_submit(0))
+            self.assertTrue(backend.can_submit(1),
+                            "worker 1 should remain immediately schedulable")
+            blocking_reap.assert_not_called()
+
+    def test_sigkill_escalation_is_not_delayed_by_a_longer_launch_cooldown(self):
+        cfg = config_mod.load(self.site.config(
+            execution={"post_kill_cooldown_s": 30, "port_release_timeout_s": 40}))
+        backend = LocalBackend(cfg, self.log)
+        busy = backend.pairs[0].rpc + 1
+
+        with patch("oodbench.backends.local.time.monotonic",
+                   side_effect=[0.0, 0.0, 11.0]), \
+             patch("oodbench.backends.local.ports_mod.probe", return_value=[busy]), \
+             patch("oodbench.backends.local.reap.terminate_carla_on_ports",
+                   return_value=[12345]), \
+             patch("oodbench.backends.local.reap.kill_carla_on_ports",
+                   return_value=[12345]) as kill_ports:
+            self.assertFalse(backend.can_submit(0))
+            self.assertFalse(backend.can_submit(0))
+            kill_ports.assert_called_once_with(backend.pairs[0].all_ports)
+
+    def test_sigkill_tick_never_releases_the_worker_directly_to_submit(self):
+        cfg = config_mod.load(self.site.config(
+            execution={"post_kill_cooldown_s": 0, "port_release_timeout_s": 10}))
+        backend = LocalBackend(cfg, self.log)
+        busy = backend.pairs[0].rpc + 1
+
+        with patch("oodbench.backends.local.time.monotonic",
+                   side_effect=[0.0, 0.0, 10.0, 11.0]), \
+             patch("oodbench.backends.local.ports_mod.probe",
+                   side_effect=[[busy], []]) as probe_ports, \
+             patch("oodbench.backends.local.reap.terminate_carla_on_ports",
+                   return_value=[12345]), \
+             patch("oodbench.backends.local.reap.kill_carla_on_ports",
+                   return_value=[12345]) as kill_ports:
+            self.assertFalse(backend.can_submit(0))
+            self.assertFalse(
+                backend.can_submit(0),
+                "the SIGKILL tick must retain the slot even when its deadline is reached")
+            self.assertTrue(backend.can_submit(0),
+                            "a later successful probe may release the slot")
+            kill_ports.assert_called_once_with(backend.pairs[0].all_ports)
+            self.assertEqual(probe_ports.call_count, 2)
+
 
 class _CountingBackend(Backend):
     """Records how many slots the supervision loop actually opens."""
@@ -150,6 +232,11 @@ class _CountingBackend(Backend):
         pass
 
 
+class _WorkerZeroCoolingBackend(_CountingBackend):
+    def can_submit(self, worker):
+        return worker != 0
+
+
 class TestTheLoopHonoursBackendConcurrency(BackendBase):
     """The loop must size itself from the backend, not from ``execution.workers``."""
 
@@ -177,6 +264,24 @@ class TestTheLoopHonoursBackendConcurrency(BackendBase):
         backend, _ = self._run(backend_concurrency=4, workers=1)
         self.assertEqual(backend.slots_seen, {0, 1, 2, 3},
                          "the loop under-parallelised: it sized itself from execution.workers")
+
+    def test_one_cooling_slot_does_not_block_other_workers(self):
+        for i in range(4):
+            self.site.add_route(f"static/s1/base/route_{i}_a.xml")
+        cfg = config_mod.load(self.site.config(
+            execution={"workers": 1, "poll_interval_s": 1}))
+        args = argparse.Namespace(limit=None, dry_run=False, force=False)
+        runner = run_benchmark.Runner(cfg, args)
+        tasks = runner.plan()
+        state = RunState(path=Path(cfg.output["root"]) / "_runner" / "state.json")
+        backend = _WorkerZeroCoolingBackend(concurrency=3)
+
+        with patch("run_benchmark.time.sleep", side_effect=lambda _seconds: None):
+            rep = runner.run(tasks, state, backend)
+
+        self.assertEqual(rep.exit_code(), 0)
+        self.assertEqual(backend.slots_seen, {1, 2},
+                         "an idle cooling worker blocked schedulable peer slots")
 
 
 if __name__ == "__main__":

@@ -93,8 +93,25 @@ class Backend:
     #: to set it under-parallelises rather than handing two workers the same resources.
     concurrency: int = 1
 
+    #: Whether a supervision slot identifies the same physical worker across attempts. The
+    #: local adapter's slot owns a stable GPU and port window, so repeated launch failures can
+    #: quarantine that resource. A scheduler adapter's slot is only a concurrency token: the
+    #: next submission may land on another node, and quarantining the integer would retire no
+    #: broken machine at all. Conservative default preserves the established local behavior and
+    #: third-party adapters must opt out explicitly when placement is scheduler-owned.
+    stable_worker_slots: bool = True
+
     def preflight(self) -> None:
         """Raise on anything that would make the whole run pointless. Called once."""
+
+    def can_submit(self, worker: int) -> bool:
+        """Whether ``worker`` can accept a task without consuming an attempt.
+
+        Backends may temporarily hold an idle slot here while a resource owned by the previous
+        attempt becomes reusable. The runner leaves the task pending until this returns true,
+        so readiness backpressure is never mistaken for a failed benchmark launch.
+        """
+        return True
 
     def submit(self, task: RouteTask, worker: int) -> Attempt:
         raise NotImplementedError

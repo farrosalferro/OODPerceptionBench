@@ -8,8 +8,9 @@
 > supervision logic is covered by 222 automated tests. On 2026-08-11/12 CARLA 0.9.15 executed
 > single routes, two 8-route/two-worker sweeps with one-GPU stacking and port isolation observed
 > live, a real Ctrl-C/reap/resume cycle, and three independent nine-route PDM-Lite golden
-> replicates. **The full 475-route set has never been run, the SLURM backend is broken, and
-> multi-GPU mapping is unproven** — read `STATUS.md` §2 before trusting it with GPU-hours.
+> replicates. The SLURM backend is now validated on a real scheduler at two-way concurrency (one
+> full route category, seed 42). **The full 475-route set has never been run and multi-GPU mapping
+> is unproven** — read `STATUS.md` §2 before trusting it with GPU-hours.
 
 Evaluate a CARLA Leaderboard 2.0 agent on the OOD-PerceptionBench route set, on one machine or
 on a SLURM cluster, from a single configuration file.
@@ -195,15 +196,14 @@ gpus:
   - {cuda: 1, vulkan: 1}
 ```
 
-`cuda` pins the **agent** via `CUDA_VISIBLE_DEVICES`. `vulkan` pins the **CARLA server** via
-`-graphicsadapter`, which does *not* honour `CUDA_VISIBLE_DEVICES`. If you set only the first,
-every simulator renders on adapter 0 while the agents spread across the machine: one GPU
-saturates, throughput collapses, and nothing errors. Omitting `vulkan` assumes it equals `cuda`
-and prints a warning. Use `--check-gpus` to confirm.
+`cuda` pins the **agent** via `CUDA_VISIBLE_DEVICES` locally and is the scheduler-global lookup
+key under SLURM. `vulkan` pins the **CARLA server** via `-graphicsadapter`. Omitting `vulkan`
+assumes it equals `cuda` and prints a warning. Use stable UUID or PCI identity to confirm.
 
-Both indices must be unique across the list; a repeated `vulkan` is the same collapse in slow
-motion. To run several workers per GPU, list the GPU once and set
-`execution.allow_gpu_stacking: true`.
+CUDA indices and host-scoped Vulkan indices must be unique. A qualified one-GPU SLURM cgroup may
+instead enumerate each allocated physical GPU as job-local Vulkan adapter 0; use
+`slurm.vulkan_index_scope: allocation` only after matching in-job CUDA/NVML and Vulkan UUID or
+PCI identity. This is distinct from GPU stacking.
 
 ### `ports` — deterministic, and probed
 
@@ -333,6 +333,7 @@ slurm:
   time: "02:00:00"
   mem: 24G
   gres: "gpu:1"
+  vulkan_index_scope: host  # host | allocation
 ```
 
 One job per route, same config object, same planning/resume/retry/reporting logic. Concurrency
@@ -340,8 +341,17 @@ is `slurm.max_parallel` — **not** `execution.workers`, which sizes the local p
 here — and it is gated on **our own submitted job IDs**, not on a `squeue` name grep.
 Submission is rate-limited.
 
-**The SLURM backend has never been run against a real scheduler.** Submit a single route and
-read the generated `.sbatch` before launching a sweep.
+`host` scope retains globally unique Vulkan adapters. `allocation` scope supports sites whose
+one-GPU device cgroups remap each allocated NVIDIA GPU to job-local Vulkan adapter 0. It permits
+repeated Vulkan indices across distinct scheduler-global IDs and rejects jobs that expose more
+than one CUDA GPU. Establish that site contract by stable UUID or PCI evidence before using it.
+
+**The SLURM backend is validated on a real scheduler** at two-way concurrency (one full route
+category, seed 42; `STATUS.md` H9). It is not yet measured at the full 475-route scale or larger
+multi-node fan-out, and it has no early liveness probe — a CARLA server that transiently freezes
+mid-route is caught only by `execution.route_timeout_s`, absorbed by `retry.infra_budget` and
+settled on a later attempt, so size both for your agent. Submit a single route and read the
+generated `.sbatch` before launching a large sweep.
 
 ---
 
@@ -381,7 +391,7 @@ What they do **not** cover is anything that requires a running simulator. See `S
 | Throughput far below `workers × 1 route` | the `vulkan` indices are probably wrong and every simulator is on one GPU. Run `--check-gpus`. |
 | A worker gets quarantined | that GPU is likely wedged. Probe it before reusing it. |
 | exit 2, "agent.env may not set variable(s) the runner owns" | your model config sets one of the runner's own variables. Use the config field the error names. |
-| exit 2, "gpus[i].vulkan=N is already claimed" | two entries share a Vulkan adapter, which would put both simulators on one GPU. Run `--check-gpus`. |
+| exit 2, "gpus[i].vulkan=N is already claimed" | two entries share a host-scoped Vulkan adapter. Fix the mapping, or use SLURM allocation scope only after stable in-job UUID/PCI validation. |
 | SLURM: fewer jobs in flight than expected | concurrency is `slurm.max_parallel`; `execution.workers` does nothing under this backend. |
 | Report says routes were skipped with "budget already spent" | a previous run exhausted their *record* retries. The record on disk is the answer; investigate the logs before deciding it is wrong. |
 | Report says the **infrastructure** retry budget is gone | the machine, not the model. Fix it, then re-run with `--retry-infra-exhausted` — no result file is touched and no other budget moves. |

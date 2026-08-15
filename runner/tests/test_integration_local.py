@@ -16,6 +16,7 @@ import tempfile
 import textwrap
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import run_benchmark
 from oodbench import EXIT_CONFIG, EXIT_OK, EXIT_PARTIAL, ports
@@ -285,6 +286,56 @@ class TestHappyPathAndResume(IntegrationBase):
                 if a != b:
                     self.assertGreaterEqual(abs(a - b), 3,
                                             "RPC windows must not overlap")
+
+    def test_transient_post_route_port_linger_is_worker_cooldown_not_route_infra(self):
+        """One self-clearing CARLA socket must not become another route's failed launch.
+
+        Real hardware left RPC+1 unavailable briefly after the evaluator exited and the local
+        backend reaped CARLA. The old fixed-sleep/single-probe path popped the next route,
+        called the transient ``LAUNCH_FAILED``, and durably charged that unrelated route's
+        infrastructure counters. Model the exact sequence: route one exits, reaping finds its
+        CARLA children, the streaming port remains busy across a skipped fill, then is bindable.
+        """
+        for i in range(2):
+            self.site.add_route(f"static/s1/base/route_{i}_a.xml")
+        cfg = self.site.config(
+            execution={"poll_interval_s": 1, "post_kill_cooldown_s": 0})
+
+        reaped_after_first_route = False
+        busy_observations = 0
+
+        def reap_after_first_route(_ports):
+            nonlocal reaped_after_first_route
+            if len(self.site.trace_rows()) == 1 and not reaped_after_first_route:
+                reaped_after_first_route = True
+                return [1376739, 1376746]
+            return []
+
+        def port_lingers_across_one_skipped_fill(_ports):
+            nonlocal busy_observations
+            # Two busy observations are load-bearing: can_submit consumes the first before it
+            # returns False. If Runner ignored that False and submitted anyway, submit's own
+            # defensive probe would consume the second and the test would see LAUNCH_FAILED.
+            if len(self.site.trace_rows()) == 1 and busy_observations < 2:
+                busy_observations += 1
+                return [busy]
+            return []
+
+        busy = free_port_base() + 1
+        with patch("oodbench.backends.local.ports_mod.probe_pairs", return_value=[]), \
+             patch("oodbench.backends.local.reap.terminate_carla_on_ports",
+                   side_effect=reap_after_first_route), \
+             patch("oodbench.backends.local.ports_mod.probe",
+                   side_effect=port_lingers_across_one_skipped_fill), \
+             patch("run_benchmark.time.sleep", side_effect=lambda _seconds: None):
+            code = self.run_cli(cfg)
+
+        self.assertEqual(code, EXIT_OK)
+        self.assertEqual(len(self.site.trace_rows()), 2, "both routes should launch exactly once")
+        for route in self.report()["routes"]:
+            self.assertEqual(route["attempts"]["infra"], 0)
+            self.assertEqual(route["attempts"]["infra_total"], 0,
+                             "a transient owned by the previous route reached durable debt")
 
 
 class TestFailureHandling(IntegrationBase):

@@ -11,8 +11,9 @@ decisions in `DESIGN.md` — plus a working local implementation whose *logic* i
 automated tests and whose *simulator interaction* was exercised against CARLA 0.9.15 on
 2026-08-11 and 2026-08-12. Single-route execution, two-worker one-GPU stacking, exact port
 isolation, real Ctrl-C/reaping/resume, failure accounting, and a nine-route PDM-Lite golden were
-observed. The table in §2 states the remaining limits; notably multi-GPU placement, the full
-475-route scale, and SLURM are not validated.
+observed. The table in §2 states the remaining limits; notably multi-GPU placement and the full
+475-route scale are not validated. The SLURM backend, previously broken, is now validated at
+two-way concurrency on a single node (§2, H9).
 
 Nothing below should be read as "tested" unless it says so explicitly.
 
@@ -304,43 +305,38 @@ the hardware evidence as of 2026-08-12. **CLOSED** means the stated criterion wa
 | H6 | **CLOSED — 2026-08-12** | Ctrl-C exited 3 after writing state/report; interrupted routes charged no retry axis and stayed unfinished. Resume ran exactly the unfinished routes, then a third invocation launched nothing. | None for the measured local two-worker case. |
 | H7 | **CLOSED — 2026-08-11/12** | Three real `Failed - TickRuntime` records were settled and reported complete at the configured zero retry budget. Eight deliberate setup failures each charged exactly one record attempt; rerun changed no counters and still exited 0 with all routes settled. | Hard-death/fault-pattern cases were not induced on hardware. |
 | H8 | **OPEN** | The largest run was nine smoke routes. Eight-route constant-velocity sweeps measured 0.044–0.079 physical GPU-hours/route. | The full 475-route run and the ~0.12 GPU-h/route figure for an inference model remain unvalidated. |
-| H9 | **OPEN — known broken** | No scheduler run was attempted. Stand-in-scheduler review already proves fatal defects described below. | Do not use `execution.backend: slurm`. |
+| H9 | **CLOSED — 2026-08-15** | The repaired SLURM backend ran a full route category (70 routes, seed 42) on a real scheduler at two concurrent jobs: every route settled with a genuine final checkpoint, concurrent jobs used distinct physical GPUs with the scheduler's CUDA allocation preserved and each job's configured Vulkan adapter selected, held disjoint RPC+TM ports, and every job was reaped with no orphan. SLURM statuses and §6A axes match the local backend for the same nine routes and seed. | Validated at two-way concurrency on one node. The full 475-route scale and larger multi-node fan-out are unmeasured, and a transient simulator freeze (the "no liveness probe" gap in §3) is only caught by `route_timeout_s` — absorbed by the infra-retry budget, but with no early detector. |
 | H10 | **PARTIAL — 2026-08-11/12** | A fresh GitHub clone ran setup twice (26/26 patches, idempotent), 222 runner tests, a strict 475-route dry run, real smoke routes, and the nine-route PDM-Lite golden/acceptance flow with every path supplied by config. | The host still had the maintainers' internal mounts available; the stronger “those mounts do not exist” portability proof must be repeated externally. |
 
-> ### ⚠ The SLURM backend is BROKEN. Do not use it.
+> ### ✅ The SLURM backend is validated (2026-08-15).
 >
-> H9 above said "never executed against a scheduler", which was true and not the whole truth. A
-> review on 2026-08-09 drove `SlurmBackend` against a stand-in scheduler and found defects that
-> need no cluster to demonstrate. Two are fatal on their own:
+> A 2026-08-09 stand-in-scheduler review drove `SlurmBackend` and found two critical and six major
+> defects, all repairable without a cluster: `submit()` never created the `results/` directory its
+> own `--checkpoint` pointed into (every job died at its first checkpoint write); a signal-killed
+> job was classified `EXITED`, charging a crash-shaped record to the **model's** budget instead of
+> the bounded axis the local backend uses; `route_timeout_s` was measured from `sbatch` submission
+> so queue time counted as route runtime; every non-terminal `sacct` state including `RUNNING` read
+> as `EXITED`; `scancel` was asynchronous but settlement did not wait; a successful `sbatch` with
+> non-numeric output was recorded as a launch failure while its job really ran unsupervised; worker
+> quarantine treated SLURM slot indices as machines; and the job script hard-coded
+> `CUDA_VISIBLE_DEVICES=0` / `--gpu-rank 0`, overriding the scheduler's allocation.
 >
-> 1. **`submit()` never creates the `results/` directory** its own `--checkpoint` argument points
->    into. `task.mkdirs()` is called only from `jobscript.write()`, which the SLURM path does not
->    use — it calls `jobscript.render()` directly. On a fresh output root **every** job dies at
->    its first checkpoint write and the sweep produces zero results while blaming the cluster.
->    No test catches it because the stand-in evaluator creates the directory itself
->    (`tests/test_integration_local.py:55`); the real `statistics_manager.py` contains no `mkdir`.
-> 2. **A job killed by a signal is classified `EXITED`.** `_sacct_state` requests `State` and
->    never `ExitCode`, and `FAILED` is not in the fault list — so OOM kills, SIGSEGV and SIGABRT
->    arrive as CLEAN_EXIT and any crash-shaped record they left is charged to the **model's**
->    record budget and published as the model's verdict at exit 0. This is cross-review finding 2,
->    the defect four review rounds were spent closing on the local backend, entirely alive here.
->    **The same agent, on the same routes, can settle on a different axis and a different final
->    status depending on which backend ran it.**
+> All eight were repaired **red-first**, independently cross-reviewed (`.reviews/`), and then
+> **closed by observation on a real scheduler**. A full route category (70 routes, seed 42) ran at
+> two concurrent jobs: every route settled on a genuine `Finished` checkpoint (60
+> `Failed - TickRuntime`, 9 `Completed`, 1 `Failed - Agent got blocked` — all valid model-side
+> results); concurrent jobs landed on distinct physical GPUs with the scheduler's CUDA allocation
+> preserved and each job's configured Vulkan adapter selected, held disjoint RPC/TM ports, and were
+> reaped with no orphan. Against the local backend, SLURM matched status and every §6A axis for the
+> same nine routes and seed. C1 (checkpoint parent) and C2 (signal→bounded-axis, not model verdict)
+> are closed on hardware; a cancelled job charges the bounded axis and publishes no model verdict.
 >
-> Six further majors were confirmed: `route_timeout_s` is measured from `sbatch` submission so
-> queue time counts as route runtime (a job that never started is cancelled, charged to infra,
-> and the checkpoint it was going to replace is already gone); every non-terminal `sacct` state
-> including `RUNNING` reads as `EXITED`, so one transient `squeue` failure settles a live job and
-> submits a second for the same route, ports and checkpoint path; `scancel` is asynchronous but
-> settlement does not wait for it; a successful `sbatch` whose output does not end in digits is
-> recorded as a launch failure while the job really runs, unsupervised and outside `shutdown()`;
-> worker quarantine treats SLURM slot indices as machines, so one cluster-wide transient retires
-> every slot at exit 4; and the job script hard-codes `CUDA_VISIBLE_DEVICES=0` / `--gpu-rank 0`,
-> overriding whatever the scheduler allocated, with the config's `gpus:` list silently ignored.
->
-> Full record kept internally by the maintainers. **Until these are fixed, `execution.backend:
-> slurm` should be treated as unimplemented.** The local backend is unaffected — every one of
-> these lives in `slurm.py` or in a path only it takes.
+> **Measured limits.** Validation is at two-way concurrency on a single node; the full 475-route
+> scale and larger multi-node fan-out are unmeasured. There is no early liveness probe (§3), so a
+> CARLA simulation that transiently freezes mid-route is caught only by `execution.route_timeout_s`:
+> the infra-retry budget absorbs the transient and the route settles on a later attempt, but a
+> long, generous `route_timeout_s` makes each freeze expensive. Size `infra_budget` and
+> `route_timeout_s` for your agent. The local backend is unaffected by any of the above.
 
 ### Hardware-validation measurement notes
 
@@ -373,7 +369,9 @@ and should not be quoted as if it did.
    H3 if agents and simulators spread together.
 3. Run a real inference model on one category, then the full 475-route set if stable. Measures
    the remaining H8 scale and throughput claim.
-4. Do not attempt SLURM until its known defects are deliberately repaired and reviewed.
+4. SLURM is repaired, reviewed, and validated at category scale (H9, 2026-08-15). What remains for
+   it is the full 475-route scale and larger multi-node fan-out, and an early liveness probe so a
+   transient simulator freeze need not wait out `route_timeout_s`.
 
 ---
 

@@ -77,7 +77,11 @@ execution:
                           # slurm.max_parallel and this value is ignored.
   route_timeout_s: 3600   # wall clock per attempt; exceeded attempts are killed and retried
   poll_interval_s: 10
-  post_kill_cooldown_s: 10
+  post_kill_cooldown_s: 10    # minimum quiet period after reaping a busy worker port block
+  # Keep the worker idle (without consuming a route attempt) while CARLA's sockets drain.
+  # A port still occupied after this deadline fails closed through the normal infra budget.
+  # Must be at least the 10 s SIGTERM grace plus post_kill_cooldown_s.
+  port_release_timeout_s: 90
   allow_gpu_stacking: false   # true to permit workers > GPUs (throughput and VRAM hazard)
 
 # One entry per GPU the runner may use. Worker i uses gpus[i % len(gpus)].
@@ -89,9 +93,9 @@ execution:
 # Run `python run_benchmark.py --check-gpus` and record the real mapping. Omitting `vulkan`
 # assumes it equals `cuda` and prints a warning.
 #
-# Both indices must be unique across the list. A repeated `vulkan` would put two CARLA servers
-# on ONE physical GPU while their agents run on different ones — nothing errors, throughput just
-# collapses. To run several workers per GPU, list the GPU once and set allow_gpu_stacking above.
+# Under host-scoped visibility both indices must be unique. A repeated host Vulkan index would
+# put two CARLA servers on one physical GPU. A qualified one-GPU SLURM cgroup may instead give
+# each job its own Vulkan adapter 0; select allocation scope below only after UUID/PCI validation.
 gpus:
   - {cuda: 0, vulkan: 0}
 
@@ -155,4 +159,8 @@ slurm:
   max_parallel: 8         # jobs in flight at once. This — not execution.workers — is the
                           # concurrency under this backend, and it sizes the reserved port block.
   submit_interval_s: 1.0
+  # host: Vulkan indices address one shared host enumeration and must be unique (default).
+  # allocation: each one-GPU job has its own Vulkan enumeration; repeated adapter 0 is valid.
+  # Validate allocation scope by matching CUDA/NVML and Vulkan UUID or PCI identity in-job.
+  vulkan_index_scope: host
   extra_directives: []

@@ -44,6 +44,10 @@ execution:
   workers: 1
   route_timeout_s: 1800
   poll_interval_s: 5
+  # Hardware measured RPC+1 lingering for roughly 45-60 s after CARLA teardown. The runner
+  # holds the worker idle during this window; it does not charge the next route an infra retry.
+  # This must cover the 10 s SIGTERM grace plus post_kill_cooldown_s (default 10 s).
+  port_release_timeout_s: 90
 
 gpus:
   - {cuda: 0, vulkan: 0}
@@ -64,16 +68,12 @@ retry:
   killed_budget: 2
   # infra_budget and worker_quarantine_after are the SCHEMA DEFAULTS (3), on purpose.
   #
-  # They were 1 and 2 until hardware validation, which is one occurrence of tolerance for an
-  # infrastructure transient. That is not enough, measured rather than argued: on 2026-08-12 a
-  # worker's own RPC port was still occupied after the reaper ran AND after post_kill_cooldown_s
-  # elapsed. The runner correctly refused to launch on a dirty port -- but with a budget of 1
-  # that single, self-clearing event exhausted it, left the route unsettled and exited 1, and
-  # needed a manual --retry-infra-exhausted to recover. Roughly 1 launch in 30.
+  # They were 1 and 2 until hardware validation measured genuine infrastructure failures that
+  # needed bounded retries. A self-clearing post-CARLA port linger is no longer part of this
+  # budget: execution.port_release_timeout_s holds the worker idle before another route exists.
   #
-  # An infra budget bounds "a machine that is broken NOW" (DESIGN.md 6A.5). A port that is busy
-  # for a few seconds after teardown is not a broken machine, and a 475-route sweep would meet
-  # this a dozen times. Do not tighten these below the defaults without new measurements.
+  # An infra budget bounds "a machine that is broken NOW" (DESIGN.md 6A.5). Do not tighten
+  # these below the defaults without new measurements.
   infra_budget: 3
   worker_quarantine_after: 3
 

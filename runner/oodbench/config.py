@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -22,6 +23,7 @@ from typing import Any, Dict, List, Optional, Tuple
 # Safe at module level: jobscript imports this module only under TYPE_CHECKING, so there is no
 # import cycle. RESERVED_ENV lives there because that module is what exports the variables.
 from .jobscript import RESERVED_ENV
+from .reap import PORT_REAP_TERM_GRACE_S
 
 _SENTINEL = object()
 
@@ -75,6 +77,7 @@ SCHEMA: Dict[str, Dict[str, Any]] = {
         "route_timeout_s": ("int", 3600),
         "poll_interval_s": ("int", 10),
         "post_kill_cooldown_s": ("int", 10),
+        "port_release_timeout_s": ("int", 90),
         "allow_gpu_stacking": ("bool", False),
     },
     "ports": {
@@ -120,6 +123,7 @@ SCHEMA: Dict[str, Dict[str, Any]] = {
         "gres": ("str", "gpu:1"),
         "max_parallel": ("int", 8),
         "submit_interval_s": ("number", 1.0),
+        "vulkan_index_scope": ("str", "host"),
         "extra_directives": ("strlist", []),
     },
 }
@@ -138,11 +142,13 @@ SCHEMA: Dict[str, Dict[str, Any]] = {
 #: behaviour in a way an operator would want flagged does NOT belong here.
 DIGEST_COMPAT_DEFAULTS: Dict[Tuple[str, str], Any] = {
     ("retry", "killed_budget"): 2,
+    ("slurm", "vulkan_index_scope"): "host",
 }
 
 VALID_BACKENDS = ("local", "slurm")
 VALID_TRACKS = ("SENSORS", "MAP")
 VALID_RESUME_MODES = ("skip_terminal", "skip_any_final", "none")
+VALID_VULKAN_INDEX_SCOPES = ("host", "allocation")
 
 
 # --------------------------------------------------------------------------------------
@@ -152,11 +158,12 @@ VALID_RESUME_MODES = ("skip_terminal", "skip_any_final", "none")
 class GpuSpec:
     """One physical GPU, addressed by its *two independent* indices.
 
-    ``cuda``   -> ``CUDA_VISIBLE_DEVICES`` for the agent.
+    ``cuda``   -> ``CUDA_VISIBLE_DEVICES`` locally, or SLURM's global allocation lookup key.
     ``vulkan`` -> CARLA's ``-graphicsadapter`` (via ``--gpu-rank``) for the simulator.
 
-    They are separate enumerations and are not guaranteed equal on a multi-GPU host; see
-    DESIGN.md §4. ``vulkan_assumed`` records that we defaulted it, so the runner can warn.
+    They are separate enumerations and are not guaranteed equal. A SLURM allocation may also
+    give the Vulkan index job-local scope; see DESIGN.md §4. ``vulkan_assumed`` records that we
+    defaulted it, so the runner can warn.
     """
 
     cuda: int
@@ -348,7 +355,7 @@ def _coerce(section: str, key: str, kind: str, value: Any) -> Any:
     raise AssertionError(f"unhandled kind {kind!r}")  # pragma: no cover
 
 
-def _parse_gpus(raw: Any) -> List[GpuSpec]:
+def _parse_gpus(raw: Any, *, vulkan_index_scope: str = "host") -> List[GpuSpec]:
     if raw is None:
         raise ConfigError(
             "gpus: required. List every GPU the runner may use, e.g.\n"
@@ -386,12 +393,11 @@ def _parse_gpus(raw: Any) -> List[GpuSpec]:
                 f"gpus[{i}].cuda={cuda} is already claimed by gpus[{seen_cuda[cuda]}]; "
                 f"each entry must name a distinct physical GPU"
             )
-        # The vulkan adapter needs exactly the same uniqueness, and for a worse reason. Two
-        # entries sharing an adapter put both CARLA *servers* on one physical GPU while their
-        # agents sit on different ones -- the box looks busy, one device saturates, throughput
-        # collapses, and NOTHING errors, because Vulkan does not honour CUDA_VISIBLE_DEVICES.
-        # Checking only `cuda` (as this did) leaves that entirely silent.
-        if vulkan in seen_vulkan:
+        # Host-visible Vulkan adapters need the same uniqueness, and for a worse reason. Two
+        # entries sharing one host adapter put both CARLA servers on one physical GPU. Under an
+        # explicitly qualified one-GPU SLURM allocation, however, adapter 0 is job-local: two
+        # separate cgroups may reuse that integer while naming different physical GPUs.
+        if vulkan in seen_vulkan and vulkan_index_scope == "host":
             other = seen_vulkan[vulkan]
             note = ""
             if assumed or specs[other].vulkan_assumed:
@@ -490,6 +496,24 @@ def build(raw: Dict[str, Any], source_path: Optional[str] = None,
             raise ConfigError(f"execution.{key} must be >= 1")
     if resolved["execution"]["post_kill_cooldown_s"] < 0:
         raise ConfigError("execution.post_kill_cooldown_s must be >= 0")
+    if resolved["execution"]["port_release_timeout_s"] < 1:
+        raise ConfigError("execution.port_release_timeout_s must be >= 1")
+    release_timeout = resolved["execution"]["port_release_timeout_s"]
+    release_cooldown = resolved["execution"]["post_kill_cooldown_s"]
+    if release_timeout < release_cooldown:
+        raise ConfigError(
+            "execution.port_release_timeout_s must be >= "
+            "execution.post_kill_cooldown_s"
+        )
+    if resolved["execution"]["backend"] == "local" and resolved["ports"]["probe"]:
+        minimum_release_timeout = math.ceil(PORT_REAP_TERM_GRACE_S) + release_cooldown
+        if release_timeout < minimum_release_timeout:
+            raise ConfigError(
+                "execution.port_release_timeout_s must cover the CARLA SIGTERM grace plus "
+                "post-kill cooldown when local port probing is enabled: expected >= "
+                f"{minimum_release_timeout}s ({math.ceil(PORT_REAP_TERM_GRACE_S)}s + "
+                "execution.post_kill_cooldown_s)"
+            )
 
     if resolved["agent"]["track"] not in VALID_TRACKS:
         raise ConfigError(
@@ -540,6 +564,17 @@ def build(raw: Dict[str, Any], source_path: Optional[str] = None,
         raise ConfigError("slurm.max_parallel must be >= 1")
     if resolved["slurm"]["submit_interval_s"] < 0:
         raise ConfigError("slurm.submit_interval_s must be >= 0")
+    vulkan_index_scope = resolved["slurm"]["vulkan_index_scope"]
+    if vulkan_index_scope not in VALID_VULKAN_INDEX_SCOPES:
+        raise ConfigError(
+            f"slurm.vulkan_index_scope must be one of {VALID_VULKAN_INDEX_SCOPES}, "
+            f"got {vulkan_index_scope!r}"
+        )
+    if vulkan_index_scope == "allocation" and resolved["execution"]["backend"] != "slurm":
+        raise ConfigError(
+            "slurm.vulkan_index_scope='allocation' is valid only when "
+            "execution.backend='slurm'"
+        )
     if resolved["execution"]["backend"] == "slurm" and resolved["execution"]["workers"] > 1 \
             and resolved["execution"]["workers"] != resolved["slurm"]["max_parallel"]:
         warnings.append(
@@ -550,7 +585,7 @@ def build(raw: Dict[str, Any], source_path: Optional[str] = None,
             f"in flight at once."
         )
 
-    gpus = _parse_gpus(gpus_raw)
+    gpus = _parse_gpus(gpus_raw, vulkan_index_scope=vulkan_index_scope)
     if any(g.vulkan_assumed for g in gpus):
         warnings.append(
             "gpus: 'vulkan' was not given for at least one GPU, so it defaults to the same "

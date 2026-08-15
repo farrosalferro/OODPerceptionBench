@@ -287,6 +287,12 @@ class Runner:
             for worker in range(n_workers):
                 if worker in self.quarantined or slots[worker] is not None or not pending:
                     continue
+                # A stable local slot can be idle while CARLA's previous sockets are still
+                # draining. Keep the route pending until the backend says the slot is reusable:
+                # popping it first would turn teardown backpressure into this unrelated route's
+                # LAUNCH_FAILED infrastructure debt. Scheduler backends use the default True.
+                if not backend.can_submit(worker):
+                    continue
                 task = pending.pop(0)
                 slots[worker] = backend.submit(task, worker)
 
@@ -534,6 +540,7 @@ class Runner:
         """
         task = attempt.task
         infra_budget = int(self.cfg.retry["infra_budget"])
+        stable_worker_slots = bool(getattr(backend, "stable_worker_slots", True))
         # The quarantine streak tracks ONE population: attempts where *nothing ran at all*.
         # An attempt that launched, loaded the map and drove before breaching route_timeout_s
         # produced no record -- so the ROUTE's budget is charged, because it still has to settle
@@ -549,7 +556,7 @@ class Runner:
         # launched and then died without a record is a *fast* failure: it looks far more like a
         # sick worker than like a route that drove for a full route_timeout_s, so it still
         # advances the streak. Only breaching the wall clock proves the worker was working.
-        if attempt.outcome is not AttemptOutcome.TIMEOUT:
+        if stable_worker_slots and attempt.outcome is not AttemptOutcome.TIMEOUT:
             self.consecutive_infra[attempt.worker] = self.consecutive_infra.get(
                 attempt.worker, 0) + 1
         # The streak is the gate; the total is the audit trail and is never cleared.
@@ -563,7 +570,8 @@ class Runner:
             st.last_reason = f"no final record ({reason})"
             log.warning("%s: no final record after attempt %d [%s]",
                         task.key, st.attempts_infra, reason)
-        self._maybe_quarantine(attempt.worker, backend)
+        if stable_worker_slots:
+            self._maybe_quarantine(attempt.worker, backend)
         if st.attempts_infra < infra_budget:
             return True
 

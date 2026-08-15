@@ -121,11 +121,47 @@ class TestConfig(unittest.TestCase):
     def test_bad_enum_values_are_rejected(self):
         for section, key, bad in (("execution", "backend", "kubernetes"),
                                   ("agent", "track", "LIDAR"),
-                                  ("resume", "mode", "always")):
+                                  ("resume", "mode", "always"),
+                                  ("slurm", "vulkan_index_scope", "process")):
             raw = json.loads(json.dumps(self.raw))
             raw[section] = {key: bad}
             with self.assertRaises(ConfigError, msg=f"{section}.{key}"):
                 config_mod.build(raw)
+
+    def test_port_release_timeout_covers_term_grace_and_post_kill_cooldown(self):
+        raw = json.loads(json.dumps(self.raw))
+        raw["execution"] = {"post_kill_cooldown_s": 10, "port_release_timeout_s": 19}
+        with self.assertRaises(ConfigError) as ctx:
+            config_mod.build(raw)
+        self.assertIn("port_release_timeout_s", str(ctx.exception))
+
+        raw["execution"]["port_release_timeout_s"] = 20
+        config_mod.build(raw)
+
+    def test_term_grace_minimum_only_applies_when_local_port_probing_is_active(self):
+        for backend, probe in (("slurm", True), ("local", False)):
+            with self.subTest(backend=backend, probe=probe):
+                raw = json.loads(json.dumps(self.raw))
+                raw["execution"] = {
+                    "backend": backend,
+                    "post_kill_cooldown_s": 10,
+                    "port_release_timeout_s": 19,
+                }
+                raw["ports"] = {"probe": probe}
+                config_mod.build(raw)
+
+    def test_timeout_still_covers_cooldown_for_every_backend(self):
+        for backend, probe in (("slurm", True), ("local", False)):
+            with self.subTest(backend=backend, probe=probe):
+                raw = json.loads(json.dumps(self.raw))
+                raw["execution"] = {
+                    "backend": backend,
+                    "post_kill_cooldown_s": 20,
+                    "port_release_timeout_s": 19,
+                }
+                raw["ports"] = {"probe": probe}
+                with self.assertRaises(ConfigError):
+                    config_mod.build(raw)
 
     def test_duplicate_cuda_index_is_rejected(self):
         raw = json.loads(json.dumps(self.raw))
@@ -160,6 +196,13 @@ class TestConfig(unittest.TestCase):
         raw["gpus"] = [{"cuda": 0, "vulkan": 1}, {"cuda": 1, "vulkan": 0}]
         cfg = config_mod.build(raw)          # a crossed but valid mapping
         self.assertEqual([(g.cuda, g.vulkan) for g in cfg.gpus], [(0, 1), (1, 0)])
+
+    def test_allocation_scoped_vulkan_indices_are_slurm_only(self):
+        raw = json.loads(json.dumps(self.raw))
+        raw["slurm"] = {"vulkan_index_scope": "allocation"}
+        with self.assertRaises(ConfigError) as ctx:
+            config_mod.build(raw)
+        self.assertIn("execution.backend='slurm'", str(ctx.exception))
 
     # -- agent.env may not fight the runner for a variable the runner owns -----------------
 
@@ -211,6 +254,13 @@ class TestConfig(unittest.TestCase):
         raw = json.loads(json.dumps(self.raw))
         raw["benchmark"] = {"seed": 43}
         self.assertNotEqual(a, config_mod.build(raw).digest())
+
+    def test_default_host_vulkan_scope_preserves_existing_config_digest(self):
+        omitted = config_mod.build(json.loads(json.dumps(self.raw))).digest()
+        raw = json.loads(json.dumps(self.raw))
+        raw["slurm"] = {"vulkan_index_scope": "host"}
+        explicit_default = config_mod.build(raw).digest()
+        self.assertEqual(omitted, explicit_default)
 
     def test_strict_manifest_without_manifest_is_rejected(self):
         raw = json.loads(json.dumps(self.raw))
