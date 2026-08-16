@@ -60,8 +60,9 @@ is below; this file carries the parts a script cannot judge.
 - [ ] **The asset-pack download URL is a placeholder** (`https://huggingface.co/datasets/farrosalferro24/OODPerceptionBench`) in
       `assets/README.md` and `assets/INSTALL.md`. Create the host, upload the three tarballs,
       substitute the URL. Gated by `tools/check_release_ready.py`.
-- [ ] **`docs/import_procedure_vehicle.md` ships behind a DRAFT banner** by decision. Confirm
-      the banner is still the first thing in the file before tagging.
+- [x] **`docs/import_procedure_vehicle.md` ships behind a DRAFT banner** by decision. Confirm
+      the banner is still the first thing in the file before tagging. (2026-08-16: confirmed —
+      the `⚠ DRAFT — NOT COMPLETE` banner is the first content in the file.)
 
 ## Before tagging — judgement calls a script cannot make
 
@@ -73,9 +74,10 @@ is below; this file carries the parts a script cannot judge.
       vehicle **81**/243, total **237**/475; **145** base-level route files (covering the 55
       distinct base routes); `firefighter` is **18** routes, not 19 — `NOTICE` corrected. Redo
       this count if any prop's licence verdict changes.
-- [ ] **`tools/dev/check_notice_assets.py --assets-tsv <private audit>` passes.** This is the
+- [x] **`tools/dev/check_notice_assets.py --assets-tsv <private audit>` passes.** This is the
       only check that can prove no non-redistributable asset leaked into `assets/` or into the
-      NOTICE attributions. It cannot run in public CI because the audit is private.
+      NOTICE attributions. It cannot run in public CI because the audit is private. (2026-08-16:
+      PASS against the private `ASSETS.tsv` — audit reports 6 ship, 12 replace.)
 - [ ] **Asset pack contains exactly six props.** Verify by enumeration, not by trusting the
       build.
 - [ ] **The `EXCLUDED.md` §D judgement calls reviewed by a human.** Three files were excluded on

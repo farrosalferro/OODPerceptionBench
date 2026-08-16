@@ -47,5 +47,7 @@ findings. H6 did not change their implementation.
   route status is `Completed`.
 - The SSHFS loss during H3 was external storage failure. The attempt was discarded and repeated
   from a fresh output root.
-- Cross-GPU simulator placement, the 475-route scale run, and SLURM are unvalidated scope gaps,
-  not successful validations. SLURM is additionally known broken and must not be used.
+- Cross-GPU simulator placement and the 475-route scale run are unvalidated scope gaps, not
+  successful validations. The SLURM backend was repaired and validated on a real scheduler at
+  two-way concurrency on a single node (H9, closed 2026-08-15); its full 475-route scale and
+  multi-node fan-out remain unvalidated.

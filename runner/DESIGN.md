@@ -7,8 +7,10 @@
 >
 > **Status of the accompanying code: local first cut with bounded hardware validation.** Real
 > CARLA 0.9.15 runs have exercised local single/two-worker execution, ports, reaping,
-> interrupt/resume, failure reporting, and the nine-route acceptance split. Multi-GPU mapping,
-> the full 475-route scale, and SLURM remain unvalidated. See `STATUS.md` §2 for the exact
+> interrupt/resume, failure reporting, and the nine-route acceptance split. Multi-GPU mapping and
+> the full 475-route scale remain unvalidated; the SLURM backend is validated at two-way
+> concurrency on a single node (H9, 2026-08-15), with its full 475-route scale and multi-node
+> fan-out still open. See `STATUS.md` §2 for the exact
 > evidence. This document is the durable part: decisions that are expensive to change later.
 
 ---
@@ -1487,9 +1489,11 @@ Kept, because each was a real incident:
 - **Bounded resubmission** with the same two-budget accounting as local.
 - **Finalized-result skipping** on resume, same predicate.
 
-**The SLURM backend is the least-tested part of this first cut.** It is written against the
-same interface and shares all the planning, resume, retry and reporting logic, but it has not
-been run.
+**The SLURM backend was the least-tested part of this first cut, and has since been validated on
+hardware.** It is written against the same interface and shares all the planning, resume, retry
+and reporting logic; it ran on a real scheduler at two-way concurrency on a single node
+(`STATUS.md` §2, H9, 2026-08-15), matching the local backend's status and §6A axes for the same
+routes and seed. Its full 475-route scale and multi-node fan-out remain unmeasured.
 
 ---
 
@@ -1510,7 +1514,7 @@ oodbench/
   backends/
     base.py                 Backend interface
     local.py                worker pool
-    slurm.py                sbatch backend (first cut, unrun)
+    slurm.py                sbatch backend (validated 2026-08-15, H9; full-scale/multi-node unmeasured)
 reference_agent/
   constant_velocity_agent.py   stock AutonomousAgent, no ML dependency
 configs/
