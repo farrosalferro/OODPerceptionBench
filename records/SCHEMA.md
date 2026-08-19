@@ -1,15 +1,15 @@
 # Records schema — `ood-perceptionbench/records/1`
 
-**64 columns · 8,550 rows · one row per `(model, category, scenario, route_id, level, prop, seed)`**
+**64 columns · 24,700 rows · one row per `(model, category, scenario, route_id, level, prop, seed)`**
 
 The authoritative column list — names and order — is `columns` in
 `*.meta.json`, which `build_records.py` writes from the DataFrame it just wrote
 to disk. `check_meta.py` asserts it against the CSV header on every run of
 `verify.sh`, so this document and the artifact cannot silently disagree.
 
-`non-null` counts are out of 8,550 and are a property of the data, not of the
+`non-null` counts are out of 24,700 and are a property of the data, not of the
 generator — see the notes. The `dtype` column is the dtype `load.py` applies; the CSV
-is untyped text so that the literal token `Infinity` (1,367 occurrences in the
+is untyped text so that the literal token `Infinity` (1,315 occurrences in the
 secondary-metric columns) survives a round-trip unchanged.
 
 ---
@@ -18,44 +18,47 @@ secondary-metric columns) survives a round-trip unchanged.
 
 | column | dtype | non-null | notes |
 |---|---|---|---|
-| `model` | string | 8550 | eval key: 17 E2E + `pdmlite` |
-| `category` | string | 8550 | `pedestrian` / `static` / `vehicle` |
-| `scenario` | string | 8550 | CARLA scenario family |
-| `route_id` | string | 8550 | base route id (string — do not coerce) |
-| `level` | string | 8550 | `base` / `visual_shift` / `geometric_shift` |
-| `prop` | string | 8550 | **post-rename** prop token (the `ood.*` namespace); joins to the route manifest |
-| `seed` | int64 | 8550 | always 42 |
-| `prop_raw` | string | 8550 | on-disk token, pre-rename (`sedane`, `amv`). **Join key for the raw result tree.** |
-| `variant` | string | 8550 | legacy alias of `prop_raw`, kept for existing tooling |
-| `scenario_name` | string | 8548 | e.g. `DynamicObjectCrossingModified_1` |
-| `town_name` | string | 8548 | |
-| `weather_id` | string | 8548 | |
+| `model` | string | 24700 | eval key: 17 E2E + `pdmlite` |
+| `category` | string | 24700 | `pedestrian` / `static` / `vehicle` |
+| `scenario` | string | 24700 | CARLA scenario family |
+| `route_id` | string | 24700 | base route id (string — do not coerce) |
+| `level` | string | 24700 | `base` / `visual_shift` / `geometric_shift` |
+| `prop` | string | 24700 | **post-rename** prop token (the `ood.*` namespace); joins to the route manifest |
+| `seed` | int64 | 24700 | 42, 43, 44 (PDM-Lite ceiling: 42 only) |
+| `prop_raw` | string | 24700 | on-disk token, pre-rename (`sedane`, `amv`). **Join key for the raw result tree.** |
+| `variant` | string | 24700 | legacy alias of `prop_raw`, kept for existing tooling |
+| `scenario_name` | string | 24675 | e.g. `DynamicObjectCrossingModified_1` |
+| `town_name` | string | 24677 | |
+| `weather_id` | string | 24677 | |
 
-> The 2 rows short of 8,550 have an **empty `records` list** in their result
+> The 25 rows short of 24,700 have an **empty `records` list** in their result
 > JSON — an infrastructure failure that produced no record at all. They are
-> retained (dropping them would silently change a denominator). Both are
-> identified in `*.meta.json`; they are
+> retained (dropping them would silently change a denominator). Two seed-42 ones
+> are identified by name in `*.meta.json`; they are
 > `admlp / static / construction_obstacle / geometric_shift / 24785 / roadclosedsign`
 > and
 > `bridgedrive / static / construction_obstacle_two_ways / visual_shift / 1833 / europianarrowboardtrailer`
-> (the latter is the known BridgeDrive silent-hang route).
+> (the latter is the known BridgeDrive silent-hang route). The other 23 are
+> non-ceiling-seed (43/44) routes that wall-timed out at the 2-hour cap (no
+> record), spread across a handful of vehicle models; they fold to blank via the
+> paper's dropna and are seed-42-present where they finished.
 
 ## Primary outcome
 
 | column | dtype | non-null | notes |
 |---|---|---|---|
-| `status` | string | 8548 | `Completed`, `Perfect`, `Failed - TickRuntime`, … |
-| `success` | boolean | 8550 | Bench2Drive SR (Eq. 1). Skip-set is **not** just `min_speed` — it is `INFRACTION_SKIP_KEYS` in `build_records.py` |
-| `score_composed` | float64 | 8548 | **Driving Score.** `score_route × score_penalty` |
-| `score_route` | float64 | 8548 | Route Completion |
-| `score_penalty` | float64 | 8548 | Infraction Penalty |
-| `driving_score` | float64 | 8546 | leaderboard aggregate label; equals `score_composed` per route. **This is the column the paper's statistics read.** |
-| `route_completion` | float64 | 8546 | leaderboard aggregate label |
-| `infraction_penalty` | float64 | 8546 | leaderboard aggregate label |
+| `status` | string | 24675 | `Completed`, `Perfect`, `Failed - TickRuntime`, … |
+| `success` | boolean | 24700 | Bench2Drive SR (Eq. 1). Skip-set is **not** just `min_speed` — it is `INFRACTION_SKIP_KEYS` in `build_records.py` |
+| `score_composed` | float64 | 24675 | **Driving Score.** `score_route × score_penalty` |
+| `score_route` | float64 | 24675 | Route Completion |
+| `score_penalty` | float64 | 24675 | Infraction Penalty |
+| `driving_score` | float64 | 24664 | leaderboard aggregate label; equals `score_composed` per route. **This is the column the paper's statistics read.** |
+| `route_completion` | float64 | 24664 | leaderboard aggregate label |
+| `infraction_penalty` | float64 | 24664 | leaderboard aggregate label |
 
-> `driving_score` is non-null on 8,546 vs `score_composed`'s 8,548: two further
-> rows have a record but no leaderboard `values` block — both `hydra_next`
-> (`Failed - Simulation crashed` and `Failed - Agent crashed`), which still
+> `driving_score` is non-null on 24,664 vs `score_composed`'s 24,675: 11 further
+> rows have a record but no leaderboard `values` block — `hydra_next` and a few
+> 43/44 routes (`Failed - Simulation crashed` and `Failed - Agent crashed`), which still
 > carry a valid `score_composed`. Both columns are shipped so a consumer can see
 > the difference rather than guess. The paper's statistics read `driving_score`
 > and `load_cell` drops its NaNs, so those two rows are excluded there — this is
@@ -65,21 +68,28 @@ secondary-metric columns) survives a round-trip unchanged.
 
 | column | dtype | non-null | notes |
 |---|---|---|---|
-| `ood_agent_hit` | boolean | 8550 | ≥1 collision whose actor type is the OOD prop's own |
-| `collided_with_ood_agent` | boolean | 8550 | identical; the name the frozen analysis uses |
-| `ood_agent_collision_count` | int64 | 8550 | number of such collision events |
-| `agent_type` | string | 8550 | resolved OOD actor type, **post-rename** — the released `vehicle.ood.*` blueprint ids. Joins to `prop_blueprint_id` in `../routes/MANIFEST.tsv` |
-| `agent_type_source` | string | 8550 | `record` (6,635) / `fallback` (1,906) / `sentinel` (9) |
+| `ood_agent_hit` | boolean | 24700 | ≥1 collision whose actor type is the OOD prop's own |
+| `collided_with_ood_agent` | boolean | 24700 | identical; the name the frozen analysis uses |
+| `ood_agent_collision_count` | int64 | 24700 | number of such collision events |
+| `agent_type` | string | 24683 | resolved OOD actor type, **post-rename** — the released `vehicle.ood.*` blueprint ids. Joins to `prop_blueprint_id` in `../routes/MANIFEST.tsv` |
+| `agent_type_source` | string | 24683 | `record` (22,742) / `fallback` (1,931) / `sentinel` (27) |
+
+The OOD-collision columns are **full 3-seed**: the paper re-ran its collision
+enricher over seeds 43/44 in every cell (paper commit `4cb5618`), so the paper's
+OOD-hit-rate is a genuine 3-seed average-per-route, exactly like Driving-Score.
+(`agent_type` is 17 short of 24,700 — a handful of gap-fill re-run routes the
+paper's frozen snapshot left without a resolved actor id; those rows carry no OOD
+hit and no published number reads their `agent_type`.)
 
 `sentinel` = the literal `"unknown"` written by the criterion when it could not
-identify the actor (9 ADMLP vehicle rows). Preserved, never back-filled; those
+identify the actor (27 rows = 9 ADMLP vehicle rows × 3 seeds). Preserved, never back-filled; those
 rows score 0 hits. Excluding it when *building* the inference map is load-bearing
 — see README §5.2.
 
 > **`agent_type` carries one id, and it is the released one.** An earlier draft
 > of this schema shipped a redundant second column, `agent_type_renamed`, holding
 > the post-rename value while `agent_type` kept the original vendor id. That is
-> gone: 2,910 rows would have published a live trademark (`vehicle.inkas.amv`,
+> gone: 8,395 rows would have published a live trademark (`vehicle.inkas.amv`,
 > `vehicle.caterpillar.dumptruck`, `vehicle.hamm.roadroller`) in a column of a
 > benchmark that reports collision rates. The rename now happens inside
 > `build_records.py`, in place, driven by the bundled `rename_map.json`.
@@ -96,7 +106,7 @@ rows score 0 hits. Excluding it when *building* the inference map is load-bearin
 > than let that happen.
 >
 > One place the old name survives, correctly: `meta.json` → `rename_stats` →
-> `"agent_type_renamed": 2910`. That is a **counter** — the number of rows whose
+> `"agent_type_renamed": 8406`. That is a **counter** — the number of rows whose
 > `agent_type` the rename changed, alongside `prop_renamed` / `prop_unchanged` —
 > not a column. The authoritative column list is `meta.json` → `columns`, and
 > `check_meta.py` asserts it against the CSV header.
@@ -104,7 +114,7 @@ rows score 0 hits. Excluding it when *building* the inference map is load-bearin
 ## Infraction event counts
 
 `n_<key>` for each of the 12 leaderboard infraction keys, `int64`, non-null on
-all 8,550:
+all 24,700:
 
 `n_collisions_layout` · `n_collisions_pedestrian` · `n_collisions_vehicle` ·
 `n_red_light` · `n_stop_infraction` · `n_outside_route_lanes` ·
@@ -118,7 +128,7 @@ all 8,550:
 ## Leaderboard infraction rates
 
 Per-km / aggregate rates from the leaderboard `values` block (distinct from the
-raw counts above), all `float64`, non-null 8546:
+raw counts above), all `float64`, non-null 24,664:
 
 `collisions_pedestrians` · `collisions_vehicles` · `collisions_layout` ·
 `off_road_infractions`
@@ -127,9 +137,9 @@ raw counts above), all `float64`, non-null 8546:
 
 | column | dtype | non-null |
 |---|---|---|
-| `route_length` | float64 | 8548 |
-| `duration_game` | float64 | 8548 |
-| `duration_system` | float64 | 8548 |
+| `route_length` | float64 | 24675 |
+| `duration_game` | float64 | 24675 |
+| `duration_system` | float64 | 24675 |
 
 ## Secondary metrics (TTR / DAR) — **UNVALIDATED**
 
@@ -138,28 +148,28 @@ all headline tooling. Missing is recorded as missing and never fabricated.
 
 | column | dtype | non-null | notes |
 |---|---|---|---|
-| `ttr_dar_present` | boolean | 8550 | payload existed at all |
-| `ttr` | float64 | 4847 | time-to-react |
-| `dar` | float64 | 4847 | distance-at-react |
-| `ttc_at_reaction` | float64 | 4683 | |
-| `reaction_detected` | boolean | 6644 | |
-| `t_obs_frame` | float64 | 6590 | |
-| `t_react_frame` | float64 | 4847 | |
-| `closing_velocity` | float64 | 4847 | |
-| `reaction_cause` | string | 4847 | e.g. `P2_deceleration` |
-| `reaction_value` | float64 | 4847 | |
-| `reaction_threshold` | float64 | 4847 | |
+| `ttr_dar_present` | boolean | 24700 | payload existed at all |
+| `ttr` | float64 | 16608 | time-to-react |
+| `dar` | float64 | 16608 | distance-at-react |
+| `ttc_at_reaction` | float64 | 15949 | |
+| `reaction_detected` | boolean | 22767 | |
+| `t_obs_frame` | float64 | 22601 | |
+| `t_react_frame` | float64 | 16608 | |
+| `closing_velocity` | float64 | 16608 | |
+| `reaction_cause` | string | 16608 | e.g. `P2_deceleration` |
+| `reaction_value` | float64 | 16608 | |
+| `reaction_threshold` | float64 | 16608 | |
 | `v_start` | float64 | **0** | never populated by the criterion — column kept for schema stability |
 | `v_end` | float64 | **0** | ditto |
-| `final_distance` | float64 | 1752 | |
-| `final_closing_velocity` | float64 | 1752 | |
-| `final_ttc` | float64 | 85 | |
-| `num_reactions` | int64 | 8550 | 0 where no payload |
-| `all_reactions` | string | 4847 | JSON blob |
+| `final_distance` | float64 | 6022 | |
+| `final_closing_velocity` | float64 | 6022 | |
+| `final_ttc` | float64 | 303 | |
+| `num_reactions` | int64 | 24700 | 0 where no payload |
+| `all_reactions` | string | 16608 | JSON blob |
 
 ### Coverage caveat — two distinct failure modes, do not conflate
 
-**Payload entirely absent** (`ttr_dar_present = 0.0` on all 475 routes):
+**Payload entirely absent** (`ttr_dar_present = 0.0` on all 1,425 rows (475 routes × 3 seeds)):
 
 `bridgedrive` · `diffad` · `hipad` · `sparsedrive_v2`
 

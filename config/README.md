@@ -28,5 +28,5 @@ agent:
 output_root:  /path/to/results
 timeout_s:    1800                      # per route
 retries:      1                         # bounded; see runner/README.md
-seed:         42                        # do not change if you want comparable numbers
+seed:         42                        # base seed; protocol is 3 seeds (42/43/44) via runner repetitions: 3
 ```

@@ -79,13 +79,19 @@ DEFAULT_RENAME_MAP = Path(__file__).resolve().parent / "rename_map.json"
 # ---------------------------------------------------------------------------
 RENAME_COL = "agent_type"
 
-# 2,910 = every row across the 18 models whose resolved blueprint is one of the
-# six renamed OOD vehicles. Composition, verified against the artifact:
-#   17 models x 162 = 2,754   (162 = 6 OOD props x 27 vehicle base routes)
-#  + ADMLP             156    (one row per OOD prop carries the `"unknown"`
-#                              sentinel instead, and a sentinel is never renamed)
-#  = 2,910
-EXPECTED_RENAME_DELTAS = 2910
+# 8,395 = every row where the frozen eval carries a renamed OOD-vehicle VENDOR id
+# and the records carry the released vehicle.ood.* id. Composition, verified
+# against the 24,700-row artifact:
+#   seed 42 (all 18 models):                 2,910   (= 2,754 + ADMLP 156)
+#  + seeds 43/44 (frozen carries the vendor
+#    id; agent_type present on those rows):   5,485
+#  = 8,395
+# Note this is SMALLER than the generator's own `agent_type_renamed` count in
+# meta.json: on the non-ceiling seeds the frozen-eval alignment BLANKS a handful
+# of agent_type ids the paper's frozen eval did not carry (fallback-recovered on
+# routes the paper left blank), so those rows no longer differ "by the rename"
+# here. (The seed-42-only artifact was 2,910.)
+EXPECTED_RENAME_DELTAS = 8395
 
 # Columns compared exactly (string-normalised). These are every column that
 # feeds a published number, plus the identity/meta columns.
@@ -126,23 +132,14 @@ METRIC_COLS = {
 # This is an audit list, not a mute button: an entry on a METRIC_COLS column is
 # rejected outright, and every entry is printed on every run.
 # ---------------------------------------------------------------------------
-KNOWN_DELTAS = {
-    (
-        "admlp", "static",
-        ("construction_obstacle", "geometric_shift", "24785", "roadclosedsign", "42"),
-        "agent_type",
-    ): (
-        "static.prop.roadclosedsign", "",
-        "The result JSON for this route has an EMPTY records list (an "
-        "infrastructure failure): no status, no score, no collision events. The "
-        "frozen CSV left agent_type blank because the map available when it was "
-        "written could not resolve this variant; the records recover it from the "
-        "cross-model fallback. 139 other rows read the same value directly out "
-        "of their own JSON, so the records value is the correct one. "
-        "collided_with_ood_agent is False on BOTH sides - no published number "
-        "is affected. Diagnostic column only.",
-    ),
-}
+# Empty as of the 3-seed re-lock. The one historical entry -- admlp/static
+# construction_obstacle/geometric_shift/24785/roadclosedsign seed 42, whose
+# frozen agent_type was blank while the records recovered it via the cross-model
+# fallback -- is GONE: the paper's collision re-enrich (commit 4cb5618) resolved
+# that variant, so the frozen eval now carries `static.prop.roadclosedsign` too
+# and the two sides agree with no declared delta. A declared entry that no longer
+# occurs is REJECTED as stale, so it is removed, not kept "just in case".
+KNOWN_DELTAS: dict = {}
 
 
 def norm(series: pd.Series) -> pd.Series:

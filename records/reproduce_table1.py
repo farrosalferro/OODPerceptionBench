@@ -59,22 +59,28 @@ SUPPORT_MODULES = ["build_table_pdmlite.py"]
 TABLE_OUTPUTS = ["table1_headline.tex", "table_percell_granular.tex"]
 
 # ---- the locked headline figures of the paper -----------------------------
+# 3-seed average-per-route re-lock (paper commit a52528d, docs/stats/
+# final_stats_summary.json). These SUPERSEDE the seed-42 figures shipped in the
+# first v0.9 records: a 4.93->5.047, b 13.221->12.802, b/a 2.7->2.537, K 12->9,
+# geo-deeper cells 46->45, frac 0.902->0.882, d_z 1.14->1.052, and the OOD-hit
+# rates. Comparison A's full deep-diff against the committed summary is the
+# authoritative check; this list is the human-readable, per-figure assertion.
 LOCKED = [
-    ("a  (mean DS drop, visual)",          lambda h: h["a"],                                   4.9,   0.05),
-    ("b  (mean DS drop, geometric)",       lambda h: h["b"],                                  13.2,   0.05),
-    ("b/a ratio",                          lambda h: h["b_over_a"],                            2.7,   0.05),
+    ("a  (mean DS drop, visual)",          lambda h: h["a"],                                   5.047, 0.05),
+    ("b  (mean DS drop, geometric)",       lambda h: h["b"],                                  12.802, 0.05),
+    ("b/a ratio",                          lambda h: h["b_over_a"],                            2.537, 0.05),
     ("n_cells",                            lambda h: h["n_cells"],                              51,   0),
     ("n_models",                           lambda h: h["n_models"],                             17,   0),
-    ("K visually robust",                  lambda h: h["K"],                                    12,   0),
-    ("cells geo deeper",                   lambda h: h["hierarchy_gamma_test"]["n_cells_geo_deeper"], 46, 0),
-    ("frac cells geo deeper",              lambda h: h["hierarchy_gamma_test"]["frac_cells_geo_deeper"], 0.902, 0.001),
+    ("K visually robust",                  lambda h: h["K"],                                     9,   0),
+    ("cells geo deeper",                   lambda h: h["hierarchy_gamma_test"]["n_cells_geo_deeper"], 45, 0),
+    ("frac cells geo deeper",              lambda h: h["hierarchy_gamma_test"]["frac_cells_geo_deeper"], 0.882, 0.001),
     ("gamma p_two_sided < 0.001",          lambda h: h["hierarchy_gamma_test"]["p_two_sided"] < 1e-3, True, 0),
-    ("paired Cohen's d_z",                 lambda h: h["hierarchy_gamma_test"]["cohens_dz"],   1.14,  0.005),
-    ("OOD-hit base (pp)",                  lambda h: h["ood_hit_rate"]["hit_rate_base_pp"],   18.9,   0.05),
-    ("OOD-hit visual (pp)",                lambda h: h["ood_hit_rate"]["hit_rate_visual_pp"], 29.5,   0.05),
-    ("OOD-hit geometric (pp)",             lambda h: h["ood_hit_rate"]["hit_rate_geometric_pp"], 46.1, 0.05),
-    ("visual delta-hit (pp)",              lambda h: h["ood_hit_rate"]["mean_delta_hit_visual_pp"], 10.6, 0.05),
-    ("visual delta-hit p ~ 8.8e-7",        lambda h: h["ood_hit_rate"]["p_delta_hit_visual"] / 8.8e-7, 1.0, 0.02),
+    ("paired Cohen's d_z",                 lambda h: h["hierarchy_gamma_test"]["cohens_dz"],   1.052, 0.005),
+    ("OOD-hit base (pp)",                  lambda h: h["ood_hit_rate"]["hit_rate_base_pp"],   18.55, 0.05),
+    ("OOD-hit visual (pp)",                lambda h: h["ood_hit_rate"]["hit_rate_visual_pp"], 29.46, 0.05),
+    ("OOD-hit geometric (pp)",             lambda h: h["ood_hit_rate"]["hit_rate_geometric_pp"], 46.16, 0.05),
+    ("visual delta-hit (pp)",              lambda h: h["ood_hit_rate"]["mean_delta_hit_visual_pp"], 10.91, 0.05),
+    ("visual delta-hit p ~ 3.2e-7",        lambda h: h["ood_hit_rate"]["p_delta_hit_visual"] / 3.2e-7, 1.0, 0.02),
 ]
 
 
@@ -191,10 +197,10 @@ def main() -> int:
         ok_a &= ok
         print(f"        [{'PASS' if ok else 'FAIL'}] {label:34s} "
               f"got {shown}  expected {expected}")
-    ok_sig = n_sig_mine == 14
+    ok_sig = n_sig_mine == 17
     ok_a &= ok_sig
     print(f"        [{'PASS' if ok_sig else 'FAIL'}] "
-          f"{'sig. geometric regression':34s} got {n_sig_mine}/17  expected 14")
+          f"{'sig. geometric regression':34s} got {n_sig_mine}/17  expected 17")
 
     # ---------------- B. the LaTeX tables themselves ----------------------
     print("\n      B. emitted LaTeX vs committed tables/")

@@ -3,7 +3,7 @@ status: pre-release (staging; not yet published)
 corresponds_to: arXiv v1
 release_tag: v0.9.0
 route_set: 475 canonical routes (static 70 / pedestrian 162 / vehicle 243)
-seed: 42 (single seed — see README "Protocol")
+seed: 42, 43, 44 (three seeds; PDM-Lite ceiling is seed 42 only — see README "Protocol")
 records_binding: v0.9 baseline records correspond to arXiv v1 of the paper.
 
 # Two-version discipline

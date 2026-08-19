@@ -55,4 +55,7 @@ resume:    true     # skip routes whose output record is already FINALIZED
 
 # --- Protocol ----------------------------------------------------------------
 # Do not change this if you want numbers comparable to the published baselines.
+# The published protocol is THREE seeds (42, 43, 44): this is the base seed, and
+# the runner's `benchmark.repetitions: 3` (runner/configs/example.yaml) mints
+# 42/43/44 from it. PDM-Lite (ceiling) is seed 42 only.
 seed: 42

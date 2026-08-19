@@ -2,8 +2,8 @@ bundle: ood-perceptionbench-records
 version: v0.9
 binds_to: arXiv v1
 schema: ood-perceptionbench/records/1
-seed: 42
-n_rows: 8550
+seed: 42, 43, 44 (pdmlite: 42 only)
+n_rows: 24700
 n_models: 18
 n_routes: 475
 rename_map: release/rename_map.json (v0.9, arXiv v1)

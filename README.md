@@ -32,9 +32,11 @@ geometry, so a score difference is attributable to the prop and nothing else. 47
 three interaction categories, evaluated on 17 published end-to-end models.
 
 The headline result is in the working title: **texture-robust, geometry-fragile.** Geometric
-shift costs roughly **2.7×** what visual shift costs (mean driving-score drop 13.2 vs 4.9), the
-regression is significant for **14 of 17** models, and it holds in **46 of 51** (model, category)
-cells at p < 0.001.
+shift costs roughly **2.5×** what visual shift costs (mean driving-score drop 12.8 vs 5.0); the
+geometric regression is statistically significant for **all 17** models, while **9 of 17** are
+statistically robust to the visual shift, and geometric loss is the deeper of the two in
+**45 of 51** (model, category) cells (paired Wilcoxon, p < 10⁻⁷). These are the 3-seed
+average-per-route figures (seeds 42/43/44).
 
 ---
 
@@ -50,7 +52,7 @@ cells at p < 0.001.
 | | v0.9 (this tag) | v1.0 (later) |
 |---|---|---|
 | Route definitions (475) | ✅ | ✅ (unchanged except replaced props) |
-| Baseline records, 17 models, seed 42 | ✅ | re-run for replaced props |
+| Baseline records, 17 models, seeds 42/43/44 | ✅ | re-run for replaced props |
 | Portable runner + SLURM example | ✅ | ✅ |
 | Import procedures (static / walker / vehicle) | ✅ | ✅ |
 | Overlay patches + `setup.sh` + CI | ✅ | ✅ |
@@ -217,7 +219,7 @@ records instead, which is what a reader actually needs.
 
 ```
 routes/       475 canonical route XMLs + MANIFEST.tsv + EXCLUSIONS.md + validator
-records/      per-route baseline records for 17 models + PDM-Lite, seed 42 (CSV + typed loader)
+records/      per-route baseline records for 17 models + PDM-Lite, seeds 42/43/44 (CSV + typed loader)
 runner/       portable serial + local multi-GPU runner, and a de-hardcoded SLURM example
 config/       machine configuration; every path a user must supply lives here
 patches/      the overlay: our changes to the pinned upstream, one patch per file
@@ -241,9 +243,13 @@ Each directory has its own `README.md` stating exactly what belongs there.
 
 ## Protocol — do not vary these if you want comparable numbers
 
-- **Seed 42, single seed.** This matches the published baselines exactly. Requiring three seeds
-  would triple entry cost to ~174 GPU-hours for no change in any conclusion; multi-seed
-  robustness is reported in the paper's appendix instead.
+- **Three seeds: 42, 43, 44.** The baseline records and the paper's headline are the 3-seed
+  average-per-route over these seeds. Reproduce with base `seed: 42` and `repetitions: 3` (the
+  runner mints 42/43/44). Two scope notes: the privileged ceiling model (PDM-Lite) is
+  seed-42-only by design, and the OOD-collision (OOD-hit-rate) metric is seed-42-based for most
+  cells — it mirrors the paper's frozen attribution, which was run per-route on the extra seeds
+  (fully for UniAD, a few re-run routes elsewhere). The Driving-Score statistics use all three
+  seeds.
 - **Unit of aggregation** is the **(model, category) cell** — 17 × 3 = 51 cells.
 - **Within a cell**, pairs are formed on `(scenario, route, seed)`, prop variants are averaged
   per side, and a paired Wilcoxon signed-rank test is run on reference-vs-visual and

@@ -1,6 +1,6 @@
 # OOD-PerceptionBench — derived per-route records (Tier A)
 
-**Bundle version:** `v0.9` · **Binds to:** arXiv v1 · **Seed:** 42 only
+**Bundle version:** `v0.9` · **Binds to:** arXiv v1 · **Seeds:** 42, 43, 44 (PDM-Lite: 42 only)
 
 This directory is Tier A of the release: the per-route baseline records for all
 18 evaluated agents. It lets anyone **re-verify every number in the paper
@@ -15,7 +15,7 @@ The records are a few MB. They ship in-repo; no external hosting, no Zenodo.
 
 | File | What |
 |---|---|
-| `ood_perceptionbench_records_v0.9.csv` | the tidy table, 8,550 rows × 64 columns |
+| `ood_perceptionbench_records_v0.9.csv` | the tidy table, 24,700 rows × 64 columns |
 | `load.py` | the dtype schema, applied at read time; `python3 load.py` proves it drops nothing |
 | `ood_perceptionbench_records_v0.9.meta.json` | version stamp, provenance, sha256 of the artifact **and of the generator**, reconciliation report |
 | `rename_map.json` | the `ood.*` blueprint rename, applied by the generator and re-derived by check 2 |
@@ -23,7 +23,7 @@ The records are a few MB. They ship in-repo; no external hosting, no Zenodo.
 **One row per `(model, category, scenario, route_id, level, prop, seed)`.**
 
 ```
-18 models x 475 canonical routes = 8,550 rows
+17 E2E models × 475 × 3 seeds + PDM-Lite × 475 = 24,700 rows
    475 = 70 static + 162 pedestrian + 243 vehicle
    18  = 17 end-to-end models + PDM-Lite (privileged ceiling)
 ```
@@ -66,7 +66,7 @@ props. Do not mix the two score sets.
 python build_records.py --results-root <root of the raw result tree> --out-dir .
 ```
 
-Runtime ≈ 5–8 min for the full 18-model scan (8,550 JSONs). The results root is
+Runtime ≈ 15 min for the full 18-model scan (24,700 JSONs). The results root is
 opened **read-only**; the script never writes outside `--out-dir`.
 
 `--rename-map` defaults to the `rename_map.json` bundled in this directory, so
@@ -89,7 +89,7 @@ the generator and re-run it. This is not a style preference: it is the defect
 this bundle already shipped once. The `vehicle.ood.*` rename was originally
 applied by hand to a generated CSV — the data came out correct, but `meta.json`
 went on declaring a stale sha256, a stale byte count and a 65-entry column list,
-the validator reported 2,910 unexplained mismatches, and `verify.sh` failed at
+the validator reported 8,395 unexplained mismatches, and `verify.sh` failed at
 its first step. Check 1 (`check_meta.py`) exists to catch exactly that, and the
 rename now lives inside `build_records.py`.
 
@@ -106,9 +106,9 @@ Five independent checks, all of which must pass:
 | # | Script | Asserts | Result |
 |---|---|---|---|
 | 1 | `check_meta.py` | `meta.json` describes the files that are actually here: sha256 + byte size of the CSV, `n_rows`, `n_columns`, and the `columns` list against the CSV header in order | **PASS** — all digests and the 64-column list match |
-| 2 | `load.py` | the documented loader preserves every non-empty value in the CSV — the check that did not exist when the parquet silently dropped 232 | **PASS** — 8,550 × 64, 0 dropped |
-| 3 | `validate_against_frozen.py` | every one of the 8,550 rows matches the frozen per-model CSVs that back the paper, on all 35 metric-bearing columns | **PASS** — 0 undeclared mismatches; 2,910 rows differ by the declared `ood.*` rename (§5.3) and 1 by a declared diagnostic delta (§5.1) |
-| 4 | `reconcile_with_manifest.py` | each model covers each of the 475 canonical routes in `../routes/MANIFEST.tsv` exactly once; blueprint ids agree with the route XMLs | **PASS** — 18 × 475, 0 missing / 0 extra / 0 duplicate; 0 blueprint disagreements on 8,541 checkable rows |
+| 2 | `load.py` | the documented loader preserves every non-empty value in the CSV — the check that did not exist when the parquet silently dropped 232 | **PASS** — 24,700 × 64, 0 dropped |
+| 3 | `validate_against_frozen.py` | every one of the 24,700 rows matches the frozen per-model CSVs that back the paper, on all 35 metric-bearing columns | **PASS** — 0 undeclared mismatches; 8,395 rows differ by the declared `ood.*` rename (§5.3), 0 declared diagnostic deltas (§5.1) |
+| 4 | `reconcile_with_manifest.py` | each (model, seed) covers each of the 475 canonical routes in `../routes/MANIFEST.tsv` exactly once; blueprint ids agree with the route XMLs | **PASS** — 52 model-seeds × 475 = 24,700, 0 missing / 0 extra / 0 duplicate; 0 blueprint disagreements on 24,673 checkable rows |
 | 5 | `reproduce_table1.py` | **Table 1 regenerates exactly** — see below | **PASS** — A, B and C |
 
 Reference environment: `pandas 2.0.3 / numpy 1.22.0 / scipy 1.10.1`. Check 5 runs
@@ -123,7 +123,7 @@ them is reproduced in the sections below with its actual counts.
 
 - **Success Rate cross-validated independently** against the `success` column that
   the authors' original analysis tool (in the private working tree, not shipped)
-  computes by its own separate code path: **8,550 rows compared, 0 mismatches.**
+  computes by its own separate code path: **24,700 rows compared, 0 mismatches.**
 - **Determinism** — the cross-model `agent_type` map is set-based and therefore
   order-independent; verified identical under 3 random row shuffles.
 - **Internal consistency** — `success` ⟺ (status ∈ {Completed, Perfect} ∧
@@ -152,19 +152,21 @@ compares three ways:
 
 Every locked headline figure of the paper is asserted individually:
 
+These are the **3-seed average-per-route** figures (seeds 42/43/44; paper commit `a52528d`):
+
 | Figure | Expected | From records |
 |---|---|---|
-| mean DS drop, visual (`a`) | 4.9 | **4.930** |
-| mean DS drop, geometric (`b`) | 13.2 | **13.221** |
-| geometric / visual ratio | ≈2.7× | **2.682** |
-| models visually robust (`K`) | 12/17 | **12/17** |
-| significant geometric regression | 14/17 | **14/17** |
-| cells geometric-deeper | 46/51 (90.2%) | **46/51 (0.902)** |
-| γ-test p | <0.001 | **1.86e-08** |
-| paired Cohen's `d_z` | 1.14 | **1.139** |
-| OOD-collision rate base→visual→geometric (pp) | 18.9 → 29.5 → 46.1 | **18.93 → 29.54 → 46.07** |
-| visual shift Δ collisions (pp) | +10.6 | **+10.61** |
-| … its p | ≈8.8e-7 | **8.83e-07** |
+| mean DS drop, visual (`a`) | 5.0 | **5.047** |
+| mean DS drop, geometric (`b`) | 12.8 | **12.802** |
+| geometric / visual ratio | ≈2.5× | **2.537** |
+| models visually robust (`K`) | 9/17 | **9/17** |
+| significant geometric regression | 17/17 | **17/17** |
+| cells geometric-deeper | 45/51 (88.2%) | **45/51 (0.882)** |
+| γ-test p | <0.001 | **9.15e-08** |
+| paired Cohen's `d_z` | 1.05 | **1.052** |
+| OOD-collision rate base→visual→geometric (pp) | 18.6 → 29.5 → 46.2 | **18.55 → 29.46 → 46.16** |
+| visual shift Δ collisions (pp) | +10.9 | **+10.91** |
+| … its p | ≈3.2e-7 | **3.20e-07** |
 
 **No statistic was adjusted to make these match.** The two genuine deltas found
 during verification are recorded in §5 and neither moves a published number.
@@ -237,24 +239,21 @@ paired Cohen's `d_z`.
 
 ## 5. Findings from verification — read these
 
-### 5.1 One diagnostic-only delta vs the frozen CSVs (records are *more* correct)
+### 5.1 No diagnostic delta remains (the one historical case is resolved)
 
-Setting aside the declared `ood.*` rename of §5.3 — which touches only the 18
-vehicle cells, only the `agent_type` column, and no number — 53 of 54
-(model, category) cells reproduce the frozen paper CSVs **exactly**. The 54th
-differs in **one row, one column**:
+Setting aside the declared `ood.*` rename of §5.3 — which touches only the
+vehicle cells, only the `agent_type` column, and no number — **every**
+(model, category, seed) cell now reproduces the frozen paper CSVs exactly.
 
-```
-admlp / static / construction_obstacle / geometric_shift / route 24785 / roadclosedsign
-    agent_type:  records = "static.prop.roadclosedsign"    frozen = "" (empty)
-```
-
-That row's result JSON has an **empty records list** (an infrastructure
-failure): no status, no score, no collisions. `collided_with_ood_agent` is
-`False` on both sides, so **no published number is affected**. The records value
-is the correct one — 139 other rows recover `static.prop.roadclosedsign` for
-that variant directly from their own JSON, and 41 more resolve to it by
-fallback. The frozen file simply had a weaker map when it was written.
+An earlier build carried one diagnostic-only delta here: for
+`admlp / static / construction_obstacle / geometric_shift / route 24785 /
+roadclosedsign` (seed 42), the frozen `agent_type` was blank while the records
+recovered `static.prop.roadclosedsign` from the cross-model fallback (that row's
+result JSON has an empty records list; `collided_with_ood_agent` is `False` on
+both sides, so no published number was ever affected). The paper's collision
+re-enrich (paper commit `4cb5618`) resolved that variant, so the frozen eval now
+carries the same value and the two sides agree — the declared delta is gone and
+`validate_against_frozen.py` reports **0** of them.
 
 ### 5.2 The `"unknown"` sentinel would have silently corrupted the vehicle metric
 
@@ -270,20 +269,21 @@ V2 in the largest category. Caught by check 1; fixed by
 The six OOD vehicle blueprints ship under a neutral namespace
 (`vehicle.inkas.amv` → `vehicle.ood.armoredvan`, and five more), so that a
 benchmark publishing collision rates does not also publish live trademarks. The
-frozen paper CSVs predate that rename. So on **2,910 rows** — every row across
+frozen paper CSVs predate that rename. So on **8,395 rows** — every row across
 the 18 models whose resolved blueprint is one of the six — the records' resolved
 blueprint id differs from the frozen file's by exactly the rename map:
 
 ```
-17 models x 162 = 2,754   (162 = 6 OOD props x 27 vehicle base routes)
-        + ADMLP     156   (one row per OOD prop carries the "unknown" sentinel,
-                           and a sentinel is never renamed)
-        =         2,910
+seed 42: 2,910 (= 17 models x 162 = 2,754 + ADMLP 156)
+   162 = 6 OOD props x 27 vehicle base routes; ADMLP's 156 carry the
+   "unknown" sentinel per OOD prop, and a sentinel is never renamed
+seeds 43/44:      5,485
+        =         8,395
 ```
 
 `validate_against_frozen.py` **declares** this rather than ignoring it. A row is
 explained only if `records == rename_map[frozen]` for the same
-`rename_map.json` the generator used; the count must come out at exactly 2,910
+`rename_map.json` the generator used; the count must come out at exactly 8,395
 on a full run, and **too few fails as loudly as too many** — losing the rename
 on some rows is as much a defect as over-applying it. The per-cell breakdown
 prints on every run.
@@ -293,7 +293,7 @@ statistics pipeline reads `driving_score` and `collided_with_ood_agent`, and the
 OOD-collision attribution is computed **inside the generator, before the
 rename**, against the pre-rename ids that the raw collision messages actually
 contain. `collided_with_ood_agent` and `ood_agent_collision_count` are compared
-against the frozen CSVs unrenamed, and agree on all 8,550 rows.
+against the frozen CSVs unrenamed, and agree on all 24,700 rows.
 
 ### 5.4 Provenance note — scipy version drift (not a records bug)
 
@@ -377,7 +377,7 @@ result against the committed frozen artefacts.
    must run before `apply_rename()`, because the raw collision messages name
    pre-rename ids. `apply_rename()` raises if called first, but confirm the
    guard actually fires, and that `EXPECTED_RENAME_DELTAS` in
-   `validate_against_frozen.py` (2,910) is asserted in both directions.
+   `validate_against_frozen.py` (8,395) is asserted in both directions.
 3. `RESULT_DIR_OVERRIDES` — `uniad → uniad_base` and `pdmlite/vehicle →
    pdmlite_v2`. The plain `pdmlite` vehicle directory holds 343 stale JSONs; if
    the override were wrong, row counts would still look plausible.
@@ -395,8 +395,12 @@ result against the committed frozen artefacts.
 
 - The raw results tree (`--results-root`) is **opened read-only**; the generator
   has no write path outside `--out-dir`.
-- Seed 42 only. The multiseed tree is a paper-side robustness appendix and is
-  deliberately **not** part of this release.
+- Seeds 42, 43, 44 — the paper's 3-seed average-per-route. Seed 42 is derived
+  independently from the raw result tree and validated cell-for-cell against the
+  frozen paper CSVs; seeds 43/44 mirror the frozen eval (the authoritative 3-seed
+  analysis snapshot). PDM-Lite (ceiling) and the OOD-collision metric are
+  seed-42-based; Driving-Score is full 3-seed. See `SCHEMA.md` and the `seed_note`
+  in `*.meta.json`.
 - Nothing was re-simulated and nothing was re-cooked to produce these records.
 - The published CSV, parquet and `meta.json` were all written by one invocation
   of the bundled `build_records.py` against the raw result tree. Nothing was

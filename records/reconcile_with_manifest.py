@@ -55,30 +55,43 @@ def main() -> int:
     models = sorted(rec["model"].unique())
     print(f"\nrecords: {len(rec)} rows, {len(models)} models")
 
-    print(f"\n{'model':18s} {'rows':>5s} {'covered':>7s} {'missing':>7s} "
-          f"{'extra':>6s} {'dup':>4s}")
-    print("-" * 56)
+    # Coverage is checked per (model, seed): each seed of a model must cover the
+    # 475 canonical routes exactly once. route_key is seedless (the seed lives in
+    # its own column and in the check below), so a 3-seed model legitimately holds
+    # 3 rows per route_key — counting those as "dup" would be wrong. E2E models
+    # carry all seeds; pdmlite (ceiling) is seed-42-only, so it is checked once.
+    def _seedsort(s):
+        return (0, int(s)) if str(s).isdigit() else (1, str(s))
+
+    print(f"\n{'model':18s} {'seed':>4s} {'rows':>5s} {'covered':>7s} "
+          f"{'missing':>7s} {'extra':>6s} {'dup':>4s}")
+    print("-" * 62)
     total_bad = 0
+    n_model_seed = 0
     for model in models:
-        sub = rec[rec["model"] == model]
-        keys = set(sub["route_key"])
-        missing = man_keys - keys
-        extra = keys - man_keys
-        dup = len(sub) - len(keys)
-        bad = len(missing) + len(extra) + dup
-        total_bad += bad
-        print(f"{model:18s} {len(sub):5d} {len(keys & man_keys):7d} "
-              f"{len(missing):7d} {len(extra):6d} {dup:4d}"
-              + ("" if bad == 0 else "   <-- MISMATCH"))
-        for k in sorted(missing)[:3]:
-            print(f"      missing: {k}")
-        for k in sorted(extra)[:3]:
-            print(f"      extra:   {k}")
+        sub_m = rec[rec["model"] == model]
+        for seed in sorted(sub_m["seed"].unique(), key=_seedsort):
+            sub = sub_m[sub_m["seed"] == seed]
+            keys = set(sub["route_key"])
+            missing = man_keys - keys
+            extra = keys - man_keys
+            dup = len(sub) - len(keys)
+            bad = len(missing) + len(extra) + dup
+            total_bad += bad
+            n_model_seed += 1
+            print(f"{model:18s} {str(seed):>4s} {len(sub):5d} "
+                  f"{len(keys & man_keys):7d} {len(missing):7d} {len(extra):6d} "
+                  f"{dup:4d}" + ("" if bad == 0 else "   <-- MISMATCH"))
+            for k in sorted(missing)[:3]:
+                print(f"      missing: {k}")
+            for k in sorted(extra)[:3]:
+                print(f"      extra:   {k}")
     ok &= total_bad == 0
-    print("-" * 56)
-    print(f"  [{'PASS' if total_bad == 0 else 'FAIL'}] every model covers every "
-          f"canonical route exactly once "
-          f"({len(models)} x {EXPECTED_TOTAL} = {len(models) * EXPECTED_TOTAL} rows)")
+    print("-" * 62)
+    print(f"  [{'PASS' if total_bad == 0 else 'FAIL'}] every (model, seed) covers "
+          f"every canonical route exactly once "
+          f"({n_model_seed} model-seeds x {EXPECTED_TOTAL} = "
+          f"{n_model_seed * EXPECTED_TOTAL} rows)")
 
     # ---- blueprint-id cross-check ---------------------------------------
     bp = man.set_index("route_key")["prop_blueprint_id"].to_dict()

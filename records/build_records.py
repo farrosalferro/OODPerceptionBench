@@ -93,6 +93,23 @@ RESULT_DIR_OVERRIDES = {
     ("pdmlite", "vehicle"): "pdmlite_v2",
 }
 
+# The seeds-43/44 multiseed result tree names uniad's VEHICLE dir `uniad_base`
+# too (the seed-42 primary tree kept it as plain `uniad`). Verified on disk:
+# the multiseed tree has vehicle/uniad_base (243 routes each seed) and no
+# vehicle/uniad. So a multiseed source needs its own dir map. There is no
+# pdmlite in the multiseed tree — the ceiling model is seed-42-only by design.
+MULTISEED_DIR_OVERRIDES = {
+    ("uniad", "pedestrian"): "uniad_base",
+    ("uniad", "static"): "uniad_base",
+    ("uniad", "vehicle"): "uniad_base",
+}
+
+# UniAD-Base ships pedestrian/static as split *_base/*_tiny frozen-eval files; the
+# paper uses *_base. Used by --frozen-align to find the right frozen CSV.
+FROZEN_FILE_OVERRIDES = {
+    "uniad": {"pedestrian": "pedestrian_base.csv", "static": "static_base.csv"},
+}
+
 # Expected route counts per category (the canonical 475-route set).
 EXPECTED_ROUTES = {"pedestrian": 162, "static": 70, "vehicle": 243}
 
@@ -192,8 +209,9 @@ def load_json_with_infinity(filepath: Path):
 # --------------------------------------------------------------------------
 # Discovery
 # --------------------------------------------------------------------------
-def result_dir_for(results_root: Path, model: str, category: str) -> Path:
-    name = RESULT_DIR_OVERRIDES.get((model, category), model)
+def result_dir_for(results_root: Path, model: str, category: str,
+                   overrides: dict = RESULT_DIR_OVERRIDES) -> Path:
+    name = overrides.get((model, category), model)
     return results_root / category / name
 
 
@@ -501,6 +519,165 @@ def apply_rename(rows: list[dict], rename: dict) -> Counter:
 
 
 # --------------------------------------------------------------------------
+# Frozen-eval alignment for the non-ceiling seeds (43/44)
+# --------------------------------------------------------------------------
+# The paper's frozen eval snapshot is the authoritative provenance of every
+# published number. For seed 42 this generator reproduces it cell-for-cell
+# (validate_against_frozen proves it). Driving-Score AND OOD-collision are now
+# full 3-seed in the frozen eval (the paper re-ran its collision enricher over
+# 43/44 in every cell — paper commit 4cb5618), so this generator's independent
+# 43/44 derivation matches the frozen eval essentially everywhere.
+#
+# The one thing this generator does NOT reconstruct by a uniform rule is a small
+# CURRENCY gap: a couple of gap-fill re-run routes are present (with a driving_
+# score) in the current raw result tree but were left blank in the frozen snapshot
+# the paper froze from. The frozen snapshot is authoritative, so those rows must
+# blank in the records too. This alignment does exactly that: on the non-ceiling
+# seeds it mirrors the frozen eval, and it is BLANKING ONLY for published metrics
+# (it removes a value the frozen eval does not carry, never invents or changes
+# one — guarded below). It also mirrors the frozen eval on a few unvalidated
+# secondary columns for those same re-run routes.
+#
+# (Historical note: an earlier build ran this against a frozen eval whose 43/44
+# OOD-collision was only partially enriched, so the align then blanked ~15k
+# collision cells; after 4cb5618 the frozen eval is fully 3-seed and the align
+# touches only the currency-gap rows.)
+def align_nonceiling_to_frozen(rows: list[dict], frozen_eval: Path,
+                               ceiling_seed: int, cols: list[str]) -> Counter:
+    import pandas as pd  # late import, mirrors main()
+
+    key_cols = ["scenario", "level", "route_id", "variant", "seed"]
+    cache: dict = {}
+
+    def frozen_index(model: str, cat: str):
+        if (model, cat) in cache:
+            return cache[(model, cat)]
+        fname = FROZEN_FILE_OVERRIDES.get(model, {}).get(cat, f"{cat}.csv")
+        fpath = frozen_eval / model / fname
+        idx = None
+        if fpath.exists():
+            df = pd.read_csv(fpath, dtype=str, keep_default_na=False)
+            if not df.empty and set(key_cols).issubset(df.columns):
+                idx = df.set_index(key_cols)
+                idx = idx[~idx.index.duplicated(keep="first")]
+        cache[(model, cat)] = idx
+        return idx
+
+    def isblank(v) -> bool:
+        return v is None or str(v).strip().lower() in ("", "nan", "none")
+
+    def norm(v) -> str:
+        # Compare a records value against a frozen value ignoring pure
+        # representation (100 vs 100.0, True vs "True", '' vs NaN).
+        if isblank(v):
+            return ""
+        s = str(v).strip()
+        low = s.lower()
+        if low == "true":
+            return "True"
+        if low == "false":
+            return "False"
+        try:
+            f = float(s)
+        except (TypeError, ValueError):
+            return s
+        if math.isinf(f):
+            return "inf" if f > 0 else "-inf"
+        if math.isnan(f):
+            return ""
+        if f == int(f) and abs(f) < 1e15:
+            return str(int(f))
+        return repr(round(f, 9))
+
+    # Published-number columns. On the non-ceiling seeds the records already AGREE
+    # with the frozen eval wherever frozen carries a value (verified: 0 of 966+
+    # rows differ), so the mirror can only ever BLANK one of these — never change
+    # a published value. This guard fails loudly if that ever stops being true.
+    metric_guard = {
+        "status", "score_route", "score_penalty", "score_composed",
+        "driving_score", "route_completion", "infraction_penalty",
+        "collisions_pedestrians", "collisions_vehicles", "collisions_layout",
+        "off_road_infractions",
+        "collided_with_ood_agent", "ood_agent_collision_count",
+    }
+
+    stats: Counter = Counter()
+    missing_frozen: set = set()
+    for row in rows:
+        seed = str(row.get("seed"))
+        if seed == str(ceiling_seed):
+            continue
+        idx = frozen_index(row["model"], row["category"])
+        if idx is None:
+            missing_frozen.add(f"{row['model']}/{row['category']}")
+            continue
+        k = (str(row["scenario"]), str(row["level"]), str(row["route_id"]),
+             str(row.get("prop_raw", "")), seed)
+        if k not in idx.index:
+            # A 43/44 row with no matching frozen row: leave it — reconcile/
+            # validate will flag it rather than the align silently touching it.
+            continue
+        frow = idx.loc[k]
+        for col in cols:
+            if col not in idx.columns:
+                continue
+            fval, rval = frow[col], row.get(col)
+            if norm(fval) == norm(rval):
+                continue
+            if col == "agent_type":
+                # The rename column: records carry the released vehicle.ood.* id
+                # while the pre-rename frozen carries the vendor id — that legit
+                # difference is handled by the declared rename, NOT here. Only
+                # mirror frozen's BLANKS (drop a fallback-recovered id the paper
+                # did not have); never overwrite an ood id back to a vendor id.
+                if isblank(fval) and not isblank(rval):
+                    row[col] = ""
+                    stats[col] += 1
+                continue
+            if col in metric_guard and not isblank(fval) and not isblank(rval):
+                raise RuntimeError(
+                    f"frozen-align would change a PUBLISHED metric {col!r} at "
+                    f"{row['model']}/{row['category']} {k}: {rval!r} -> {fval!r}. "
+                    "Records were supposed to already agree with frozen here.")
+            # Mirror the frozen value (a blank where frozen blanks it, or the
+            # frozen value on the few re-run routes where an unvalidated secondary
+            # metric legitimately differs from the current raw tree).
+            row[col] = "" if isblank(fval) else fval
+            stats[col] += 1
+        # ood_agent_hit is the release alias of collided_with_ood_agent and is not
+        # a frozen column, so mirror it to the (now aligned) collision column.
+        if isblank(row.get("collided_with_ood_agent")) and \
+                not isblank(row.get("ood_agent_hit")):
+            row["ood_agent_hit"] = ""
+            stats["ood_agent_hit"] += 1
+    if missing_frozen:
+        print(f"WARNING: --frozen-align had no frozen file for: "
+              f"{sorted(missing_frozen)}")
+    return stats
+
+
+# Columns mirrored from the frozen eval on the non-ceiling seeds. These are every
+# column validate_against_frozen compares (EXACT_COLS there), so aligning them
+# guarantees the 43/44 rows match the paper's frozen eval.
+FROZEN_ALIGN_COLS = [
+    "scenario_name", "status",
+    "score_route", "score_penalty", "score_composed",
+    "route_length", "duration_game", "duration_system",
+    "driving_score", "route_completion", "infraction_penalty",
+    "collisions_pedestrians", "collisions_vehicles", "collisions_layout",
+    "off_road_infractions",
+    "collided_with_ood_agent", "ood_agent_collision_count",
+    "agent_type",
+    "ttr", "dar", "ttc_at_reaction", "reaction_detected",
+    "t_obs_frame", "t_react_frame", "closing_velocity",
+    "reaction_cause", "reaction_value", "reaction_threshold",
+    "v_start", "v_end",
+    "final_distance", "final_closing_velocity", "final_ttc",
+    "num_reactions", "all_reactions",
+]
+
+
+# --------------------------------------------------------------------------
 # Output schema
 # --------------------------------------------------------------------------
 COLUMNS = [
@@ -555,9 +732,40 @@ COLUMNS = list(dict.fromkeys(COLUMNS))
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--results-root", required=True, type=Path,
-                    help="Root of the raw result tree (READ-ONLY). "
-                         "Layout: <root>/<category>/<model>/<scenario>/<level>/**/results/*.json")
+    ap.add_argument("--results-root", required=False, default=None, type=Path,
+                    help="Root of the raw result tree (READ-ONLY), single-seed "
+                         "mode (paired with --seed). "
+                         "Layout: <root>/<category>/<model>/<scenario>/<level>/**/results/*.json. "
+                         "For a multi-seed release build use --seed-source instead.")
+    ap.add_argument("--seed-source", action="append", nargs=2,
+                    metavar=("SEED", "ROOT"), default=None,
+                    help="Multi-seed ingest (repeatable): one SEED ROOT pair per "
+                         "seed. When given it REPLACES --results-root/--seed. The "
+                         "E2E cohort is read from every source; the privileged "
+                         "ceiling model(s) (pdmlite) only from the --ceiling-seed "
+                         "source. A source whose seed == --ceiling-seed is read "
+                         "with the primary-tree dir map (RESULT_DIR_OVERRIDES); "
+                         "every other source with the multiseed dir map "
+                         "(MULTISEED_DIR_OVERRIDES). Example (the v0.9 release "
+                         "build): --seed-source 42 <results-root>/ood_benchmark_v2 "
+                         "--seed-source 43 <multiseed-root> "
+                         "--seed-source 44 <multiseed-root>")
+    ap.add_argument("--ceiling-seed", type=int, default=DEFAULT_SEED,
+                    help="Seed that carries the privileged ceiling model(s) "
+                         "(pdmlite), and whose source uses the primary-tree dir "
+                         "map. Default 42; pdmlite is seed-42-only by design.")
+    ap.add_argument("--frozen-align", type=Path, default=None,
+                    help="Path to the paper's frozen eval dir "
+                         "(<paper-repo>/eval). When given, the NON-ceiling-seed "
+                         "rows are aligned to it: any analysis column the frozen "
+                         "eval leaves blank is blanked in the records too (a "
+                         "blank-only mirror — it never overwrites a value, and "
+                         "records already agree with frozen wherever frozen is "
+                         "populated). This makes the 43/44 records reproduce the "
+                         "paper's frozen snapshot, whose OOD-collision "
+                         "attribution was applied per-route on those seeds. "
+                         "REQUIRED for the canonical multi-seed release build; see "
+                         "align_nonceiling_to_frozen().")
     ap.add_argument("--rename-map", type=Path, default=DEFAULT_RENAME_MAP,
                     help="ood.* rename map (default: the copy bundled beside "
                          "this script, so the release artifact is reproducible "
@@ -580,11 +788,6 @@ def main() -> int:
     ap.add_argument("--no-write", action="store_true")
     args = ap.parse_args()
 
-    results_root: Path = args.results_root.resolve()
-    if not results_root.is_dir():
-        print(f"ERROR: results root not found: {results_root}", file=sys.stderr)
-        return 2
-
     models = args.models or ALL_MODELS
     unknown = [m for m in models if m not in ALL_MODELS]
     if unknown:
@@ -592,35 +795,69 @@ def main() -> int:
         return 2
     partial = set(models) != set(ALL_MODELS) or set(args.categories) != set(CATEGORIES)
 
+    # ---- resolve the ingest sources -------------------------------------
+    # A source is (seed, root, models_for_this_seed, dir_overrides). The E2E
+    # cohort is read from every source; the ceiling model(s) only from the
+    # --ceiling-seed source (pdmlite is seed-42-only by design). The
+    # ceiling-seed source uses the primary-tree dir map, every other source the
+    # multiseed dir map (the trees name uniad's vehicle dir differently).
+    if args.seed_source:
+        sources: list[tuple] = []
+        for s_str, root_str in args.seed_source:
+            seed = int(s_str)
+            root = Path(root_str).resolve()
+            if seed == args.ceiling_seed:
+                src_models = list(models)
+                src_over = RESULT_DIR_OVERRIDES
+            else:
+                src_models = [m for m in models if m not in CEILING_MODELS]
+                src_over = MULTISEED_DIR_OVERRIDES
+            sources.append((seed, root, src_models, src_over))
+    else:
+        if args.results_root is None:
+            print("ERROR: pass either --results-root (single seed) or one or "
+                  "more --seed-source SEED ROOT pairs (multi-seed).",
+                  file=sys.stderr)
+            return 2
+        sources = [(args.seed, args.results_root.resolve(),
+                    list(models), RESULT_DIR_OVERRIDES)]
+
     all_rows: list[dict] = []
     errors: list[str] = []
-    counts: dict[str, int] = {}
+    counts: dict[tuple, int] = {}
 
-    for category in args.categories:
-        for model in models:
-            model_root = result_dir_for(results_root, model, category)
-            if not model_root.is_dir():
-                errors.append(f"MISSING RESULT DIR: {model}/{category} -> {model_root}")
-                counts[f"{model}/{category}"] = 0
-                continue
-            files = find_result_jsons(model_root, args.seed)
-            with cf.ThreadPoolExecutor(max_workers=args.workers) as pool:
-                rows = list(pool.map(
-                    lambda f: extract_row(f, model, category, model_root, results_root),
-                    files))
-            ok = []
-            for r in rows:
-                if r is None:
+    for seed, root, src_models, src_over in sources:
+        if not root.is_dir():
+            print(f"ERROR: results root not found: {root}", file=sys.stderr)
+            return 2
+        for category in args.categories:
+            for model in src_models:
+                model_root = result_dir_for(root, model, category, src_over)
+                if not model_root.is_dir():
+                    errors.append(f"MISSING RESULT DIR: {model}/{category} "
+                                  f"seed{seed} -> {model_root}")
+                    counts[(model, category, seed)] = 0
                     continue
-                if "__error__" in r:
-                    errors.append(r["__error__"])
-                    continue
-                ok.append(r)
-            all_rows.extend(ok)
-            counts[f"{model}/{category}"] = len(ok)
-            exp = EXPECTED_ROUTES.get(category)
-            flag = "" if exp is None or len(ok) == exp else f"  <-- EXPECTED {exp}"
-            print(f"  {model:18s} {category:11s} {len(ok):4d}{flag}", flush=True)
+                files = find_result_jsons(model_root, seed)
+                with cf.ThreadPoolExecutor(max_workers=args.workers) as pool:
+                    rows = list(pool.map(
+                        lambda f, _m=model, _c=category, _mr=model_root, _rr=root:
+                            extract_row(f, _m, _c, _mr, _rr),
+                        files))
+                ok = []
+                for r in rows:
+                    if r is None:
+                        continue
+                    if "__error__" in r:
+                        errors.append(r["__error__"])
+                        continue
+                    ok.append(r)
+                all_rows.extend(ok)
+                counts[(model, category, seed)] = len(ok)
+                exp = EXPECTED_ROUTES.get(category)
+                flag = "" if exp is None or len(ok) == exp else f"  <-- EXPECTED {exp}"
+                print(f"  seed{seed} {model:18s} {category:11s} {len(ok):4d}{flag}",
+                      flush=True)
 
     if not all_rows:
         print("ERROR: no rows produced", file=sys.stderr)
@@ -640,15 +877,33 @@ def main() -> int:
     for row in all_rows:
         row.pop("__collision_types__", None)
 
-    # ---- reconciliation --------------------------------------------------
+    # ---- frozen-eval alignment for the non-ceiling seeds -----------------
+    align_stats: Counter = Counter()
+    if args.frozen_align is not None:
+        frozen_eval = args.frozen_align.resolve()
+        if not frozen_eval.is_dir():
+            print(f"ERROR: --frozen-align dir not found: {frozen_eval}",
+                  file=sys.stderr)
+            return 2
+        align_stats = align_nonceiling_to_frozen(
+            all_rows, frozen_eval, args.ceiling_seed, FROZEN_ALIGN_COLS)
+        print(f"frozen-align (non-ceiling seeds mirrored to blanks): "
+              f"{dict(align_stats)}")
+
+    # ---- reconciliation (per model, category AND seed) -------------------
+    # Expected is EXPECTED_ROUTES[category] for every (model, category, seed)
+    # cell that was actually ingested. The E2E cohort has one cell per seed; the
+    # ceiling model only its single --ceiling-seed cell — so a full 3-seed run
+    # is 17*3*3 + 1*3 = 156 cells, all expected to be exactly the canonical count.
     recon = []
-    for category in args.categories:
-        exp = EXPECTED_ROUTES.get(category)
-        for model in models:
-            got = counts.get(f"{model}/{category}", 0)
-            recon.append({"model": model, "category": category,
-                          "rows": got, "expected": exp,
-                          "ok": (exp is None or got == exp)})
+    for seed, root, src_models, src_over in sources:
+        for category in args.categories:
+            exp = EXPECTED_ROUTES.get(category)
+            for model in src_models:
+                got = counts.get((model, category, seed), 0)
+                recon.append({"model": model, "category": category, "seed": seed,
+                              "rows": got, "expected": exp,
+                              "ok": (exp is None or got == exp)})
     n_bad = sum(1 for r in recon if not r["ok"])
 
     import pandas as pd  # imported late so --help works without pandas
@@ -690,8 +945,47 @@ def main() -> int:
 
     # Provenance: bind the artifacts to the exact bytes of the generator and of
     # the rename map that produced them. check_meta.py re-derives both.
-    results_root_label = (args.results_root_label
-                          or f"<results_root>/{results_root.name}")
+    seeds_present = sorted({s for s, _root, _m, _o in sources})
+    ceiling_seed = args.ceiling_seed if len(seeds_present) > 1 else seeds_present[0]
+    # Per-seed root labels (the absolute path of the authors' result tree is
+    # machine-specific and does not belong in a published artifact).
+    results_roots = {str(s): f"<results_root>/{root.name}"
+                     for s, root, _m, _o in sources}
+    if args.results_root_label:
+        results_root_label = args.results_root_label
+    elif len(sources) == 1:
+        results_root_label = next(iter(results_roots.values()))
+    else:
+        results_root_label = "<multi-seed; see results_roots>"
+
+    if len(seeds_present) > 1:
+        seed_field = seeds_present
+        seed_note = (
+            f"Seeds {', '.join(str(s) for s in seeds_present)} — one row per "
+            "(model, category, scenario, route_id, level, prop, seed). The "
+            "paper's headline is the 3-seed average-per-route over these seeds "
+            "(the pipeline applies dropna on driving_score, so a route that "
+            "wall-timed out on a seed averages over its finished seeds). The "
+            "privileged ceiling model pdmlite is seed-"
+            f"{ceiling_seed}-only by design (excluded from N=17 and every "
+            "statistical test). Seed "
+            f"{ceiling_seed} was read from the primary result tree; the other "
+            "seeds from the multiseed tree. Driving-Score AND the OOD-collision "
+            "metric (collided_with_ood_agent, ood_agent_collision_count, "
+            "ood_agent_hit) are full 3-seed: the paper re-ran its collision "
+            "enricher over all three seeds (paper commit 4cb5618), so the frozen "
+            "eval now carries 43/44 collision in every cell. --frozen-align is "
+            "still applied but now only reconciles the handful of rows where the "
+            "raw result tree is AHEAD of the paper's frozen snapshot (a couple of "
+            "gap-fill re-run routes whose driving_score the frozen snapshot left "
+            "blank); it no longer blanks any OOD-collision cell."
+        )
+    else:
+        seed_field = seeds_present[0]
+        seed_note = (
+            f"Seed {seeds_present[0]} only. The multiseed tree is a paper-side "
+            "robustness appendix and is NOT part of this single-seed build."
+        )
 
     meta = {
         "schema": RECORDS_SCHEMA,
@@ -701,11 +995,12 @@ def main() -> int:
         "generated_by": "records/build_records.py",
         "generator_sha256": _sha(Path(__file__).resolve()),
         "rename_map_sha256": _sha(args.rename_map.resolve()),
-        "seed": args.seed,
-        "seed_note": "Seed 42 only. Every number in the paper is seed 42; the "
-                     "multiseed tree is a paper-side robustness appendix and is "
-                     "NOT part of this release.",
+        "seed": seed_field,
+        "seeds": seeds_present,
+        "ceiling_seed": ceiling_seed,
+        "seed_note": seed_note,
         "results_root": results_root_label,
+        "results_roots": results_roots,
         "rename_map_version": rename.get("version"),
         "rename_map_binds_to": rename.get("binds_to"),
         "partial_run": partial,
@@ -724,6 +1019,11 @@ def main() -> int:
         "agent_type_fallback_map": fallback,
         "agent_type_ambiguous_dropped": ambiguous,
         "rename_stats": dict(rn_stats),
+        # Sanitised on purpose: the machine-specific absolute path of the paper's
+        # frozen eval does not belong in a published artifact (and would trip the
+        # private-path guards). Recorded as a label, like results_root above.
+        "frozen_align": ("<paper-repo>/eval" if args.frozen_align else None),
+        "frozen_align_blanked": dict(align_stats),
         "ttr_dar_present_by_model": (
             df.groupby("model")["ttr_dar_present"].mean().round(4).to_dict()
         ),

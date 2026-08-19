@@ -19,10 +19,11 @@ version: 1
 benchmark:
   release: v0.9
   arxiv_version: v1
-  # The published protocol is seed 42. Changing it makes results incomparable to the released
-  # baselines and stamps protocol_seed_deviation=true into the report.
+  # The published protocol is base seed 42 with 3 repetitions -> seeds 42, 43, 44 (the runner
+  # derives seed = base + repetition index). Changing the base seed makes results incomparable to
+  # the released baselines and stamps protocol_seed_deviation=true into the report.
   seed: 42
-  repetitions: 1
+  repetitions: 3
 
 carla:
   # Root of a CARLA 0.9.15 distribution. Must contain CarlaUE4.sh.

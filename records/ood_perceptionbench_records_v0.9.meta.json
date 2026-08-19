@@ -2,13 +2,28 @@
   "schema": "ood-perceptionbench/records/1",
   "version": "v0.9",
   "binds_to": "arXiv v1",
-  "generated_utc": "2026-08-04T04:07:59+00:00",
+  "generated_utc": "2026-08-19T23:53:03+00:00",
   "generated_by": "records/build_records.py",
-  "generator_sha256": "2f87162a5f273bb99227a0235350c483ca6cf40a2e52067fb67d539890bf3d9e",
+  "generator_sha256": "11b551939398c41be3ac4308d44547792beae0bcb8e66ea928db9d5c4c756c47",
   "rename_map_sha256": "25df09def0952fb82a724d6ab46c2084416ed568376437154fbb8ed3abbb82b4",
-  "seed": 42,
-  "seed_note": "Seed 42 only. Every number in the paper is seed 42; the multiseed tree is a paper-side robustness appendix and is NOT part of this release.",
-  "results_root": "<results_root>/ood_benchmark_v2",
+  "seed": [
+    42,
+    43,
+    44
+  ],
+  "seeds": [
+    42,
+    43,
+    44
+  ],
+  "ceiling_seed": 42,
+  "seed_note": "Seeds 42, 43, 44 \u2014 one row per (model, category, scenario, route_id, level, prop, seed). The paper's headline is the 3-seed average-per-route over these seeds (the pipeline applies dropna on driving_score, so a route that wall-timed out on a seed averages over its finished seeds). The privileged ceiling model pdmlite is seed-42-only by design (excluded from N=17 and every statistical test). Seed 42 was read from the primary result tree; the other seeds from the multiseed tree. Driving-Score AND the OOD-collision metric (collided_with_ood_agent, ood_agent_collision_count, ood_agent_hit) are full 3-seed: the paper re-ran its collision enricher over all three seeds (paper commit 4cb5618), so the frozen eval now carries 43/44 collision in every cell. --frozen-align is still applied but now only reconciles the handful of rows where the raw result tree is AHEAD of the paper's frozen snapshot (a couple of gap-fill re-run routes whose driving_score the frozen snapshot left blank); it no longer blanks any OOD-collision cell.",
+  "results_root": "<multi-seed; see results_roots>",
+  "results_roots": {
+    "42": "<results_root>/ood_benchmark_v2",
+    "43": "<results_root>/ood_benchmark_v2_multiseed",
+    "44": "<results_root>/ood_benchmark_v2_multiseed"
+  },
   "rename_map_version": "v0.9",
   "rename_map_binds_to": "arXiv v1",
   "partial_run": false,
@@ -41,7 +56,7 @@
     "static",
     "vehicle"
   ],
-  "n_rows": 8550,
+  "n_rows": 24700,
   "n_columns": 64,
   "columns": [
     "model",
@@ -118,6 +133,7 @@
     {
       "model": "admlp",
       "category": "pedestrian",
+      "seed": 42,
       "rows": 162,
       "expected": 162,
       "ok": true
@@ -125,6 +141,7 @@
     {
       "model": "bridgedrive",
       "category": "pedestrian",
+      "seed": 42,
       "rows": 162,
       "expected": 162,
       "ok": true
@@ -132,6 +149,7 @@
     {
       "model": "diffad",
       "category": "pedestrian",
+      "seed": 42,
       "rows": 162,
       "expected": 162,
       "ok": true
@@ -139,6 +157,7 @@
     {
       "model": "drivemoe",
       "category": "pedestrian",
+      "seed": 42,
       "rows": 162,
       "expected": 162,
       "ok": true
@@ -146,6 +165,7 @@
     {
       "model": "drivetransformer",
       "category": "pedestrian",
+      "seed": 42,
       "rows": 162,
       "expected": 162,
       "ok": true
@@ -153,6 +173,7 @@
     {
       "model": "hipad",
       "category": "pedestrian",
+      "seed": 42,
       "rows": 162,
       "expected": 162,
       "ok": true
@@ -160,6 +181,7 @@
     {
       "model": "hydra_next",
       "category": "pedestrian",
+      "seed": 42,
       "rows": 162,
       "expected": 162,
       "ok": true
@@ -167,6 +189,7 @@
     {
       "model": "lead",
       "category": "pedestrian",
+      "seed": 42,
       "rows": 162,
       "expected": 162,
       "ok": true
@@ -174,6 +197,7 @@
     {
       "model": "minddrive",
       "category": "pedestrian",
+      "seed": 42,
       "rows": 162,
       "expected": 162,
       "ok": true
@@ -181,6 +205,7 @@
     {
       "model": "orion",
       "category": "pedestrian",
+      "seed": 42,
       "rows": 162,
       "expected": 162,
       "ok": true
@@ -188,6 +213,7 @@
     {
       "model": "orion_lite",
       "category": "pedestrian",
+      "seed": 42,
       "rows": 162,
       "expected": 162,
       "ok": true
@@ -195,6 +221,7 @@
     {
       "model": "simlingo",
       "category": "pedestrian",
+      "seed": 42,
       "rows": 162,
       "expected": 162,
       "ok": true
@@ -202,6 +229,7 @@
     {
       "model": "sparsedrive_v2",
       "category": "pedestrian",
+      "seed": 42,
       "rows": 162,
       "expected": 162,
       "ok": true
@@ -209,6 +237,7 @@
     {
       "model": "tcp",
       "category": "pedestrian",
+      "seed": 42,
       "rows": 162,
       "expected": 162,
       "ok": true
@@ -216,6 +245,7 @@
     {
       "model": "tfpp",
       "category": "pedestrian",
+      "seed": 42,
       "rows": 162,
       "expected": 162,
       "ok": true
@@ -223,6 +253,7 @@
     {
       "model": "uniad",
       "category": "pedestrian",
+      "seed": 42,
       "rows": 162,
       "expected": 162,
       "ok": true
@@ -230,6 +261,7 @@
     {
       "model": "vad",
       "category": "pedestrian",
+      "seed": 42,
       "rows": 162,
       "expected": 162,
       "ok": true
@@ -237,6 +269,7 @@
     {
       "model": "pdmlite",
       "category": "pedestrian",
+      "seed": 42,
       "rows": 162,
       "expected": 162,
       "ok": true
@@ -244,6 +277,7 @@
     {
       "model": "admlp",
       "category": "static",
+      "seed": 42,
       "rows": 70,
       "expected": 70,
       "ok": true
@@ -251,6 +285,7 @@
     {
       "model": "bridgedrive",
       "category": "static",
+      "seed": 42,
       "rows": 70,
       "expected": 70,
       "ok": true
@@ -258,6 +293,7 @@
     {
       "model": "diffad",
       "category": "static",
+      "seed": 42,
       "rows": 70,
       "expected": 70,
       "ok": true
@@ -265,6 +301,7 @@
     {
       "model": "drivemoe",
       "category": "static",
+      "seed": 42,
       "rows": 70,
       "expected": 70,
       "ok": true
@@ -272,6 +309,7 @@
     {
       "model": "drivetransformer",
       "category": "static",
+      "seed": 42,
       "rows": 70,
       "expected": 70,
       "ok": true
@@ -279,6 +317,7 @@
     {
       "model": "hipad",
       "category": "static",
+      "seed": 42,
       "rows": 70,
       "expected": 70,
       "ok": true
@@ -286,6 +325,7 @@
     {
       "model": "hydra_next",
       "category": "static",
+      "seed": 42,
       "rows": 70,
       "expected": 70,
       "ok": true
@@ -293,6 +333,7 @@
     {
       "model": "lead",
       "category": "static",
+      "seed": 42,
       "rows": 70,
       "expected": 70,
       "ok": true
@@ -300,6 +341,7 @@
     {
       "model": "minddrive",
       "category": "static",
+      "seed": 42,
       "rows": 70,
       "expected": 70,
       "ok": true
@@ -307,6 +349,7 @@
     {
       "model": "orion",
       "category": "static",
+      "seed": 42,
       "rows": 70,
       "expected": 70,
       "ok": true
@@ -314,6 +357,7 @@
     {
       "model": "orion_lite",
       "category": "static",
+      "seed": 42,
       "rows": 70,
       "expected": 70,
       "ok": true
@@ -321,6 +365,7 @@
     {
       "model": "simlingo",
       "category": "static",
+      "seed": 42,
       "rows": 70,
       "expected": 70,
       "ok": true
@@ -328,6 +373,7 @@
     {
       "model": "sparsedrive_v2",
       "category": "static",
+      "seed": 42,
       "rows": 70,
       "expected": 70,
       "ok": true
@@ -335,6 +381,7 @@
     {
       "model": "tcp",
       "category": "static",
+      "seed": 42,
       "rows": 70,
       "expected": 70,
       "ok": true
@@ -342,6 +389,7 @@
     {
       "model": "tfpp",
       "category": "static",
+      "seed": 42,
       "rows": 70,
       "expected": 70,
       "ok": true
@@ -349,6 +397,7 @@
     {
       "model": "uniad",
       "category": "static",
+      "seed": 42,
       "rows": 70,
       "expected": 70,
       "ok": true
@@ -356,6 +405,7 @@
     {
       "model": "vad",
       "category": "static",
+      "seed": 42,
       "rows": 70,
       "expected": 70,
       "ok": true
@@ -363,6 +413,7 @@
     {
       "model": "pdmlite",
       "category": "static",
+      "seed": 42,
       "rows": 70,
       "expected": 70,
       "ok": true
@@ -370,6 +421,7 @@
     {
       "model": "admlp",
       "category": "vehicle",
+      "seed": 42,
       "rows": 243,
       "expected": 243,
       "ok": true
@@ -377,6 +429,7 @@
     {
       "model": "bridgedrive",
       "category": "vehicle",
+      "seed": 42,
       "rows": 243,
       "expected": 243,
       "ok": true
@@ -384,6 +437,7 @@
     {
       "model": "diffad",
       "category": "vehicle",
+      "seed": 42,
       "rows": 243,
       "expected": 243,
       "ok": true
@@ -391,6 +445,7 @@
     {
       "model": "drivemoe",
       "category": "vehicle",
+      "seed": 42,
       "rows": 243,
       "expected": 243,
       "ok": true
@@ -398,6 +453,7 @@
     {
       "model": "drivetransformer",
       "category": "vehicle",
+      "seed": 42,
       "rows": 243,
       "expected": 243,
       "ok": true
@@ -405,6 +461,7 @@
     {
       "model": "hipad",
       "category": "vehicle",
+      "seed": 42,
       "rows": 243,
       "expected": 243,
       "ok": true
@@ -412,6 +469,7 @@
     {
       "model": "hydra_next",
       "category": "vehicle",
+      "seed": 42,
       "rows": 243,
       "expected": 243,
       "ok": true
@@ -419,6 +477,7 @@
     {
       "model": "lead",
       "category": "vehicle",
+      "seed": 42,
       "rows": 243,
       "expected": 243,
       "ok": true
@@ -426,6 +485,7 @@
     {
       "model": "minddrive",
       "category": "vehicle",
+      "seed": 42,
       "rows": 243,
       "expected": 243,
       "ok": true
@@ -433,6 +493,7 @@
     {
       "model": "orion",
       "category": "vehicle",
+      "seed": 42,
       "rows": 243,
       "expected": 243,
       "ok": true
@@ -440,6 +501,7 @@
     {
       "model": "orion_lite",
       "category": "vehicle",
+      "seed": 42,
       "rows": 243,
       "expected": 243,
       "ok": true
@@ -447,6 +509,7 @@
     {
       "model": "simlingo",
       "category": "vehicle",
+      "seed": 42,
       "rows": 243,
       "expected": 243,
       "ok": true
@@ -454,6 +517,7 @@
     {
       "model": "sparsedrive_v2",
       "category": "vehicle",
+      "seed": 42,
       "rows": 243,
       "expected": 243,
       "ok": true
@@ -461,6 +525,7 @@
     {
       "model": "tcp",
       "category": "vehicle",
+      "seed": 42,
       "rows": 243,
       "expected": 243,
       "ok": true
@@ -468,6 +533,7 @@
     {
       "model": "tfpp",
       "category": "vehicle",
+      "seed": 42,
       "rows": 243,
       "expected": 243,
       "ok": true
@@ -475,6 +541,7 @@
     {
       "model": "uniad",
       "category": "vehicle",
+      "seed": 42,
       "rows": 243,
       "expected": 243,
       "ok": true
@@ -482,6 +549,7 @@
     {
       "model": "vad",
       "category": "vehicle",
+      "seed": 42,
       "rows": 243,
       "expected": 243,
       "ok": true
@@ -489,17 +557,834 @@
     {
       "model": "pdmlite",
       "category": "vehicle",
+      "seed": 42,
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    },
+    {
+      "model": "admlp",
+      "category": "pedestrian",
+      "seed": 43,
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "bridgedrive",
+      "category": "pedestrian",
+      "seed": 43,
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "diffad",
+      "category": "pedestrian",
+      "seed": 43,
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "drivemoe",
+      "category": "pedestrian",
+      "seed": 43,
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "drivetransformer",
+      "category": "pedestrian",
+      "seed": 43,
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "hipad",
+      "category": "pedestrian",
+      "seed": 43,
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "hydra_next",
+      "category": "pedestrian",
+      "seed": 43,
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "lead",
+      "category": "pedestrian",
+      "seed": 43,
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "minddrive",
+      "category": "pedestrian",
+      "seed": 43,
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "orion",
+      "category": "pedestrian",
+      "seed": 43,
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "orion_lite",
+      "category": "pedestrian",
+      "seed": 43,
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "simlingo",
+      "category": "pedestrian",
+      "seed": 43,
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "sparsedrive_v2",
+      "category": "pedestrian",
+      "seed": 43,
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "tcp",
+      "category": "pedestrian",
+      "seed": 43,
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "tfpp",
+      "category": "pedestrian",
+      "seed": 43,
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "uniad",
+      "category": "pedestrian",
+      "seed": 43,
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "vad",
+      "category": "pedestrian",
+      "seed": 43,
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "admlp",
+      "category": "static",
+      "seed": 43,
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "bridgedrive",
+      "category": "static",
+      "seed": 43,
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "diffad",
+      "category": "static",
+      "seed": 43,
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "drivemoe",
+      "category": "static",
+      "seed": 43,
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "drivetransformer",
+      "category": "static",
+      "seed": 43,
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "hipad",
+      "category": "static",
+      "seed": 43,
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "hydra_next",
+      "category": "static",
+      "seed": 43,
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "lead",
+      "category": "static",
+      "seed": 43,
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "minddrive",
+      "category": "static",
+      "seed": 43,
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "orion",
+      "category": "static",
+      "seed": 43,
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "orion_lite",
+      "category": "static",
+      "seed": 43,
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "simlingo",
+      "category": "static",
+      "seed": 43,
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "sparsedrive_v2",
+      "category": "static",
+      "seed": 43,
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "tcp",
+      "category": "static",
+      "seed": 43,
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "tfpp",
+      "category": "static",
+      "seed": 43,
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "uniad",
+      "category": "static",
+      "seed": 43,
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "vad",
+      "category": "static",
+      "seed": 43,
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "admlp",
+      "category": "vehicle",
+      "seed": 43,
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    },
+    {
+      "model": "bridgedrive",
+      "category": "vehicle",
+      "seed": 43,
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    },
+    {
+      "model": "diffad",
+      "category": "vehicle",
+      "seed": 43,
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    },
+    {
+      "model": "drivemoe",
+      "category": "vehicle",
+      "seed": 43,
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    },
+    {
+      "model": "drivetransformer",
+      "category": "vehicle",
+      "seed": 43,
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    },
+    {
+      "model": "hipad",
+      "category": "vehicle",
+      "seed": 43,
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    },
+    {
+      "model": "hydra_next",
+      "category": "vehicle",
+      "seed": 43,
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    },
+    {
+      "model": "lead",
+      "category": "vehicle",
+      "seed": 43,
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    },
+    {
+      "model": "minddrive",
+      "category": "vehicle",
+      "seed": 43,
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    },
+    {
+      "model": "orion",
+      "category": "vehicle",
+      "seed": 43,
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    },
+    {
+      "model": "orion_lite",
+      "category": "vehicle",
+      "seed": 43,
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    },
+    {
+      "model": "simlingo",
+      "category": "vehicle",
+      "seed": 43,
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    },
+    {
+      "model": "sparsedrive_v2",
+      "category": "vehicle",
+      "seed": 43,
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    },
+    {
+      "model": "tcp",
+      "category": "vehicle",
+      "seed": 43,
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    },
+    {
+      "model": "tfpp",
+      "category": "vehicle",
+      "seed": 43,
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    },
+    {
+      "model": "uniad",
+      "category": "vehicle",
+      "seed": 43,
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    },
+    {
+      "model": "vad",
+      "category": "vehicle",
+      "seed": 43,
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    },
+    {
+      "model": "admlp",
+      "category": "pedestrian",
+      "seed": 44,
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "bridgedrive",
+      "category": "pedestrian",
+      "seed": 44,
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "diffad",
+      "category": "pedestrian",
+      "seed": 44,
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "drivemoe",
+      "category": "pedestrian",
+      "seed": 44,
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "drivetransformer",
+      "category": "pedestrian",
+      "seed": 44,
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "hipad",
+      "category": "pedestrian",
+      "seed": 44,
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "hydra_next",
+      "category": "pedestrian",
+      "seed": 44,
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "lead",
+      "category": "pedestrian",
+      "seed": 44,
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "minddrive",
+      "category": "pedestrian",
+      "seed": 44,
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "orion",
+      "category": "pedestrian",
+      "seed": 44,
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "orion_lite",
+      "category": "pedestrian",
+      "seed": 44,
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "simlingo",
+      "category": "pedestrian",
+      "seed": 44,
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "sparsedrive_v2",
+      "category": "pedestrian",
+      "seed": 44,
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "tcp",
+      "category": "pedestrian",
+      "seed": 44,
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "tfpp",
+      "category": "pedestrian",
+      "seed": 44,
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "uniad",
+      "category": "pedestrian",
+      "seed": 44,
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "vad",
+      "category": "pedestrian",
+      "seed": 44,
+      "rows": 162,
+      "expected": 162,
+      "ok": true
+    },
+    {
+      "model": "admlp",
+      "category": "static",
+      "seed": 44,
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "bridgedrive",
+      "category": "static",
+      "seed": 44,
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "diffad",
+      "category": "static",
+      "seed": 44,
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "drivemoe",
+      "category": "static",
+      "seed": 44,
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "drivetransformer",
+      "category": "static",
+      "seed": 44,
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "hipad",
+      "category": "static",
+      "seed": 44,
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "hydra_next",
+      "category": "static",
+      "seed": 44,
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "lead",
+      "category": "static",
+      "seed": 44,
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "minddrive",
+      "category": "static",
+      "seed": 44,
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "orion",
+      "category": "static",
+      "seed": 44,
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "orion_lite",
+      "category": "static",
+      "seed": 44,
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "simlingo",
+      "category": "static",
+      "seed": 44,
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "sparsedrive_v2",
+      "category": "static",
+      "seed": 44,
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "tcp",
+      "category": "static",
+      "seed": 44,
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "tfpp",
+      "category": "static",
+      "seed": 44,
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "uniad",
+      "category": "static",
+      "seed": 44,
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "vad",
+      "category": "static",
+      "seed": 44,
+      "rows": 70,
+      "expected": 70,
+      "ok": true
+    },
+    {
+      "model": "admlp",
+      "category": "vehicle",
+      "seed": 44,
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    },
+    {
+      "model": "bridgedrive",
+      "category": "vehicle",
+      "seed": 44,
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    },
+    {
+      "model": "diffad",
+      "category": "vehicle",
+      "seed": 44,
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    },
+    {
+      "model": "drivemoe",
+      "category": "vehicle",
+      "seed": 44,
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    },
+    {
+      "model": "drivetransformer",
+      "category": "vehicle",
+      "seed": 44,
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    },
+    {
+      "model": "hipad",
+      "category": "vehicle",
+      "seed": 44,
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    },
+    {
+      "model": "hydra_next",
+      "category": "vehicle",
+      "seed": 44,
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    },
+    {
+      "model": "lead",
+      "category": "vehicle",
+      "seed": 44,
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    },
+    {
+      "model": "minddrive",
+      "category": "vehicle",
+      "seed": 44,
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    },
+    {
+      "model": "orion",
+      "category": "vehicle",
+      "seed": 44,
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    },
+    {
+      "model": "orion_lite",
+      "category": "vehicle",
+      "seed": 44,
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    },
+    {
+      "model": "simlingo",
+      "category": "vehicle",
+      "seed": 44,
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    },
+    {
+      "model": "sparsedrive_v2",
+      "category": "vehicle",
+      "seed": 44,
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    },
+    {
+      "model": "tcp",
+      "category": "vehicle",
+      "seed": 44,
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    },
+    {
+      "model": "tfpp",
+      "category": "vehicle",
+      "seed": 44,
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    },
+    {
+      "model": "uniad",
+      "category": "vehicle",
+      "seed": 44,
+      "rows": 243,
+      "expected": 243,
+      "ok": true
+    },
+    {
+      "model": "vad",
+      "category": "vehicle",
+      "seed": 44,
       "rows": 243,
       "expected": 243,
       "ok": true
     }
   ],
-  "row_count_cells_ok": 54,
-  "row_count_cells_total": 54,
+  "row_count_cells_ok": 156,
+  "row_count_cells_total": 156,
   "agent_type_source_counts": {
-    "record": 6635,
-    "fallback": 1906,
-    "sentinel": 9
+    "record": 22742,
+    "fallback": 1931,
+    "sentinel": 27
   },
   "agent_type_fallback_map": {
     "pedestrian": {
@@ -536,36 +1421,69 @@
   },
   "agent_type_ambiguous_dropped": {},
   "rename_stats": {
-    "prop_unchanged": 7578,
-    "prop_renamed": 972,
-    "agent_type_renamed": 2910
+    "prop_unchanged": 21892,
+    "prop_renamed": 2808,
+    "agent_type_renamed": 8406
+  },
+  "frozen_align": "<paper-repo>/eval",
+  "frozen_align_blanked": {
+    "agent_type": 17,
+    "duration_system": 4,
+    "t_obs_frame": 4,
+    "final_distance": 2,
+    "final_closing_velocity": 2,
+    "scenario_name": 2,
+    "status": 2,
+    "score_route": 2,
+    "score_penalty": 2,
+    "score_composed": 2,
+    "route_length": 2,
+    "duration_game": 2,
+    "driving_score": 2,
+    "route_completion": 2,
+    "infraction_penalty": 2,
+    "collisions_pedestrians": 2,
+    "collisions_vehicles": 2,
+    "collisions_layout": 2,
+    "off_road_infractions": 2,
+    "reaction_detected": 2,
+    "ttr": 1,
+    "dar": 1,
+    "ttc_at_reaction": 1,
+    "t_react_frame": 1,
+    "closing_velocity": 1,
+    "reaction_cause": 1,
+    "reaction_value": 1,
+    "reaction_threshold": 1,
+    "num_reactions": 1,
+    "all_reactions": 1
   },
   "ttr_dar_present_by_model": {
-    "admlp": 0.9979,
-    "bridgedrive": 0.0,
-    "diffad": 0.0,
-    "drivemoe": 1.0,
-    "drivetransformer": 1.0,
-    "hipad": 0.0,
+    "admlp": 0.9993,
+    "bridgedrive": 0.6667,
+    "diffad": 0.6667,
+    "drivemoe": 0.9972,
+    "drivetransformer": 0.9979,
+    "hipad": 0.6667,
     "hydra_next": 1.0,
     "lead": 1.0,
-    "minddrive": 1.0,
-    "orion": 1.0,
+    "minddrive": 0.9965,
+    "orion": 0.9979,
     "orion_lite": 1.0,
     "pdmlite": 1.0,
     "simlingo": 1.0,
-    "sparsedrive_v2": 0.0,
+    "sparsedrive_v2": 0.6667,
     "tcp": 1.0,
     "tfpp": 1.0,
-    "uniad": 1.0,
-    "vad": 1.0
+    "uniad": 0.9979,
+    "vad": 0.9979
   },
   "errors": [],
   "artifacts": {
     "csv": {
       "path": "ood_perceptionbench_records_v0.9.csv",
-      "sha256": "221268092f310ca48f642d68369a972c16a4317b8fb538f8e329f5515d27a248",
-      "bytes": 10490519
+      "sha256": "517c10a8ed738e3e46185ae4e18a490a46772c2f0e51f9c3069e9a988a942944",
+      "bytes": 33479553
     }
   }
 }

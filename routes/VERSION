@@ -5,7 +5,7 @@ binds_to: arXiv v1
 routes: 475
 per_category: static=70 pedestrian=162 vehicle=243
 base_routes: 55
-seed_protocol: seed 42 only (see the Protocol section of the top-level README.md)
+seed_protocol: seeds 42, 43, 44 (PDM-Lite ceiling seed 42 only; see the Protocol section of the top-level README.md)
 frozen_by: make_manifest.py (routes freeze)
 
 # Two-version discipline: this bundle defines the route set that produced the v0.9

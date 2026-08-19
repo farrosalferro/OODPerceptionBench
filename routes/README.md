@@ -118,4 +118,5 @@ produced under v1.0 are **not** comparable row-for-row with v0.9 scores even whe
 blueprint id is unchanged. Always report which bundle version a result came from; `VERSION`
 and the `#` header of `MANIFEST.tsv` both carry it.
 
-Protocol note: the published baselines are **seed 42 only**.
+Protocol note: the published baselines use **three seeds (42, 43, 44)**, averaged per route
+(PDM-Lite ceiling is seed 42 only). See the Protocol section of the top-level README.

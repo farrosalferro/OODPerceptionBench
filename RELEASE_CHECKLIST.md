@@ -29,7 +29,7 @@ is below; this file carries the parts a script cannot judge.
 
 - [x] `routes/` — 475 XMLs + `MANIFEST.tsv` (sha256) + `EXCLUSIONS.md` + `validate_routes.py`
       (**38/38 checks green**, all 475 checksums verified)
-- [x] `records/` — 8,550 rows × 64 columns, CSV + `load.py`, seed 42, 17 models + PDM-Lite
+- [x] `records/` — 24,700 rows × 64 columns, CSV + `load.py`, seeds 42/43/44, 17 models + PDM-Lite (PDM-Lite seed 42)
 - [x] `runner/` — `run_benchmark.py`, worker pool, resume, SLURM backend (**222 tests green**;
       local backend exercised against real CARLA; multi-GPU/full-scale open and SLURM broken —
       see `runner/STATUS.md`)
@@ -103,7 +103,9 @@ is below; this file carries the parts a script cannot judge.
 ## Explicitly out of scope for v0.9
 
 - Tier C (re-running the 17 baselines) — deferred to `contrib/`.
-- Multi-seed records — v0.9 is seed 42 only, matching the published baselines.
+- Multi-seed records — v0.9 ships all three seeds (42/43/44), matching the paper's 3-seed
+  average-per-route headline. (PDM-Lite ceiling and the OOD-collision metric are seed-42-based;
+  see the records `SCHEMA.md`.)
 - Replacement assets for the twelve non-redistributable props — that is v1.0, and it requires a
   re-run and a re-stamp.
 - Accepting third-party result rows into `records/` — governance deferred to v1.0.

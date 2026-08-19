@@ -16,7 +16,7 @@ benchmark:
   release: v0.9
   arxiv_version: v1
   seed: 42
-  repetitions: 1
+  repetitions: 3   # -> seeds 42, 43, 44 (the published 3-seed protocol)
 
 carla:
   root: <path-to-carla-0.9.15>
