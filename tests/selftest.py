@@ -26,6 +26,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from typing import Optional
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(HERE)
@@ -514,10 +515,18 @@ def make_agent_repo(root: str, entrypoint: str = "team_code/data_agent.py") -> t
     return root, sha
 
 
+PDMLITE_AGENT_ENV = {"DATAGEN": "0", "TOWN": "smoke", "REPETITION": "0"}
+REPLICATE_PLATFORM = "Linux-6.8.0-31-generic-x86_64-with-glibc2.39"
+
+
 def write_env_provenance(rep_root: str, python: str = "3.10.15", numpy: str = "1.23.5",
                          scipy: str = "1.14.1", carla="0.9.15",
-                         entrypoint: str = "/opt/cg/team_code/data_agent.py") -> None:
-    """The file the runner's preflight writes into every output root (schema 1)."""
+                         entrypoint: str = "/opt/cg/team_code/data_agent.py",
+                         agent_env: Optional[dict] = PDMLITE_AGENT_ENV) -> None:
+    """The file the runner's preflight writes into every output root (schema 1).
+
+    ``agent_env=None`` leaves the key out, as a runner from before it was recorded did.
+    """
     d = os.path.join(rep_root, "_runner")
     os.makedirs(d, exist_ok=True)
     doc = {
@@ -529,8 +538,18 @@ def write_env_provenance(rep_root: str, python: str = "3.10.15", numpy: str = "1
         "agent_entrypoint": entrypoint,
         "agent_import_ok": True,
     }
+    if agent_env is not None:
+        doc["agent_env"] = dict(agent_env)
     with open(os.path.join(d, "env_provenance.json"), "w", encoding="utf-8") as fh:
         json.dump(doc, fh)
+
+
+def write_run_report(rep_root: str, platform: str) -> None:
+    """The part of the runner's ``_runner/report.json`` the golden builder reads."""
+    d = os.path.join(rep_root, "_runner")
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, "report.json"), "w", encoding="utf-8") as fh:
+        json.dump({"run": {"host": "replicate-host-name", "platform": platform}}, fh)
 
 
 def read_asset_sums() -> list:
@@ -549,10 +568,13 @@ class TestMakeGolden(TempCase):
         super().setUp()
         self.agent_repo, self.agent_sha = make_agent_repo(self.path("agent"))
 
-    def rep(self, name: str, mutate=None, provenance: bool = True, **prov) -> str:
+    def rep(self, name: str, mutate=None, provenance: bool = True,
+            platform: Optional[str] = REPLICATE_PLATFORM, **prov) -> str:
         root = build_results(self.path(name), mutate=mutate)
         if provenance:
             write_env_provenance(root, **prov)
+        if platform is not None:
+            write_run_report(root, platform)
         return root
 
     def _args(self, out, archives=None):
@@ -726,6 +748,58 @@ class TestMakeGolden(TempCase):
                                extra=("--content-pack-sha256", "f" * 64))
         self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
         self.assertFalse(os.path.exists(out))
+
+    # ---- the host and the agent env that RAN the routes, not the builder's -------------
+    def test_stamps_the_replicates_platform_not_the_builders(self):
+        p, _, doc = self.build(self.rep("rep1"), self.rep("rep2"))
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(doc["environment"]["os"], REPLICATE_PLATFORM)
+        self.assertNotIn("replicate-host-name", json.dumps(doc), "a host name is not provenance")
+
+    def test_refuses_replicates_that_ran_on_different_platforms(self):
+        p, out, _ = self.build(self.rep("rep1"),
+                               self.rep("rep2", platform="Linux-5.15.0-139-generic-x86_64"))
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("Linux-5.15.0-139-generic-x86_64", p.stdout + p.stderr)
+        self.assertFalse(os.path.exists(out))
+
+    def test_os_is_left_null_without_run_reports(self):
+        p, _, doc = self.build(self.rep("rep1", platform=None), self.rep("rep2", platform=None))
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIsNone(doc["environment"]["os"])
+        self.assertIn("environment.os", p.stderr)
+
+    def test_stamps_the_agent_env_the_replicates_ran_with(self):
+        p, _, doc = self.build(self.rep("rep1"), self.rep("rep2"))
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(doc["reference_agent"]["env"], PDMLITE_AGENT_ENV)
+
+    def test_refuses_replicates_that_ran_with_datagen_on(self):
+        on = dict(PDMLITE_AGENT_ENV, DATAGEN="1")
+        p, out, _ = self.build(self.rep("rep1", agent_env=on), self.rep("rep2", agent_env=on))
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("DATAGEN", p.stdout + p.stderr)
+        self.assertFalse(os.path.exists(out))
+
+    def test_refuses_replicates_that_left_datagen_to_the_inherited_environment(self):
+        unset = {k: v for k, v in PDMLITE_AGENT_ENV.items() if k != "DATAGEN"}
+        p, out, _ = self.build(self.rep("rep1", agent_env=unset),
+                               self.rep("rep2", agent_env=unset))
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("DATAGEN", p.stdout + p.stderr)
+        self.assertFalse(os.path.exists(out))
+
+    def test_refuses_replicates_with_different_agent_envs(self):
+        p, out, _ = self.build(self.rep("rep1"),
+                               self.rep("rep2", agent_env=dict(PDMLITE_AGENT_ENV, TOWN="t2")))
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertFalse(os.path.exists(out))
+
+    def test_agent_env_from_an_older_runner_is_left_null(self):
+        p, _, doc = self.build(self.rep("rep1", agent_env=None), self.rep("rep2", agent_env=None))
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIsNone(doc["reference_agent"]["env"])
+        self.assertIn("agent.env", p.stderr)
 
     def test_new_bundle_validates_against_the_schema(self):
         try:

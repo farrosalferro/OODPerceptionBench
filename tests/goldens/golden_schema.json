@@ -47,7 +47,8 @@
         "repo": {"type": "string", "description": "Optional (absent from bundles built before it existed; make_golden.py always writes it). Public https URL of the agent's repository. Never a local path.", "examples": ["https://github.com/autonomousvision/carla_garage"]},
         "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$", "description": "Optional (make_golden.py always writes it). Full commit of a CLEAN checkout: make_golden.py refuses when `git status --porcelain` under the entrypoint's top directory is non-empty, because an untracked or modified file there may be what actually ran."},
         "entrypoint": {"type": "string", "description": "Optional (make_golden.py always writes it). Agent file relative to the repository root.", "examples": ["team_code/data_agent.py"]},
-        "entrypoint_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "Optional (make_golden.py always writes it). sha256 of the entrypoint file at that commit."}
+        "entrypoint_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "Optional (make_golden.py always writes it). sha256 of the entrypoint file at that commit."},
+        "env": {"type": ["object", "null"], "additionalProperties": {"type": "string"}, "description": "Optional (make_golden.py always writes it). The agent.env every replicate ran with, from _runner/env_provenance.json; all must agree, and make_golden.py refuses unless DATAGEN is \"0\". null when the runner that made a replicate did not record it."}
       }
     },
     "environment": {
@@ -63,7 +64,7 @@
           "additionalProperties": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
         },
         "gpu": {"type": ["string", "null"]},
-        "os": {"type": ["string", "null"], "description": "Platform string of the host that BUILT the bundle."},
+        "os": {"type": ["string", "null"], "description": "Platform string of the host the replicates RAN on (Python's platform.platform()), from each replicate's _runner/report.json; all must agree. null when a replicate has no run report. Never the builder's platform, which ran no route; bundles made before make_golden.py read it from the replicates hold the builder's, which for the shipped v0.9 bundle was the same machine."},
         "python": {"type": ["string", "null"], "description": "Python version that RAN the replicates. make_golden.py reads it from each replicate's _runner/env_provenance.json (all must agree) or, failing that, from --replicate-python. Never the builder's interpreter."},
         "python_packages": {
           "type": ["object", "null"],

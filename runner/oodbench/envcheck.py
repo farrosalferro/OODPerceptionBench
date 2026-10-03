@@ -9,8 +9,9 @@ This runs ``environment.python`` once, on the host the runner runs on, under the
 activation, ``agent.env``, ``PYTHONPATH`` and working directory a route gets (built by
 :func:`oodbench.jobscript.environment_prelude`, never copied), and imports what the evaluator
 imports: ``carla``, ``py_trees``, ``numpy``, ``scipy`` and the agent module, the evaluator's
-way. Any failure aborts the sweep before the first route. On success the interpreter and the
-versions it found are written to ``<output.root>/_runner/env_provenance.json``.
+way. Any failure aborts the sweep before the first route. On success the interpreter, the
+versions it found and the ``agent.env`` the routes get are written to
+``<output.root>/_runner/env_provenance.json``.
 
 Deliberately NOT checked: the GPU, CUDA, or anything the agent does in ``setup()``. Those need
 the simulator and the route; this is only the part that can be known for free.
@@ -191,6 +192,9 @@ def run(cfg: "Config", log: "logging.Logger") -> Dict[str, Any]:
         "packages": {dist: result["packages"].get(dist) for dist, _ in PACKAGES},
         "agent_entrypoint": str(cfg.agent["entrypoint"]),
         "agent_import_ok": bool(result["agent_import_ok"]),
+        # As every route receives it (the runner's reserved variables are added per route and
+        # are not part of it). The golden builder checks DATAGEN here.
+        "agent_env": dict(cfg.agent["env"]),
     }
     path = runner_dir / "env_provenance.json"
     tmp = path.with_name(path.name + ".tmp")

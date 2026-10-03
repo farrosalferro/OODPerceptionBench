@@ -26,7 +26,7 @@ from oodbench import EXIT_CONFIG, EXIT_OK, envcheck
 from tests.test_integration_local import IntegrationBase
 
 PROVENANCE_KEYS = {"schema", "checked_at", "python_executable", "python_version", "packages",
-                   "agent_entrypoint", "agent_import_ok"}
+                   "agent_entrypoint", "agent_import_ok", "agent_env"}
 
 
 class PreflightBase(IntegrationBase):
@@ -123,6 +123,9 @@ class TestEnvPreflight(PreflightBase):
                                             "carla": "9.9.9", "py_trees": "2.1+stub"})
         self.assertEqual(prov["agent_entrypoint"], str(self.site.root / "agent.py"))
         self.assertIs(prov["agent_import_ok"], True)
+        # What the routes got as agent.env: the golden builder checks DATAGEN against it.
+        self.assertEqual(prov["agent_env"], {"FAKE_TRACE": str(self.site.trace),
+                                             "FAKE_COUNTER": str(self.site.counter)})
 
     def test_a_shadowed_distribution_does_not_report_its_version(self):
         """RED BEFORE THE FIX: the version came from whichever distribution was INSTALLED under

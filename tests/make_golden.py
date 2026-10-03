@@ -41,6 +41,10 @@ Provenance it refuses to guess
 * The Python that RAN the routes is read from <replicate>/_runner/env_provenance.json, which the
   runner's preflight writes. All replicates must agree. The builder's own interpreter is never
   stamped -- it ran no route.
+* So are the agent.env the routes ran with (all replicates must agree, and DATAGEN must be "0":
+  the carla_garage data agent shuffles the weather when it is 1) and, from
+  <replicate>/_runner/report.json, the platform of the host the replicates ran on. The
+  builder's own platform is never stamped either.
 * The content pack is several archives. The bundle lists each archive's sha256 and a composite:
   sha256 of the canonical SHA256SUMS text (one "<sha256>  <name>\\n" line per archive, sorted by
   name in byte order). For a canonical sums file that is exactly `sha256sum SHA256SUMS`.
@@ -49,7 +53,8 @@ Exit status
 -----------
     0  bundle written
     1  an assertion failed in some replicate, or the runs disagree (results, interpreter,
-       packages or agent entrypoint) -- nothing written
+       packages, platform, agent.env or agent entrypoint), or a replicate ran without
+       DATAGEN "0" -- nothing written
     2  usage / IO error, or provenance that cannot be established -- nothing written
 """
 
@@ -59,7 +64,6 @@ import argparse
 import hashlib
 import json
 import os
-import platform
 import posixpath
 import re
 import statistics
@@ -125,6 +129,7 @@ class ProvenanceError(Exception):
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _PY_VERSION = re.compile(r"^\d+\.\d+\.\d+$")
 ENV_PROVENANCE = os.path.join("_runner", "env_provenance.json")
+RUN_REPORT = os.path.join("_runner", "report.json")
 COMPOSITE_RULE_NOTE = (
     "environment.content_pack_sha256 = sha256 of the canonical SHA256SUMS text of "
     "environment.content_pack_archives ('<sha256>  <name>\\n' per archive, sorted by name).")
@@ -220,15 +225,16 @@ def reference_agent_provenance(args) -> dict:
 
 def replicate_environment(reps: list, rep_label: dict, entrypoint: str,
                           explicit_python: Optional[str]) -> tuple:
-    """(python, packages-or-None) that RAN the replicates. Raises ProvenanceError.
+    """(python, packages-or-None, agent_env-or-None) that RAN the replicates.
 
     Reads <replicate>/_runner/env_provenance.json from every replicate. Paths in that file
-    (the interpreter, the agent) are checked, never returned.
+    (the interpreter, the agent) are checked, never returned. Raises ProvenanceError.
     """
     if explicit_python is not None and not _PY_VERSION.match(explicit_python):
         raise ProvenanceError(f"--replicate-python must look like X.Y.Z, got {explicit_python!r}")
     seen: dict = {}
     missing: list = []
+    agent_envs: dict = {}
     for d in reps:
         path = os.path.join(d, ENV_PROVENANCE)
         if not os.path.isfile(path):
@@ -251,6 +257,22 @@ def replicate_environment(reps: list, rep_label: dict, entrypoint: str,
                 f"{rep_label[d]}: the replicate ran agent entrypoint "
                 f"{os.path.basename(ran)!r}, which is not {entrypoint}", code=1)
         seen[d] = (doc["python_version"], doc["packages"])
+        env = doc.get("agent_env")  # absent from files written before it was recorded
+        if env is None:
+            continue
+        if not isinstance(env, dict):
+            raise ProvenanceError(f"{rep_label[d]}: {ENV_PROVENANCE} agent_env is not a mapping")
+        datagen = env.get("DATAGEN")
+        if datagen != "0":
+            how = (f"has DATAGEN={datagen!r}" if datagen is not None else
+                   "has no DATAGEN, so whatever the runner's own environment held reached the "
+                   "agent")
+            raise ProvenanceError(
+                f"{rep_label[d]}: agent.env {how}. The carla_garage data agent shuffles the "
+                f"weather and attaches data-collection sensors when DATAGEN=1, so the protocol "
+                f"sets DATAGEN: \"0\" explicitly. Fix agent.env and re-run the replicates.",
+                code=1)
+        agent_envs[d] = env
 
     for d, (py, _) in seen.items():
         if explicit_python is not None and py != explicit_python:
@@ -266,6 +288,10 @@ def replicate_environment(reps: list, rep_label: dict, entrypoint: str,
         detail = "; ".join(f"{rep_label[d]}={p}" for d, (_, p) in seen.items())
         raise ProvenanceError(f"the replicates ran different package versions ({detail})",
                               code=1)
+    if len({json.dumps(e, sort_keys=True) for e in agent_envs.values()}) > 1:
+        detail = "; ".join(f"{rep_label[d]}={json.dumps(e, sort_keys=True)}"
+                           for d, e in agent_envs.items())
+        raise ProvenanceError(f"the replicates ran with different agent.env ({detail})", code=1)
     if missing:
         names = ", ".join(rep_label[d] for d in missing)
         if explicit_python is None:
@@ -281,7 +307,48 @@ def replicate_environment(reps: list, rep_label: dict, entrypoint: str,
         only = next(iter(seen.values()))[1]
         packages = {k: only.get(k) for k in STAMPED_PACKAGES
                     if k != "carla" or only.get(k) is not None}
-    return python, packages
+    agent_env = None
+    unrecorded = [d for d in reps if d not in agent_envs]
+    if unrecorded:
+        names = ", ".join(rep_label[d] for d in unrecorded)
+        print(f"WARNING: no agent.env recorded for {names} (made by a runner that did not "
+              f"record it); reference_agent.env is not stamped. Check by hand that every "
+              f"replicate ran with DATAGEN \"0\".", file=sys.stderr)
+    else:
+        agent_env = dict(sorted(next(iter(agent_envs.values())).items()))
+    return python, packages, agent_env
+
+
+def replicate_platform(reps: list, rep_label: dict) -> Optional[str]:
+    """Platform string of the host the replicates RAN on, or None. Raises ProvenanceError.
+
+    Read from <replicate>/_runner/report.json, where the runner records platform.platform() of
+    the host it ran on -- on the local backend the golden procedure uses, the host the routes
+    ran on. The replicates of one golden are runs on one machine, so they must agree. Never the
+    builder's own platform: the builder ran no route.
+    """
+    seen: dict = {}
+    unrecorded: list = []
+    for d in reps:
+        try:
+            with open(os.path.join(d, RUN_REPORT), encoding="utf-8") as fh:
+                value = (json.load(fh).get("run") or {}).get("platform")
+        except (OSError, ValueError, AttributeError):
+            value = None
+        if isinstance(value, str) and value:
+            seen[d] = value
+        else:
+            unrecorded.append(d)
+    if len(set(seen.values())) > 1:
+        detail = ", ".join(f"{rep_label[d]}={p}" for d, p in seen.items())
+        raise ProvenanceError(f"the replicates ran on different platforms ({detail}). The "
+                              f"replicates of one golden are runs on one machine.", code=1)
+    if unrecorded:
+        names = ", ".join(rep_label[d] for d in unrecorded)
+        print(f"WARNING: no platform in {RUN_REPORT} of {names}; environment.os is not "
+              f"stamped.", file=sys.stderr)
+        return None
+    return next(iter(seen.values()))
 
 
 def content_pack_digest(specs: list, cross_check: Optional[str]) -> tuple:
@@ -387,8 +454,9 @@ def main() -> int:
 
     try:
         agent = reference_agent_provenance(args)
-        python, packages = replicate_environment(reps, rep_label, agent["entrypoint"],
-                                                 args.replicate_python)
+        python, packages, agent_env = replicate_environment(reps, rep_label, agent["entrypoint"],
+                                                            args.replicate_python)
+        host_os = replicate_platform(reps, rep_label)
         archives, composite = content_pack_digest(args.content_pack_archive,
                                                   args.content_pack_sha256)
     except ProvenanceError as exc:
@@ -416,6 +484,8 @@ def main() -> int:
         print(f"             {d}")
     print(f"agent      : {agent['version']}  ({agent['repo']})")
     print(f"python     : {python}  (the replicates' interpreter)")
+    print(f"os         : {host_os}  (the replicates' host)")
+    print(f"agent env  : {json.dumps(agent_env)}")
     print(f"pack       : {composite}  ({len(archives)} archive(s))")
 
     reference = load_reference(DEFAULT_REFERENCE_TSV)
@@ -529,14 +599,14 @@ def main() -> int:
             "sha256": sha256_of(args.split),
             "n_routes": len(rows),
         },
-        "reference_agent": agent,
+        "reference_agent": dict(agent, env=agent_env),
         "environment": {
             "carla_version": args.carla_version,
             "content_pack_version": args.content_pack_version,
             "content_pack_sha256": composite,
             "content_pack_archives": archives,
             "gpu": args.gpu,
-            "os": platform.platform(),
+            "os": host_os,
             "python": python,
             "python_packages": packages,
             "runner_version": args.runner_version,

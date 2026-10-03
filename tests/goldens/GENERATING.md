@@ -188,6 +188,15 @@ Provenance it establishes before reading any result, refusing (nothing written) 
   carla client if recorded) — never an interpreter path. For replicates produced by a runner
   without that preflight, pass `--replicate-python X.Y.Z` (the version of `environment.python`
   in the config); the package versions are then left unstamped. Any disagreement exits 1.
+- **Agent environment.** The same file records the `agent.env` the routes ran with. All
+  replicates must agree, and every one must have `DATAGEN: "0"` set explicitly — left out, the
+  runner's own environment decides; anything else exits 1. The bundle stamps it as
+  `reference_agent.env`. Replicates from a runner that did not record it leave that `null`,
+  with a warning: check `DATAGEN` by hand then.
+- **Host.** `environment.os` is the platform string each replicate's `_runner/report.json`
+  recorded — the machine the replicates ran on, never the one running `make_golden.py`. The
+  replicates are runs on one machine, so they must agree; a difference exits 1. A replicate
+  without a run report leaves it `null`, with a warning.
 - **Content pack.** One `--content-pack-archive NAME=SHA256` per archive, taken from
   `assets/SHA256SUMS`. The bundle lists them in `environment.content_pack_archives` and sets
   `environment.content_pack_sha256` to the composite:

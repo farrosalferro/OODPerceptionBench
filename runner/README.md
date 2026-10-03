@@ -69,8 +69,12 @@ python run_benchmark.py --config my_config.yaml
    {"schema": 1, "checked_at": "2026-01-01T00:00:00Z",
     "python_executable": "/opt/envs/b2d/bin/python3", "python_version": "3.10.15",
     "packages": {"numpy": "1.24.4", "scipy": "1.10.1", "carla": "0.9.15", "py_trees": "0.8.3"},
-    "agent_entrypoint": "/path/to/my_agent.py", "agent_import_ok": true}
+    "agent_entrypoint": "/path/to/my_agent.py", "agent_import_ok": true,
+    "agent_env": {"MY_AGENT_FLAG": "1"}}
    ```
+
+   `agent_env` is your `agent.env` as every route receives it (the runner's reserved variables
+   are added per route and are not in it).
 
    Versions come from the installed distribution's metadata when the imported module is one of
    that distribution's files, otherwise from the module's `__version__`, else `null` — so a copy
