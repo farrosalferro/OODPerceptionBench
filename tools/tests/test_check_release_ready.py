@@ -35,17 +35,25 @@ def checker(monkeypatch):
     return _load_module()
 
 
+def _write_bundle(root, name: str, n_routes) -> None:
+    """A copy of the shipped bundle covering `n_routes` routes; None drops the count."""
+    with open(SHIPPED_GOLDEN, encoding="utf-8") as fh:
+        doc = json.load(fh)
+    if n_routes is None:
+        del doc["split"]["n_routes"]
+    else:
+        doc["split"]["n_routes"] = n_routes
+    with open(os.path.join(root, "tests", "goldens", name), "w", encoding="utf-8") as fh:
+        json.dump(doc, fh)
+
+
 def _make_repo(root, *, bundles: int, cell: str, declared: bool, n_routes: int = 9) -> str:
     goldens = os.path.join(root, "tests", "goldens")
     os.makedirs(goldens)
     # EXAMPLE never counts as a real bundle, so every copy carries it.
     shutil.copy(SHIPPED_GOLDEN, os.path.join(goldens, "EXAMPLE.golden.json"))
     for i in range(bundles):
-        with open(SHIPPED_GOLDEN, encoding="utf-8") as fh:
-            doc = json.load(fh)
-        doc["split"]["n_routes"] = n_routes
-        with open(os.path.join(goldens, f"bundle{i}.golden.json"), "w", encoding="utf-8") as fh:
-            json.dump(doc, fh)
+        _write_bundle(root, f"bundle{i}.golden.json", n_routes)
     with open(os.path.join(root, "tests", "VERSION"), "w", encoding="utf-8") as fh:
         fh.write(f"component: tests\ngoldens_present: {'true' if declared else 'false'}\n")
     with open(os.path.join(root, "README.md"), "w", encoding="utf-8") as fh:
@@ -87,6 +95,42 @@ def test_bundle_present_with_wrong_route_count_fails(checker, monkeypatch, tmp_p
     state, why = _verdict(checker, monkeypatch, root)
     assert state == checker.TODO
     assert "12" in why and "9" in why
+
+
+def test_bundles_disagreeing_on_route_count_fail(checker, monkeypatch, tmp_path):
+    # The README matches one of the two bundles, which used to be enough to pass.
+    root = _make_repo(str(tmp_path), bundles=1, cell=MEASURED_9, declared=True)
+    _write_bundle(root, "other.golden.json", 12)
+    state, why = _verdict(checker, monkeypatch, root)
+    assert state == checker.TODO
+    assert "different route counts" in why and "other.golden.json=12" in why
+
+
+def test_unreadable_bundle_fails(checker, monkeypatch, tmp_path):
+    # A broken bundle used to be skipped while a good one next to it carried the check.
+    root = _make_repo(str(tmp_path), bundles=1, cell=MEASURED_9, declared=True)
+    with open(os.path.join(root, "tests", "goldens", "broken.golden.json"), "w",
+              encoding="utf-8") as fh:
+        fh.write("{ not json")
+    state, why = _verdict(checker, monkeypatch, root)
+    assert state == checker.TODO
+    assert "broken.golden.json" in why
+
+
+def test_bundle_without_a_route_count_fails(checker, monkeypatch, tmp_path):
+    root = _make_repo(str(tmp_path), bundles=1, cell=MEASURED_9, declared=True)
+    _write_bundle(root, "nocount.golden.json", None)
+    state, why = _verdict(checker, monkeypatch, root)
+    assert state == checker.TODO
+    assert "nocount.golden.json" in why
+
+
+def test_measured_cell_without_a_route_count_fails(checker, monkeypatch, tmp_path):
+    # "measured" alone used to pass: the count is the part of the promise that can be wrong.
+    root = _make_repo(str(tmp_path), bundles=1, cell="measured PDM-Lite bundle", declared=True)
+    state, why = _verdict(checker, monkeypatch, root)
+    assert state == checker.TODO
+    assert "N-route" in why
 
 
 def test_bundle_present_and_readme_agrees_passes(checker, monkeypatch, tmp_path):

@@ -124,20 +124,31 @@ def _goldens_present() -> int:
                 if not os.path.basename(p).startswith("EXAMPLE")])
 
 
-def _golden_route_counts() -> set[int]:
-    """split.n_routes of every real bundle (EXAMPLE excluded); unreadable bundles are skipped."""
-    counts: set[int] = set()
-    for p in glob.glob(os.path.join(REPO, "tests", "goldens", "*.golden.json")):
-        if os.path.basename(p).startswith("EXAMPLE"):
+def _golden_route_counts() -> tuple[dict[str, int], list[str]]:
+    """split.n_routes of every real bundle by file name (EXAMPLE excluded), and the bundles
+    whose count cannot be read.
+
+    An unreadable bundle is reported, never skipped: skipping it let a broken bundle sit
+    next to a good one while the check passed on the good one alone.
+    """
+    counts: dict[str, int] = {}
+    unreadable: list[str] = []
+    for p in sorted(glob.glob(os.path.join(REPO, "tests", "goldens", "*.golden.json"))):
+        name = os.path.basename(p)
+        if name.startswith("EXAMPLE"):
             continue
         try:
             with open(p, encoding="utf-8") as fh:
                 n = json.load(fh).get("split", {}).get("n_routes")
-        except (OSError, ValueError, AttributeError):
+        except (OSError, ValueError, AttributeError) as exc:
+            unreadable.append(f"{name} ({type(exc).__name__})")
             continue
-        if isinstance(n, int):
-            counts.add(n)
-    return counts
+        # bool is an int subclass, and `true` is not a route count.
+        if isinstance(n, int) and not isinstance(n, bool) and n > 0:
+            counts[name] = n
+        else:
+            unreadable.append(f"{name} (split.n_routes is {n!r})")
+    return counts, unreadable
 
 
 def _goldens_claim_is_honest() -> tuple[str, str]:
@@ -148,8 +159,9 @@ def _goldens_claim_is_honest() -> tuple[str, str]:
     all-zero split hash. A shipped feature table is a promise; this makes the
     promise mechanically checkable so it cannot drift back. It checks both directions:
     no bundle means the v0.9 cell must say "none"; a bundle means the cell must advertise a
-    measured bundle whose "N-route" count matches the bundle's split.n_routes.
-    Tests: tools/tests/test_check_release_ready.py.
+    measured bundle and state its size as "N-route". Every real bundle must then be readable,
+    all of them must cover the same number of routes (one cell describes one split), and that
+    number must be N. Tests: tools/tests/test_check_release_ready.py.
     """
     n = _goldens_present()
     problems: list[str] = []
@@ -180,9 +192,20 @@ def _goldens_claim_is_honest() -> tuple[str, str]:
                 if "none" in v09.lower() or "measured" not in v09.lower():
                     problems.append(f"{n} golden bundle(s) exist but the README feature table's "
                                     f"v0.9 cell does not advertise a measured bundle ({v09!r})")
+                counts, unreadable = _golden_route_counts()
+                if unreadable:
+                    problems.append("cannot read the route count of golden bundle(s): "
+                                    + ", ".join(unreadable))
+                actual = sorted(set(counts.values()))
+                if len(actual) > 1:
+                    problems.append("the golden bundles cover different route counts ("
+                                    + ", ".join(f"{k}={v}" for k, v in sorted(counts.items()))
+                                    + "), and one README cell can describe only one split")
                 claimed = re.search(r"(\d+)-route", v09)
-                actual = sorted(_golden_route_counts())
-                if claimed and actual and int(claimed.group(1)) not in actual:
+                if not claimed:
+                    problems.append(f"the README feature table's v0.9 cell does not state the "
+                                    f"bundle's size as 'N-route' ({v09!r})")
+                elif actual and int(claimed.group(1)) not in actual:
                     problems.append(f"README claims a {claimed.group(1)}-route golden but the "
                                     f"bundle(s) cover {', '.join(map(str, actual))} route(s)")
     return (PASS if not problems else TODO), ("; ".join(problems) if problems else
