@@ -20,9 +20,11 @@ WHAT IT CHECKS
 3. The spawned actor's type_id is the one asked for.
 4. The bounding box matches the recorded reference within tolerance, which catches a
    blueprint ID that resolved to the wrong mesh.
-5. Every blueprint ID the shipped WalkerFactory registers WITHOUT shipping its content
-   ("phantoms") is reported, and asserted to be non-spawnable. These are not usable and
-   must never appear in a route you intend to score.
+5. Walker IDs this pack does NOT ship are NOT registered. The shipped WalkerFactory
+   registers only the four shipped walkers plus CARLA's native ones, so any of these
+   being registered means the WalkerFactory in use is not the one this pack ships. A
+   registered blueprint whose content is missing does not crash; the route finishes
+   with a plausible score.
 
 USAGE
 -----
@@ -56,10 +58,10 @@ SHIPPED = {
     "static.prop.roadclosedbarricade":    {"group": "props",          "extent": None},
 }
 
-# Blueprint IDs the shipped WalkerFactory registers but whose cooked content is NOT in
-# this pack. They appear in the blueprint library and are NOT usable. See README.md
-# "Phantom blueprint IDs".
-PHANTOMS = [
+# Walker blueprint IDs that must NOT be registered. Earlier cooks of WalkerFactory
+# registered all of these without shipping their content; the shipped factory registers
+# none of them. If one is registered, the factory in use is not this pack's.
+MUST_NOT_REGISTER = [
     "walker.pedestrian.soldier",       # not redistributable (see ASSETS.tsv)
     "walker.pedestrian.wheelchair",    # not redistributable (see ASSETS.tsv)
     "walker.pedestrian.ball",          # unrelated experiment, not part of the benchmark
@@ -103,10 +105,11 @@ def main() -> int:
     a = ap.parse_args()
 
     shipped = dict(SHIPPED)
-    phantoms = list(PHANTOMS)
+    # Registered by the shipped WalkerFactory but deliberately left without content.
+    expected_unusable: list[str] = []
     if a.without_nc:
         shipped.pop("walker.pedestrian.firefighter", None)
-        phantoms.insert(0, "walker.pedestrian.firefighter")
+        expected_unusable.append("walker.pedestrian.firefighter")
         print("NOTE: --without-nc — the CC BY-NC firefighter is treated as not installed. "
               "18 pedestrian routes are unrunnable in this configuration.")
 
@@ -165,8 +168,19 @@ def main() -> int:
         finally:
             actor.destroy()
 
-    print("\n--- phantom IDs (registered, content NOT shipped) " + "-" * 21)
-    for bp_id in phantoms:
+    print("\n--- walker IDs that must NOT be registered " + "-" * 28)
+    for bp_id in MUST_NOT_REGISTER:
+        if any(b.id == bp_id for b in lib.filter(bp_id)):
+            failures.append(f"{bp_id}: REGISTERED, but this pack does not ship it — the "
+                            f"WalkerFactory in use is not the one this pack ships, so a route "
+                            f"using this ID would not measure what the published records did")
+            print(f"  FAIL  {bp_id}: registered")
+        else:
+            print(f"  OK    {bp_id}: not registered")
+
+    if expected_unusable:
+        print("\n--- registered, content deliberately NOT installed " + "-" * 20)
+    for bp_id in expected_unusable:
         found = [b for b in lib.filter(bp_id) if b.id == bp_id]
         if not found:
             print(f"  note  {bp_id}: not registered (fine — your WalkerFactory differs)")
@@ -204,7 +218,7 @@ def main() -> int:
               "not fail the route, it silently changes what was measured.")
         return 1
     print("VERIFY OK — all six shipped assets registered, spawned and matched reference "
-          "dimensions; no phantom ID is spawnable.")
+          "dimensions; no unshipped walker ID is registered.")
     return 0
 
 

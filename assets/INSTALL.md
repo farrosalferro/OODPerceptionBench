@@ -136,7 +136,7 @@ Expected tail:
 
 ```
 VERIFY OK — all six shipped assets registered, spawned and matched reference dimensions;
-no phantom ID is spawnable.
+no unshipped walker ID is registered.
 ```
 
 Exit code 0 means installed correctly. Anything else: stop, fix, re-verify.
@@ -144,35 +144,13 @@ Exit code 0 means installed correctly. Anything else: stop, fix, re-verify.
 The verifier checks that each of the six IDs **spawns**, not merely that it is registered.
 That distinction matters: the four walkers are registered by `WalkerFactory`, and a
 `WalkerFactory` entry with no content behind it still appears in the blueprint library.
+It also fails if a walker ID this pack does not ship (`soldier`, `wheelchair`, …) is
+registered: the shipped `WalkerFactory` registers none of them, so one showing up means the
+factory in use is not this pack's.
 
 ---
 
-## 4. Phantom blueprint IDs — expected, harmless, unusable
-
-After installing, `world.get_blueprint_library()` will advertise **nine walker IDs whose
-content is not in this pack**:
-
-```
-walker.pedestrian.soldier        walker.pedestrian.wheelchair
-walker.pedestrian.ball           walker.pedestrian.caneman
-walker.pedestrian.cow            walker.pedestrian.crutcheswoman
-walker.pedestrian.deer           walker.pedestrian.labrador
-walker.pedestrian.tire
-```
-
-They are artefacts of shipping a `WalkerFactory` cooked from a build with more assets than
-this pack contains. All nine are **unspawnable**: `try_spawn_actor` returns `None`,
-`spawn_actor` raises `RuntimeError: Spawn failed because of invalid actor description`.
-They cannot silently give you a wrong prop. Do not use them. `verify_pack.py` asserts that
-none of them spawns.
-
-`soldier` and `wheelchair` are real benchmark props whose source models are not
-redistributable; the other seven belong to unrelated experiments and appear in no
-benchmark route.
-
----
-
-## 5. What you can run with this pack
+## 4. What you can run with this pack
 
 **237 of the benchmark's 475 routes.**
 
@@ -194,7 +172,7 @@ assets and a re-run are the v1.0 scope.
 
 ---
 
-## 6. Uninstall
+## 5. Uninstall
 
 Delete the six content directories, then restore `WalkerFactory` from a pristine CARLA
 0.9.15 (there is no copy of the original in this pack — take one before you install if you
@@ -208,7 +186,7 @@ cp /pristine/CARLA_0.9.15/CarlaUE4/Content/Carla/Blueprints/Walkers/WalkerFactor
 
 ---
 
-## 7. Rebuilding the pack from a CARLA build
+## 6. Rebuilding the pack from a CARLA build
 
 For provenance. `build/build_asset_pack.sh` reads a CARLA build read-only and reproduces
 the three tarballs and both manifests:
