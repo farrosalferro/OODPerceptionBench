@@ -776,6 +776,19 @@ class TestMakeGolden(TempCase):
         self.assertRefusesAgentCode("scope_clean", scope_clean=None,
                                     git_error="git status failed: fatal: dubious ownership")
 
+    def test_refuses_a_fingerprint_that_also_reports_a_git_error(self):
+        # The runner never writes this: a git error leaves the other fields null.
+        self.assertRefusesAgentCode("git_error",
+                                    git_error="git status failed: fatal: dubious ownership")
+
+    def test_refuses_a_clean_scope_that_lists_dirty_files_or_no_list(self):
+        self.assertRefusesAgentCode("scope_dirty", scope_dirty=[" M team_code/autopilot.py"])
+        r1 = self.rep("rep1b", agent_code=agent_code_of(self.agent_repo, scope_dirty=None))
+        p, out, _ = self.build(r1, self.rep("rep2"))
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("replicate_1: agent_code.scope_dirty is None", p.stderr)
+        self.assertFalse(os.path.exists(out))
+
     def test_refuses_schema_1_provenance_without_a_fingerprint(self):
         r1 = self.rep("rep1", schema=1, agent_code=None)
         p, out, _ = self.build(r1, self.rep("rep2"))

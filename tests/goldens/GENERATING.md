@@ -189,7 +189,8 @@ Provenance it establishes before reading any result, refusing (nothing written) 
   match the checkout above field by field: `entrypoint_rel` = `--reference-agent-entrypoint`,
   the same `entrypoint_sha256`, `git_head` = the commit, the same `scope` (the entrypoint's top
   directory), and `scope_clean` true (the same `git status` rule, applied to the checkout the
-  replicate actually ran). Otherwise it exits 1:
+  replicate actually ran) with an empty `scope_dirty` and a null `git_error`. Otherwise it
+  exits 1:
   the replicate did not demonstrably run the reference checkout, and another clone or an edited
   copy of the agent may have produced its scores. Re-run it from the clean checkout. A missing
   or schema-1 file exits 1 too — `--replicate-python` does not stand in for it. The fingerprint

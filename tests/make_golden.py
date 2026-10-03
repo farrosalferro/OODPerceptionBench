@@ -283,6 +283,16 @@ def check_agent_code(label: str, doc: dict, agent: dict) -> None:
             detail = "False:\n" + "\n".join(f"    {line}"
                                              for line in code.get("scope_dirty") or [])
         raise ProvenanceError(f"{label}: agent_code.scope_clean is {detail}\n  {why}", code=1)
+    # The runner reports a git error only with the fields above left null, and lists no dirty
+    # file when it finds the scope clean. A record that says otherwise is not one it wrote.
+    if code.get("git_error") is not None:
+        raise ProvenanceError(
+            f"{label}: agent_code.git_error is {code.get('git_error')!r} although every other "
+            f"field is filled in, {why}", code=1)
+    if code.get("scope_dirty") != []:
+        raise ProvenanceError(
+            f"{label}: agent_code.scope_dirty is {code.get('scope_dirty')!r} although "
+            f"scope_clean is true, {why}", code=1)
 
 
 def replicate_environment(reps: list, rep_label: dict, agent: dict,
