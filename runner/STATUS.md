@@ -341,6 +341,29 @@ observed;
 > the infra-retry budget absorbs the transient and the route settles on a later attempt, but a
 > long, generous `route_timeout_s` makes each freeze expensive. Size `infra_budget` and
 > `route_timeout_s` for your agent. The local backend is unaffected by any of the above.
+>
+> **Known SLURM residuals (open; a fix is planned).** Three rare paths are not yet handled
+> cleanly. None affects the local backend.
+>
+> - **A job the runner cannot identify keeps running.** If `sbatch` accepts a job but prints no
+>   usable job id, or prints a malformed one and the runner's `scancel` of that job is not
+>   confirmed within 60 s, the run stops with an error. That job may still be running
+>   unsupervised, and the route's previous checkpoint was set aside in memory and is lost. To
+>   recover: find the job by name (`oodbench-<route stem>`, as in the newest `.sbatch` script the
+>   run wrote) with `squeue -u $USER -n <name>`, `scancel` it, wait until it has left the queue,
+>   then restore that route's checkpoint from a backup, or delete whatever the cancelled job left
+>   at that path so the route runs again. Then resume.
+> - **Missing accounting can be charged to the model.** If `squeue` fails, or `sacct` returns
+>   nothing (accounting lag), just as a job ends, the attempt settles as an ordinary exit with the
+>   detail `SLURM state unknown`. A job killed by a signal in that window is then charged to the
+>   model's record budget instead of the bounded infrastructure axis. If a route's reason reads
+>   `SLURM state unknown`, check the job with `sacct -j <id>`; if it was an infrastructure
+>   failure, delete that route's checkpoint and resume so it runs again.
+> - **Queue time can be recorded as runtime.** A job that finishes before the runner ever sees it
+>   `RUNNING` keeps a start time taken before `sbatch`, so its recorded duration includes the
+>   time it waited in the queue. This changes no settlement and no `route_timeout_s` decision;
+>   only the persisted duration figures are inflated. For cost estimates, use `sacct`'s
+>   `Elapsed` for the job instead.
 
 ### Hardware-validation measurement notes
 
