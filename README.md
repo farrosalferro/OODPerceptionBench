@@ -174,6 +174,16 @@ python runner/run_benchmark.py --config config/my_machine.yaml \
 
 `setup.sh` does **not** install CARLA, create a conda environment, or download model weights.
 
+To run the repository's own checks (no CARLA, no GPU), use a separate Python 3.10 environment
+with the pinned test and records-tooling dependencies:
+
+```bash
+python3 -m venv .venv && . .venv/bin/activate
+pip install -r requirements-test.txt
+python3 tests/selftest.py                       # acceptance-harness self-tests
+python3 -m pytest -q runner/tests tools/tests   # runner and release-tooling tests
+```
+
 ### Silent failure — read this before you trust a number
 
 If the content pack is not installed correctly, `try_spawn_actor('static.prop.roadclosedsign')`

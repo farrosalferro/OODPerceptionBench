@@ -1,0 +1,19 @@
+# Test and records-tooling dependencies for OOD-PerceptionBench (Python 3.10).
+#
+#   python3 -m venv .venv && . .venv/bin/activate
+#   pip install -r requirements-test.txt
+#
+# This is NOT the agent/simulation environment. PDM-Lite and the runner's agent process use
+# env/requirements-pdmlite.txt (numpy 1.23.5); keep the two in separate environments.
+#
+# pandas / numpy / scipy are pinned to the reference environment that built the published
+# records (records/README.md, "reference environment"), so the records checks and the
+# acceptance statistics run against the same numerics that produced the shipped numbers.
+pandas==2.0.3
+numpy==1.22.0
+scipy==1.10.1
+
+# Test runners and schema validation (tests/selftest.py, runner/tests, tools/tests).
+pytest==9.0.2
+PyYAML==6.0.2
+jsonschema==4.26.0

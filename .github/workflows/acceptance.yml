@@ -203,7 +203,7 @@ jobs:
           python-version: "3.10"
 
       - name: Install the records tooling dependencies
-        run: python3 -m pip install --quiet 'pandas>=1.5'
+        run: python3 -m pip install --quiet -r requirements-test.txt
 
       - name: Route freeze validator — 38 checks over the frozen bundle
         # Counts (475 = 70/162/243), level directories, blueprint vocabulary, base-route ids,
@@ -239,7 +239,7 @@ jobs:
           PAPER_REPO: ${{ inputs.paper_repo }}
         run: |
           set -euo pipefail
-          python3 -m pip install --quiet 'pandas>=1.5' scipy numpy
+          python3 -m pip install --quiet -r requirements-test.txt
           bash records/verify.sh "$PAPER_REPO" "${RUNNER_TEMP}/records_verify"
 
       - name: Say plainly which records checks were NOT attempted
@@ -292,7 +292,7 @@ jobs:
       - name: Install the records tooling dependencies
         # Without pandas the records gate degrades to "not attempted" rather than passing —
         # install it so the gate is real.
-        run: python3 -m pip install --quiet 'pandas>=1.5'
+        run: python3 -m pip install --quiet -r requirements-test.txt
 
       - name: Readiness gate — blocking on a tag, advisory otherwise
         env:
