@@ -180,7 +180,7 @@ against it as INFO only.
 | `probe_blueprints.py` | pre-flight: registration + spawn + `type_id`, per blueprint. Needs CARLA, not a GPU sweep |
 | `check_acceptance.py` | the harness: A1–A4 over a run's output |
 | `make_golden.py` | build a golden bundle from replicate runs |
-| `selftest.py` | 48 tests of the harness itself; no CARLA, no GPU, runs in CI |
+| `selftest.py` | 49 tests of the harness itself; no CARLA, no GPU, runs in CI |
 | `configs/golden_generation.yaml.template` | runner config for the golden-generation runs |
 | `goldens/` | measured v0.9 bundle, format, regeneration procedure, and ignored example |
 | `reference/` | published seed-42 observations, for orientation only |

@@ -752,5 +752,36 @@ class TestGoldenSchema(unittest.TestCase):
             jsonschema.validate(json.load(fh), schema)
 
 
+class TestGoldenGenerationTemplate(unittest.TestCase):
+    """The template's three leaderboard paths must describe ONE Bench2Drive checkout.
+
+    It once set ``work_dir`` to the carla_garage root while ``root`` and
+    ``scenario_runner_root`` pointed inside its ``Bench2Drive/`` directory. The evaluator reads
+    ``<work_dir>/leaderboard/data/weather.xml`` on every route, so a config copied from the
+    template crashed every route before it wrote a result.
+    """
+
+    TEMPLATE = os.path.join(HERE, "configs", "golden_generation.yaml.template")
+
+    def _leaderboard_paths(self) -> dict:
+        paths, inside = {}, False
+        with open(self.TEMPLATE, encoding="utf-8") as fh:
+            for line in fh:
+                if not line.strip() or line.lstrip().startswith("#"):
+                    continue
+                if not line.startswith(" "):
+                    inside = line.startswith("leaderboard:")
+                    continue
+                if inside:
+                    key, _, value = line.strip().partition(":")
+                    paths[key] = value.split("#")[0].strip()
+        return paths
+
+    def test_leaderboard_paths_share_one_bench2drive_root(self):
+        p = self._leaderboard_paths()
+        self.assertEqual(p["root"], p["work_dir"] + "/leaderboard")
+        self.assertEqual(p["scenario_runner_root"], p["work_dir"] + "/scenario_runner")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

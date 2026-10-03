@@ -36,7 +36,7 @@ is below; this file carries the parts a script cannot judge.
 - [x] `docs/` — `replacing-props.md`, `ASSET_TRAPS.md`, the three `import_procedure_*.md`
       and the parameterised `stages/` scripts
 - [x] `classifier/` — the three dimension-checker notebooks (the admissibility rule itself)
-- [x] `tests/` — smoke split + harness + self-tests (**48 tests green**) plus the measured
+- [x] `tests/` — smoke split + harness + self-tests (**49 tests green**) plus the measured
       nine-route PDM-Lite v0.9 golden
 - [x] `assets/` — install / verify / attribution / checksums for the six shippable props
 

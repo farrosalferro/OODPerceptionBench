@@ -23,7 +23,10 @@ carla:
   client_timeout_s: 900
 
 leaderboard:
-  work_dir: <path-to-the-patched-carla_garage-checkout>
+  # The Bench2Drive/ directory, NOT the checkout root: the evaluator reads
+  # <work_dir>/leaderboard/data/weather.xml on every route, and the runner refuses to start
+  # if that file is missing.
+  work_dir: <path-to-the-patched-carla_garage-checkout>/Bench2Drive
   root: <path-to-the-patched-carla_garage-checkout>/Bench2Drive/leaderboard
   scenario_runner_root: <path-to-the-patched-carla_garage-checkout>/Bench2Drive/scenario_runner
 
