@@ -54,13 +54,28 @@ except ImportError:  # Python < 3.8
 
 packages, failures = {}, []
 
+def _owned_version(dist, mod):
+    # The installed distribution's version, but only if the module that was imported is one of
+    # its files: a copy found earlier on the path (a CARLA egg on PYTHONPATH in front of a
+    # pip-installed wheel) would otherwise be reported under the wheel's version.
+    target = getattr(mod, "__file__", None)
+    if _md is None or not target:
+        return None
+    target = os.path.realpath(target)
+    try:
+        d = _md.distribution(dist)
+        for f in d.files or ():
+            if (os.path.basename(str(f)) == os.path.basename(target)
+                    and os.path.realpath(str(d.locate_file(f))) == target):
+                return d.version
+    except Exception:
+        pass
+    return None
+
 def _version(dist, mod):
-    if _md is not None:
-        try:
-            return _md.version(dist)
-        except Exception:
-            pass
-    v = getattr(mod, "__version__", None)
+    v = _owned_version(dist, mod)
+    if v is None:
+        v = getattr(mod, "__version__", None)
     return None if v is None else str(v)
 
 for dist, name in json.loads(sys.argv[1]):

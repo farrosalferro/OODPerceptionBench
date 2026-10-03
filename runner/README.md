@@ -5,7 +5,7 @@
 > comparable. Every report this runner writes carries that stamp.
 >
 > **This is a hardware-validated local first cut, not a production-scale runner.** The
-> supervision logic is covered by 284 automated tests. On 2026-08-11/12 CARLA 0.9.15 executed
+> supervision logic is covered by 285 automated tests. On 2026-08-11/12 CARLA 0.9.15 executed
 > single routes, two 8-route/two-worker sweeps with one-GPU stacking and port isolation observed
 > live, a real Ctrl-C/reap/resume cycle, and three independent nine-route PDM-Lite golden
 > replicates. The SLURM backend is now validated on a real scheduler at two-way concurrency (one
@@ -72,8 +72,10 @@ python run_benchmark.py --config my_config.yaml
     "agent_entrypoint": "/path/to/my_agent.py", "agent_import_ok": true}
    ```
 
-   Versions come from the installed distribution's metadata, falling back to the module's
-   `__version__`, else `null`. `--skip-env-preflight` bypasses the check — for an interpreter
+   Versions come from the installed distribution's metadata when the imported module is one of
+   that distribution's files, otherwise from the module's `__version__`, else `null` — so a copy
+   that shadows the installed one (a CARLA egg on `PYTHONPATH` in front of a pip-installed wheel)
+   is never reported under the wheel's version. `--skip-env-preflight` bypasses the check — for an interpreter
    that exists only on the compute nodes, say — and is recorded in the report as a warning.
 
 4. **Copy and edit a config.** `configs/example.yaml` documents every field.
@@ -411,7 +413,7 @@ No GPU, no CARLA, no network, no third-party packages:
 python -m unittest discover -s tests -t .
 ```
 
-284 tests covering the port allocator (at worker counts far above any real GPU count), the
+285 tests covering the port allocator (at worker counts far above any real GPU count), the
 finalization predicate and status taxonomy, path mirroring, manifest integrity, the resume and
 budget decision, the attempt-accounting model of `DESIGN.md` §6A, the exit contract, the ledger,
 the generated job script, backend concurrency, and the SLURM backend — including the end-to-end

@@ -31,13 +31,18 @@ PROVENANCE_KEYS = {"schema", "checked_at", "python_executable", "python_version"
 
 class PreflightBase(IntegrationBase):
 
-    def _isolated_env(self, missing=(), agent_source=""):
-        """A ``-S`` interpreter wrapper plus a stub tree holding everything but ``missing``."""
+    def _isolated_env(self, missing=(), agent_source="", shadow_carla=False):
+        """A ``-S`` interpreter wrapper plus a stub tree holding everything but ``missing``.
+
+        ``shadow_carla`` puts another ``carla.py`` on the path in front of the stub tree, the way
+        a CARLA egg on ``PYTHONPATH`` shadows a pip-installed wheel.
+        """
         root = self.site.root
         stubs = root / "preflight_stubs"
         stubs.mkdir()
         sources = {
-            # metadata present and different from __version__: metadata must win.
+            # metadata present, owning the imported file, and different from __version__:
+            # metadata must win.
             "carla": '__version__ = "module-attr"\n',
             # no metadata: falls back to __version__.
             "numpy": '__version__ = "1.0+stub"\n',
@@ -53,12 +58,21 @@ class PreflightBase(IntegrationBase):
             info.mkdir()
             (info / "METADATA").write_text(
                 "Metadata-Version: 2.1\nName: carla\nVersion: 9.9.9\n", encoding="utf-8")
+            (info / "RECORD").write_text(
+                "carla.py,,\ncarla-9.9.9.dist-info/METADATA,,\ncarla-9.9.9.dist-info/RECORD,,\n",
+                encoding="utf-8")
+        pythonpath = [str(stubs)]
+        if shadow_carla:
+            shadow = root / "preflight_shadow"
+            shadow.mkdir()
+            (shadow / "carla.py").write_text('__version__ = "shadow-copy"\n', encoding="utf-8")
+            pythonpath.insert(0, str(shadow))
         wrapper = root / "py-nosite"
         wrapper.write_text(f'#!/bin/sh\nexec {sys.executable} -S "$@"\n', encoding="utf-8")
         wrapper.chmod(wrapper.stat().st_mode | stat.S_IXUSR)
         (root / "agent.py").write_text(agent_source, encoding="utf-8")
         return self.site.config(environment={"python": str(wrapper)},
-                                agent={"pythonpath": [str(stubs)]})
+                                agent={"pythonpath": pythonpath})
 
     def provenance(self):
         return json.loads((self.site.out / "_runner" / "env_provenance.json").read_text())
@@ -109,6 +123,18 @@ class TestEnvPreflight(PreflightBase):
                                             "carla": "9.9.9", "py_trees": "2.1+stub"})
         self.assertEqual(prov["agent_entrypoint"], str(self.site.root / "agent.py"))
         self.assertIs(prov["agent_import_ok"], True)
+
+    def test_a_shadowed_distribution_does_not_report_its_version(self):
+        """RED BEFORE THE FIX: the version came from whichever distribution was INSTALLED under
+        that name, even when the module actually imported was another copy found first on the
+        path -- a CARLA egg on PYTHONPATH in front of a pip-installed wheel, say. The provenance
+        then named a version that never ran."""
+        self.site.add_route("static/s1/base/route_1_a.xml")
+        cfg = self._isolated_env(shadow_carla=True)
+
+        self.assertEqual(self.run_cli(cfg), EXIT_OK)
+
+        self.assertEqual(self.provenance()["packages"]["carla"], "shadow-copy")
 
     def test_skip_flag_bypasses_the_check(self):
         self.site.add_route("static/s1/base/route_1_a.xml")
