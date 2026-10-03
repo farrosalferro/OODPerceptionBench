@@ -100,6 +100,14 @@ jobs:
             echo "::error title=Self-test skipped::$(tail -n 1 selftest.log) -- a self-test skipped on CI, where every dependency is installed."
             exit 1
           fi
+          # An empty run is the same failure with nothing left to skip, and it gets past the
+          # check above: on the Python pinned here, unittest prints "Ran 0 tests" then a bare
+          # "OK" and exits 0. (The runner-tests job needs no twin: pytest exits 5 on an empty
+          # collection, and pipefail fails the step.)
+          if ! grep -Eq '^Ran [1-9][0-9]* tests? in ' selftest.log; then
+            echo "::error title=No self-test ran::$(grep -E '^Ran ' selftest.log || echo 'no unittest summary line') -- tests/selftest.py ran no test, so nothing was checked."
+            exit 1
+          fi
 
       - name: Golden schema and example parse
         run: |
