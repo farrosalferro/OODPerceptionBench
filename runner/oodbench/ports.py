@@ -24,6 +24,7 @@ import errno
 import fcntl
 import os
 import socket
+import stat
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -183,24 +184,40 @@ def _open_lock_file(path: str) -> int:
     set ``fs.protected_regular``, which refuses an ``O_CREAT`` open of another user's existing
     file in a sticky, world-writable directory such as ``/tmp`` -- even though the file exists
     and a plain open would succeed. ``O_NOFOLLOW`` keeps a planted symlink from redirecting the
-    open (and the ``fchmod`` below) to a file of ours elsewhere. Descriptors from ``os.open``
-    are non-inheritable (PEP 446), so no evaluator or CARLA child ever holds the lock.
+    open (and the ``fchmod`` below) to a file of ours elsewhere. ``O_NONBLOCK`` keeps a FIFO
+    planted at the path from hanging the open, which would otherwise wait for a writer; it and
+    anything else that is not a regular file is then an ``OSError``, like an unusable lock
+    directory. Descriptors from ``os.open`` are non-inheritable (PEP 446), so no evaluator or
+    CARLA child ever holds the lock.
     """
-    flags = os.O_RDONLY | os.O_NOFOLLOW
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
     try:
-        return os.open(path, flags)
+        return _regular_file(os.open(path, flags), path)
     except FileNotFoundError:
         pass
     try:
         fd = os.open(path, flags | os.O_CREAT | os.O_EXCL, 0o644)
     except FileExistsError:  # another run created it between our two opens
-        return os.open(path, flags)
+        return _regular_file(os.open(path, flags), path)
     try:
         # The umask may have stripped the read bits other users need to open the file.
         os.fchmod(fd, 0o644)
     except OSError:
         os.close(fd)
         raise
+    return fd
+
+
+def _regular_file(fd: int, path: str) -> int:
+    """``fd`` if it is open on a regular file; otherwise close it and raise ``OSError``."""
+    try:
+        mode = os.fstat(fd).st_mode
+    except OSError:
+        os.close(fd)
+        raise
+    if not stat.S_ISREG(mode):
+        os.close(fd)
+        raise OSError(f"{path} exists but is not a regular file")
     return fd
 
 

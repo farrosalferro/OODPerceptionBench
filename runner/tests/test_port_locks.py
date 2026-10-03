@@ -13,6 +13,7 @@ import os
 import shutil
 import stat
 import tempfile
+import threading
 import time
 import unittest
 from unittest.mock import patch
@@ -241,6 +242,29 @@ class TestPortLocksUnit(unittest.TestCase):
         with self.assertRaises(OSError):
             ports.PortLocks([45003], self.dir).acquire()
         self.assertEqual(stat.S_IMODE(os.stat(target).st_mode), 0o600)
+
+    def test_a_fifo_at_the_lock_path_is_refused_without_hanging(self):
+        # A read-only open of a FIFO waits for a writer, so a FIFO planted in a shared /tmp hung
+        # the run in preflight. It must fail like an unusable lock file and drop what it took.
+        fifo = ports.port_lock_path(45004, self.dir)
+        os.mkfifo(fifo)
+
+        def unblock():  # turns a regression into a failure instead of a hung suite
+            try:
+                os.close(os.open(fifo, os.O_WRONLY | os.O_NONBLOCK))
+            except OSError:
+                pass
+        timer = threading.Timer(10, unblock)
+        timer.start()
+        self.addCleanup(timer.cancel)
+        locks = ports.PortLocks([45000, 45004], self.dir)
+        with self.assertRaises(OSError) as ctx:
+            locks.acquire()
+        self.assertIn("not a regular file", str(ctx.exception))
+        self.assertFalse(locks.held)
+        free = ports.PortLocks([45000], self.dir)
+        free.acquire()  # 45000 was released
+        free.release()
 
     def test_release_is_idempotent(self):
         locks = ports.PortLocks([45000], self.dir)
