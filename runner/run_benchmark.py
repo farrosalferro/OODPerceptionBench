@@ -27,8 +27,8 @@ from typing import Dict, List, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from oodbench import (ARXIV_VERSION, BENCHMARK_RELEASE, EXIT_CONFIG, EXIT_INTERRUPTED,  # noqa: E402
-                      EXIT_NO_WORKERS, __version__)
+from oodbench import (ARXIV_VERSION, BENCHMARK_RELEASE, EVALUATOR_WORLD_NOT_READY,  # noqa: E402
+                      EXIT_CONFIG, EXIT_INTERRUPTED, EXIT_NO_WORKERS, __version__)
 from oodbench import backends, config as config_mod, gpus as gpus_mod, plan as plan_mod  # noqa: E402
 from oodbench import report as report_mod, results as results_mod  # noqa: E402
 from oodbench.backends.base import Attempt, AttemptOutcome  # noqa: E402
@@ -399,7 +399,19 @@ class Runner:
             log.info("%s: interrupted; no retry budget charged", task.key)
             return False
 
-        abnormal = attempt.outcome in (AttemptOutcome.TIMEOUT, AttemptOutcome.FAULT,
+        # -- the evaluator's "world never became ready" exit -----------------------------
+        # Patch 330 probes the CARLA world before the evaluator builds anything and exits with
+        # this status if it never answers within OODPB_WORLD_READY_S. No map was loaded and no
+        # agent constructed, so nothing on disk is this attempt's output, whatever its status
+        # -- and, as with a failed launch, nothing ran at all, so the worker streak advances.
+        # Checked by exit status, not outcome: SLURM may report it as FAILED or as a fault.
+        if attempt.exit_code == EVALUATOR_WORLD_NOT_READY:
+            return self._charge_infra(
+                attempt, st, backend,
+                f"simulator world never became ready (evaluator exit "
+                f"{EVALUATOR_WORLD_NOT_READY})", record, never_started=False)
+
+        abnormal =attempt.outcome in (AttemptOutcome.TIMEOUT, AttemptOutcome.FAULT,
                                        AttemptOutcome.KILLED)
 
         # -- no final record: infrastructure, for both remaining classes ------------------
