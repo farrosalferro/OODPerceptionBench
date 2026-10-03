@@ -256,8 +256,10 @@ result-shaped artifact that was actually produced by infrastructure. Which budge
 charges is decided by **how the attempt ended**, never by what happens to be on disk — the full
 table is normative in `DESIGN.md` §6A.
 
-`worker_quarantine_after` consecutive infra failures pull a worker from the pool: one worker
-failing while others progress is the signature of a wedged GPU.
+`worker_quarantine_after` consecutive infra failures on one worker slot pull that slot from the
+pool. Two causes produce this: a wedged GPU, or a port block that stays occupied (including
+`TIME_WAIT`). A `TIMEOUT` does not count toward the streak, and a produced record resets it. Only
+local backends have stable slots; SLURM workers are never quarantined.
 
 `infra_budget` is the one budget that never settles a route: exhausting it means *we do not know
 this route's answer*, so the run exits 1 rather than presenting whatever is on disk as a result.

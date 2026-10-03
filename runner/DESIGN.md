@@ -465,11 +465,13 @@ The one exception is an interrupted attempt whose record is *accepted* (`Complet
 
 ### Worker quarantine
 
-Consecutive infra failures **on the same worker** while other workers make progress is the
-signature of one wedged GPU. After `retry.worker_quarantine_after` consecutive infra failures a
-worker is removed from the pool and its routes are returned to the queue. If every worker
-quarantines, the run aborts with exit 4 rather than grinding the whole route set into infra
-failures. (A wedged GPU on the internal cluster once absorbed 64 % of a sweep's submissions,
+After `retry.worker_quarantine_after` consecutive infra failures **on one worker slot**, that
+slot is removed from the pool and its routes are returned to the queue. Two causes produce this:
+a wedged GPU, or a port block that stays occupied (including `TIME_WAIT`). A `TIMEOUT` does not
+count toward the streak, and a produced record resets it. Only local backends have stable slots;
+SLURM workers are never quarantined (a SLURM slot is a concurrency token, not a device). If
+every worker quarantines, the run aborts with exit 4 rather than grinding the whole route set
+into infra failures. (A wedged GPU on the internal cluster once absorbed 64 % of a sweep's submissions,
 because fail-fast without quarantine feeds a retry loop.)
 
 ### Exit codes
