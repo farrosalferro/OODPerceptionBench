@@ -174,8 +174,8 @@ class TestSplitIntegrity(TempCase):
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
 
     def test_tiers_have_the_documented_sizes(self):
-        self.assertEqual(len(read_split("all")), 9)
-        self.assertEqual(len(read_split("core")), 6)
+        self.assertEqual(len(read_split("all")), 10)
+        self.assertEqual(len(read_split("core")), 7)
 
     def test_split_covers_all_six_shipped_assets(self):
         shipped = {r["prop_blueprint_id"] for r in read_split("all")
@@ -275,7 +275,7 @@ class TestA1SilentFallback(TempCase):
         bad = [x for x in r["routes"]
                if any(a["name"].startswith("A1") and a["verdict"] == "FAIL"
                       for a in x["assertions"])]
-        self.assertEqual(len(bad), 6, "every shipped-asset route must go red")
+        self.assertEqual(len(bad), 7, "every shipped-asset route must go red")
         # ...and A3/A4-style symptoms are absent: the route "completed" perfectly.
         self.assertEqual(verdicts(r, "A3"), {"PASS"})
 
@@ -510,7 +510,7 @@ class TestMakeGolden(TempCase):
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         with open(out, encoding="utf-8") as fh:
             doc = json.load(fh)
-        self.assertEqual(len(doc["routes"]), 9)
+        self.assertEqual(len(doc["routes"]), 10)
         self.assertAlmostEqual(doc["tolerance"]["max_observed_spread"], 0.4, places=3)
         self.assertAlmostEqual(doc["tolerance"]["driving_score_abs"], 1.0, places=3)
         self.assertEqual(doc["protocol"]["n_replicates"], 2)

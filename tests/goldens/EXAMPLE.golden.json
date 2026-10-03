@@ -3,7 +3,7 @@
     "EXAMPLE ONLY -- NOT A GOLDEN. Every number here is a placeholder and the split sha256 is",
     "deliberately all zeros so this file can never validate against the real smoke split.",
     "check_acceptance.py additionally ignores any file whose name starts with EXAMPLE.",
-    "It shows two of the nine routes; a real bundle must cover every route in the split.",
+    "It shows two of the ten routes; a real bundle must cover every route in the split.",
     "Produce a real one with tests/make_golden.py -- see GENERATING.md."
   ],
   "schema": "ood-perceptionbench/golden/1",
@@ -15,7 +15,7 @@
     "tier": "all",
     "path": "SMOKE_SPLIT.tsv",
     "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
-    "n_routes": 9
+    "n_routes": 10
   },
   "reference_agent": {
     "name": "pdmlite",

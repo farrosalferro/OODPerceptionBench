@@ -20,7 +20,7 @@
     },
     "reportable": {
       "const": false,
-      "description": "Always false. Smoke-split scores must never be published as a benchmark result; six-to-nine routes cannot approximate a claim computed over 55 base routes."
+      "description": "Always false. Smoke-split scores must never be published as a benchmark result; seven-to-ten routes cannot approximate a claim computed over 55 base routes."
     },
     "split": {
       "type": "object",

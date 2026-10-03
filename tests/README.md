@@ -44,7 +44,7 @@ installs. Run it before spending GPU-hours, every time.
 
 ## The smoke split
 
-Nine routes, drawn from the frozen 475. Defined by
+Ten routes, drawn from the frozen 475. Defined by
 [`smoke/SMOKE_SPLIT.tsv`](smoke/SMOKE_SPLIT.tsv) — path plus sha256 into `routes/`, so the split
 can never disagree with the benchmark definition without saying so.
 
@@ -53,21 +53,30 @@ can never disagree with the benchmark definition without saying so.
 | 1 | core | static | base | `static.prop.trafficwarning` | native |
 | 2 | core | static | geometric | `static.prop.concreteroadbarrier` | shipped |
 | 3 | extended | static | geometric | `static.prop.roadclosedbarricade` | shipped |
-| 4 | core | pedestrian | base | `walker.pedestrian.0001` | native |
-| 5 | core | pedestrian | visual | `walker.pedestrian.astronaut` | shipped |
-| 6 | extended | pedestrian | visual | `walker.pedestrian.firefighter` | shipped |
-| 7 | core | pedestrian | geometric | `walker.pedestrian.boar` | shipped |
-| 8 | extended | pedestrian | geometric | `walker.pedestrian.deliveryrobot` | shipped |
-| 9 | core | vehicle | base | `vehicle.lincoln.mkz_2020` | native |
+| 4 | core | static | geometric | `static.prop.roadclosedbarricade` (Town12) | shipped |
+| 5 | core | pedestrian | base | `walker.pedestrian.0001` | native |
+| 6 | core | pedestrian | visual | `walker.pedestrian.astronaut` | shipped |
+| 7 | extended | pedestrian | visual | `walker.pedestrian.firefighter` | shipped |
+| 8 | core | pedestrian | geometric | `walker.pedestrian.boar` | shipped |
+| 9 | extended | pedestrian | geometric | `walker.pedestrian.deliveryrobot` | shipped |
+| 10 | core | vehicle | base | `vehicle.lincoln.mkz_2020` | native |
 
-`--tier core` selects the six that span three categories × three levels — the minimum the
-release plan asks for. The default, `--tier all`, adds three more so that **every one of the six
+`--tier core` selects seven: the six that span three categories × three levels — the minimum the
+release plan asks for — plus the Town12 route described below. The default, `--tier all`, adds three more so that **every one of the six
 assets shipped in v0.9 is exercised by its own route**. That matters: the pack is per-asset, so a
 split covering four of six would pass on a pack missing the other two.
 
 Two routes were chosen per base route on purpose (24795 for static, 24224 for pedestrian): the
 base and shifted variants then share an identical ego route, town and weather, so a difference is
 attributable to the prop rather than to the route.
+
+Route 4 (base route 2513) is the one deliberate exception. It is the only split route set in
+Town12, which is not in the base CARLA 0.9.15 build: it ships in the separate
+`AdditionalMaps_0.9.15` download, together with Town11 and Town13, and 301 of the 475 routes
+need it (see [`assets/INSTALL.md`](../assets/INSTALL.md)). Every other split route is set in
+Town02, Town03 or Town04, so without route 4 an install missing the additional maps would pass
+the smoke test. Route 4 reuses route 3's prop, so the split still probes nine distinct
+blueprints.
 
 ### Why no static-visual and no vehicle-shift routes
 
@@ -82,7 +91,7 @@ is v1.0 work — see [Coverage gaps](#coverage-gaps-at-v09) below.
 
 ### Not reportable
 
-Nine routes cannot approximate a claim computed over 55 base routes; subsampling changes the
+Ten routes cannot approximate a claim computed over 55 base routes; subsampling changes the
 counts the paper's headline results *are*. **Never publish a score from this split.** Its value
 is the goldens, not its routes. Every artifact it produces carries `"reportable": false`.
 
@@ -111,7 +120,7 @@ standard leaderboard checkpoint with no sidecar process and no CARLA recorder pa
 
 Verified against the published sweep: across all **475** routes with PDM-Lite, the observed
 `agent_type` equals the route XML's blueprint id **475/475**, with zero fallbacks. The mechanism
-is sound on every route, not only these nine.
+is sound on every route, not only these ten.
 
 The expectation is re-derived from the route XML on every run — never read from the split's own
 `prop_blueprint_id` column — so editing the split cannot lower the bar.
@@ -164,7 +173,7 @@ guessing it, keeps every replicate value in the bundle so the number can be audi
 install pins the breakage and makes the harness certify it forever.
 
 For orientation, [`reference/pdmlite_seed42_reference.tsv`](reference/pdmlite_seed42_reference.tsv)
-carries the published seed-42 values for these nine routes (all `Completed`, all DS 100.00).
+carries the published seed-42 values for these ten routes (all `Completed`, all DS 100.00).
 **It is not a golden** — no cross-machine spread was ever measured for it, so it carries no
 defensible tolerance. `check_acceptance.py` does not read it; `make_golden.py` reports the delta
 against it as INFO only.

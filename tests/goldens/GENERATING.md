@@ -59,9 +59,9 @@ cd tests
 python3 smoke/materialize.py --out /scratch/smoke_routes
 ```
 
-This copies the nine route XMLs out of the frozen `routes/` tree, verifying each one's sha256
+This copies the ten route XMLs out of the frozen `routes/` tree, verifying each one's sha256
 against the split first, and writes a `MANIFEST.tsv` next to them. Use `--tier core` for the
-six-route subset; the bundle records which tier it covers and the harness refuses to compare
+seven-route subset; the bundle records which tier it covers and the harness refuses to compare
 across tiers.
 
 ---

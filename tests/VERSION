@@ -3,10 +3,10 @@ component: tests
 version: v0.9
 corresponds_to: arXiv v1
 split: smoke
-split_routes: 9
+split_routes: 10
 split_tiers:
-  core: 6
-  all: 9
+  core: 7
+  all: 10
 goldens_present: true
 goldens_reason: >
   The PDM-Lite seed-42 v0.9 bundle was generated on CARLA 0.9.15 from three independent
@@ -14,5 +14,5 @@ goldens_reason: >
   that measured bundle. Procedure and provenance: goldens/GENERATING.md and the bundle itself.
 reportable: false
 reportable_reason: >
-  Nine routes cannot approximate a claim computed over 55 base routes. Smoke-split scores must
+  Ten routes cannot approximate a claim computed over 55 base routes. Smoke-split scores must
   never be published as a benchmark result.

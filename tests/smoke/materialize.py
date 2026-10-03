@@ -7,7 +7,7 @@ Binds to       : arXiv v1
 The split is *defined* by ``SMOKE_SPLIT.tsv`` (paths + sha256 into the frozen 475-route
 bundle) and is *materialised* on demand into a directory the runner can be pointed at.
 
-Why not just commit a second copy of the nine XMLs?
+Why not just commit a second copy of the ten XMLs?
 
   Because a committed copy drifts. The canonical route tree is the definition of the
   benchmark; a duplicate that silently diverges from it would make the acceptance test
@@ -24,7 +24,7 @@ Standard library only.
 Usage
 -----
     python3 materialize.py                          # -> ./routes  (next to this file)
-    python3 materialize.py --tier core              # 6 routes instead of 9
+    python3 materialize.py --tier core              # 7 routes instead of 10
     python3 materialize.py --out /tmp/smoke_routes
     python3 materialize.py --verify-only            # check the split against the frozen bundle
 
@@ -208,7 +208,7 @@ def main() -> int:
     ap.add_argument("--out", default=DEFAULT_OUT,
                     help="directory to materialise into (default: tests/smoke/routes)")
     ap.add_argument("--tier", choices=("core", "all"), default="all",
-                    help="'core' = 6 routes, 'all' = 9 routes (default). 'all' is the one "
+                    help="'core' = 7 routes, 'all' = 10 routes (default). 'all' is the one "
                          "that covers every asset shipped in v0.9.")
     ap.add_argument("--verify-only", action="store_true",
                     help="check the split against the frozen bundle and exit; write nothing")
