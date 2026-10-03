@@ -617,6 +617,17 @@ def build(raw: Dict[str, Any], source_path: Optional[str] = None,
             f"point it at the root of a CARLA 0.9.15 distribution"
         )
     _require_dir("leaderboard.work_dir", resolved["leaderboard"]["work_dir"])
+    # The evaluator reads WORK_DIR/leaderboard/data/weather.xml on every route, outside any
+    # error handling, so a work_dir one level too high (the carla_garage root instead of its
+    # Bench2Drive/ directory) crashes every route before it writes a result. Catch it here, once.
+    weather = Path(resolved["leaderboard"]["work_dir"]) / "leaderboard" / "data" / "weather.xml"
+    if not weather.is_file():
+        raise ConfigError(
+            f"leaderboard.work_dir={resolved['leaderboard']['work_dir']} has no "
+            f"leaderboard/data/weather.xml, which the evaluator reads on every route. Point it "
+            f"at the Bench2Drive checkout: the directory that holds leaderboard/ and "
+            f"scenario_runner/"
+        )
     _require_dir("leaderboard.root", resolved["leaderboard"]["root"])
     _require_dir("leaderboard.scenario_runner_root", resolved["leaderboard"]["scenario_runner_root"])
     evaluator = Path(resolved["leaderboard"]["root"]) / resolved["leaderboard"]["evaluator"]

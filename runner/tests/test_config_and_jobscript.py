@@ -22,6 +22,9 @@ def make_site(tmp: Path):
     (tmp / "b2d" / "leaderboard" / "leaderboard").mkdir(parents=True)
     (tmp / "b2d" / "leaderboard" / "leaderboard" / "leaderboard_evaluator.py").write_text(
         "", encoding="utf-8")
+    (tmp / "b2d" / "leaderboard" / "data").mkdir(parents=True)
+    (tmp / "b2d" / "leaderboard" / "data" / "weather.xml").write_text("<weather/>",
+                                                                      encoding="utf-8")
     (tmp / "b2d" / "scenario_runner").mkdir(parents=True)
     (tmp / "agent.py").write_text("", encoding="utf-8")
     rt = tmp / "routes" / "vehicle" / "accident_two_ways" / "visual_shift"
@@ -69,6 +72,18 @@ class TestConfig(unittest.TestCase):
             with self.assertRaises(ConfigError, msg=f"{section}.{key}") as ctx:
                 config_mod.build(raw)
             self.assertIn(f"{section}.{key}", str(ctx.exception))
+
+    def test_a_work_dir_without_the_evaluators_weather_file_is_rejected(self):
+        """The evaluator reads WORK_DIR/leaderboard/data/weather.xml on every route, outside any
+        error handling. A work_dir one level too high -- the carla_garage root instead of its
+        Bench2Drive/ directory -- passed every existence check and crashed every route before
+        it wrote a result. It must be a startup error that names the field and the file."""
+        (Path(self.raw["leaderboard"]["work_dir"]) / "leaderboard" / "data"
+         / "weather.xml").unlink()
+        with self.assertRaises(ConfigError) as ctx:
+            config_mod.build(self.raw)
+        self.assertIn("leaderboard.work_dir", str(ctx.exception))
+        self.assertIn("leaderboard/data/weather.xml", str(ctx.exception))
 
     def test_gpus_is_required(self):
         raw = json.loads(json.dumps(self.raw))

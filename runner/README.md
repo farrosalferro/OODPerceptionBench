@@ -5,7 +5,7 @@
 > comparable. Every report this runner writes carries that stamp.
 >
 > **This is a hardware-validated local first cut, not a production-scale runner.** The
-> supervision logic is covered by 280 automated tests. On 2026-08-11/12 CARLA 0.9.15 executed
+> supervision logic is covered by 281 automated tests. On 2026-08-11/12 CARLA 0.9.15 executed
 > single routes, two 8-route/two-worker sweeps with one-GPU stacking and port isolation observed
 > live, a real Ctrl-C/reap/resume cycle, and three independent nine-route PDM-Lite golden
 > replicates. The SLURM backend is now validated on a real scheduler at two-way concurrency (one
@@ -407,7 +407,7 @@ No GPU, no CARLA, no network, no third-party packages:
 python -m unittest discover -s tests -t .
 ```
 
-280 tests covering the port allocator (at worker counts far above any real GPU count), the
+281 tests covering the port allocator (at worker counts far above any real GPU count), the
 finalization predicate and status taxonomy, path mirroring, manifest integrity, the resume and
 budget decision, the attempt-accounting model of `DESIGN.md` §6A, the exit contract, the ledger,
 the generated job script, backend concurrency, and the SLURM backend — including the end-to-end
@@ -431,6 +431,7 @@ What they do **not** cover is anything that requires a running simulator. See `S
 | exit 2, "reserved port(s) already in use" | another run, or a leftover simulator. Free the ports or move `ports.rpc_base`. The runner will not relocate silently. |
 | exit 5 immediately | the agent's `sensors()` was rejected for the configured `track`. Fix the sensor set; it would fail identically on all 475 routes. |
 | exit 2, "environment preflight: ... cannot import ..." | `environment.python` lacks a dependency, or is not the interpreter you think (see the logged `sys.executable`). Fix it, using an absolute path; see Quickstart step 3. |
+| exit 2, "leaderboard.work_dir=... has no leaderboard/data/weather.xml" | `work_dir` is one level too high. It must be the Bench2Drive checkout itself (the directory holding `leaderboard/` and `scenario_runner/`), not the repository that contains it. |
 | Route `.out` log ends in "world NOT ready after N s" | CARLA started but its world never answered (evaluator exit 75, charged to `infra_budget`). A wedged GPU or a very slow map load; probe the GPU, or raise `OODPB_WORLD_READY_S`. |
 | Every route `Failed - Agent couldn't be set up` | import error or missing checkpoint. Read `<out>/_runner/logs/.../*.err`. |
 | Many `Failed - TickRuntime` | the agent is slower than CARLA's tick budget. Model-side; retrying does not fix it. |

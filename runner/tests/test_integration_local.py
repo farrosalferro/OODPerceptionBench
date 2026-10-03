@@ -137,6 +137,9 @@ class Site:
         ev = root / "b2d" / "leaderboard" / "leaderboard"
         ev.mkdir(parents=True)
         (ev / "leaderboard_evaluator.py").write_text(FAKE_EVALUATOR, encoding="utf-8")
+        (root / "b2d" / "leaderboard" / "data").mkdir()
+        (root / "b2d" / "leaderboard" / "data" / "weather.xml").write_text("<weather/>",
+                                                                           encoding="utf-8")
         (root / "b2d" / "scenario_runner").mkdir(parents=True)
         (root / "agent.py").write_text("", encoding="utf-8")
         # Stand-ins for what the environment preflight imports, so every run passes it on a
