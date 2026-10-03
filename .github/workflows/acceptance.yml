@@ -9,7 +9,8 @@ name: acceptance
 #
 # What CI *can* do: run the harness's self-tests, check that the smoke split still agrees with
 # the frozen route bundle, validate a golden bundle's integrity, run the route freeze validator
-# and the records/manifest reconciliation, and run the pre-tag readiness gate.
+# and the records/manifest reconciliation, run the runner's and the release tooling's unit
+# tests, and run the pre-tag readiness gate.
 # What CI can NOT do: execute the routes. That needs a GPU, CARLA 0.9.15 and the installed
 # content pack. No hosted runner has any of the three. See tests/goldens/GENERATING.md.
 #
@@ -278,11 +279,42 @@ jobs:
             echo "or re-dispatch this workflow with the \`paper_repo\` input on a runner that has it."
           } >> "$GITHUB_STEP_SUMMARY"
 
+  runner-tests:
+    name: runner + release-tooling unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # runner/tests drives the full supervision loop against a stand-in evaluator (no CARLA, no
+    # GPU) and loads every configuration template the repository ships. Nothing ran them here,
+    # and the template the Quick start has a new user copy fell out of the runner's schema
+    # without a single red build.
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install the test dependencies
+        # Without PyYAML the shipped-template tests skip, and on CI a skip reads as a pass.
+        run: python3 -m pip install --quiet -r requirements-test.txt
+
+      - name: Runner and release-tooling tests
+        run: |
+          set -euo pipefail
+          python3 -m pytest -q runner/tests tools/tests 2>&1 | tee pytest.log
+          # Every dependency is installed above, so nothing may skip here.
+          if tail -n 1 pytest.log | grep -q "skipped"; then
+            echo "::error title=Test skipped::$(tail -n 1 pytest.log) -- a test skipped on CI, where every dependency is installed."
+            exit 1
+          fi
+
   release-readiness:
     name: pre-tag readiness gate
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    needs: [harness-selftest, data-integrity]
+    needs: [harness-selftest, data-integrity, runner-tests]
 
     # tools/check_release_ready.py aggregates every gate in the repository and used to exit 0
     # while printing TODOs, so it could never block anything. Blocking is now its default and

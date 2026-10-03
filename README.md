@@ -140,7 +140,8 @@ exactly one repository to clone. Full detail in [`patches/UPSTREAM.txt`](patches
 Every push runs, as hard failures: `setup.sh` against the pinned SHA and the reverse-apply proof;
 the route freeze validator (475 files, every sha256 against `MANIFEST.tsv`); the reconciliation
 proving the published records cover exactly those 475 once per model; the acceptance harness's
-own self-tests; and the repository hygiene scanners. A tag build additionally runs
+own self-tests; the runner's and the release tooling's unit tests (against a stand-in evaluator,
+no CARLA); and the repository hygiene scanners. A tag build additionally runs
 [`tools/check_release_ready.py`](tools/check_release_ready.py) as a **blocking** gate — one
 outstanding item and the tag fails.
 
