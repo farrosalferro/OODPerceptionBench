@@ -271,8 +271,8 @@ def load_raw(path: str | os.PathLike) -> Dict[str, Any]:
             import yaml  # type: ignore
         except ImportError as exc:  # pragma: no cover - environment dependent
             raise ConfigError(
-                f"{p} is YAML but PyYAML is not installed. Either `pip install pyyaml`, or use "
-                f"the equivalent .toml/.json config (both are supported with no dependency)."
+                f"{p} is YAML but PyYAML is not installed. Either `pip install pyyaml`, or write "
+                f"the same config as .json (standard library only) or .toml (Python 3.11+)."
             ) from exc
         data = yaml.safe_load(text)
     elif suffix == ".toml":

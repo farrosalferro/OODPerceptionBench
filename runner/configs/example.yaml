@@ -31,7 +31,9 @@ carla:
   client_timeout_s: 900
 
 leaderboard:
-  # Checkout root of the Bench2Drive leaderboard + scenario_runner that setup.sh prepared.
+  # The Bench2Drive/ directory inside the checkout setup.sh patched (not the checkout root): it
+  # holds leaderboard/ and scenario_runner/, and the evaluator reads
+  # <work_dir>/leaderboard/data/weather.xml on every route.
   work_dir: <path-to-bench2drive-checkout>
   root: <path-to-bench2drive-checkout>/leaderboard
   scenario_runner_root: <path-to-bench2drive-checkout>/scenario_runner

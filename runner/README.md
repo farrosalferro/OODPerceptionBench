@@ -5,7 +5,7 @@
 > comparable. Every report this runner writes carries that stamp.
 >
 > **This is a hardware-validated local first cut, not a production-scale runner.** The
-> supervision logic is covered by 288 automated tests. On 2026-08-11/12 CARLA 0.9.15 executed
+> supervision logic is covered by 292 automated tests. On 2026-08-11/12 CARLA 0.9.15 executed
 > single routes, two 8-route/two-worker sweeps with one-GPU stacking and port isolation observed
 > live, a real Ctrl-C/reap/resume cycle, and three independent nine-route PDM-Lite golden
 > replicates. The SLURM backend is now validated on a real scheduler at two-way concurrency (one
@@ -38,19 +38,33 @@ python run_benchmark.py --config my_config.yaml
 3. **Build the Python environment the evaluator runs in.** A CARLA-only environment is **not**
    enough — the evaluator imports `scenario_runner`, which needs `py_trees` and friends, and the
    failure is `ModuleNotFoundError` *inside the route*, reported as an infrastructure failure
-   rather than as a missing dependency. After `setup.sh`, install both:
+   rather than as a missing dependency. Use Python 3.10 and start from the environment the
+   published PDM-Lite numbers were reproduced with, then add your agent's own packages:
 
    ```bash
-   pip install -r third_party/carla_garage/Bench2Drive/leaderboard/requirements.txt
-   pip install -r third_party/carla_garage/Bench2Drive/scenario_runner/requirements.txt
-   # plus CARLA's own Python API from your CARLA build's PythonAPI/carla/dist/
+   pip install -r env/requirements-pdmlite.txt    # from the repository root
+   ```
+
+   It brings the `carla==0.9.15` wheel, `py_trees`, and `numpy==1.23.5`, the one numpy that both
+   this Bench2Drive pin and `scipy` accept (the root README's "Pinned upstream" section says why).
+   Do **not** use `Bench2Drive/leaderboard/requirements.txt` or
+   `Bench2Drive/scenario_runner/requirements.txt` on Python 3.10: they pin
+   `opencv-python==4.2.0.32` and `numpy==1.18.4`, which have no Python 3.10 wheels. CARLA's
+   `agents` package, which PDM-Lite imports, is not in the wheel either; the runner puts
+   `<carla.root>/PythonAPI/carla`, where it lives, on the route's `PYTHONPATH` for you.
+
+   On a minimal or headless Ubuntu, `opencv-python` also needs two system libraries. Without them
+   `import cv2` fails with `libGL.so.1: cannot open shared object file`:
+
+   ```bash
+   sudo apt-get install libgl1 libglib2.0-0
    ```
 
    Sanity-check it in one line before going further — this is much cheaper than finding out
    nineteen minutes into a route:
 
    ```bash
-   <your-python> -c "import carla, py_trees, numpy; print('ok')"
+   <your-python> -c "import carla, py_trees, numpy, scipy, cv2; print('ok')"
    ```
 
    **Give `environment.python` as an absolute path** to that interpreter. The default,
@@ -412,17 +426,19 @@ generated `.sbatch` before launching a large sweep.
 
 ## Running the tests
 
-No GPU, no CARLA, no network, no third-party packages:
+No GPU, no CARLA, no network, no third-party packages (the four tests that load the shipped YAML
+templates need PyYAML and are skipped without it):
 
 ```bash
 python -m unittest discover -s tests -t .
 ```
 
-288 tests covering the port allocator (at worker counts far above any real GPU count), the
+292 tests covering the port allocator (at worker counts far above any real GPU count), the
 finalization predicate and status taxonomy, path mirroring, manifest integrity, the resume and
 budget decision, the attempt-accounting model of `DESIGN.md` §6A, the exit contract, the ledger,
-the generated job script, backend concurrency, and the SLURM backend — including the end-to-end
-tests (21 in `tests/test_integration_local.py`, plus more for infra-gate recovery and for the
+the generated job script, the shipped configuration templates, backend concurrency, and the
+SLURM backend — including the end-to-end
+tests (24 in `tests/test_integration_local.py`, plus more for infra-gate recovery and for the
 trap under a simulator that crashes into the shared stderr) that drive the full
 supervision loop against a stand-in evaluator, exercising resume, retry, timeout kill,
 quarantine and every exit code.

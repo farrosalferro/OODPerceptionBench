@@ -128,6 +128,9 @@ exactly one repository to clone. Full detail in [`patches/UPSTREAM.txt`](patches
 >
 > which is upstream's `team_code/requirements.txt` at the pin with only the numpy line changed
 > (upstream pins `numpy==1.26.4` exactly, so a `-c` constraints file cannot override it).
+> On a minimal or headless Ubuntu, its `opencv-python` also needs
+> `sudo apt-get install libgl1 libglib2.0-0`; without them `import cv2` fails with
+> `libGL.so.1: cannot open shared object file`.
 > `setup.sh --verify-only` checks that the copy has not drifted. Alternatively advance the pin
 > yourself and accept that your run is no longer bit-identical to our baselines. The reasoning
 > and the verification are recorded in [`patches/UPSTREAM.txt`](patches/UPSTREAM.txt).
@@ -167,7 +170,18 @@ cd OODPerceptionBench
 #    not in the base build and 63% of routes need them), then the content pack:
 #    see assets/INSTALL.md  <-- do not skip, see "Silent failure" below
 
-# 3. Run. Every path comes from your config file; there are no built-in defaults.
+# 3. Build the Python 3.10 environment your agent runs in: the pinned PDM-Lite one,
+#    plus your agent's own packages. See runner/README.md, Quickstart step 3.
+pip install -r env/requirements-pdmlite.txt    # inside that new environment
+
+# 4. Describe your machine: copy the template and replace every <placeholder>
+#    (CARLA, the patched checkout, your agent, that environment's python, an
+#    output folder). Reading YAML needs PyYAML in the python that runs the runner.
+cp config/example.yaml config/my_machine.yaml
+
+# 5. Check the config without starting CARLA, then run. Every path comes from
+#    your config file; there are no built-in defaults.
+python runner/run_benchmark.py --config config/my_machine.yaml --dry-run
 python runner/run_benchmark.py --config config/my_machine.yaml \
                                --agent  /path/to/your_agent.py \
                                --routes routes/ --out results/

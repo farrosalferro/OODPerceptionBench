@@ -1,61 +1,76 @@
 # OOD-PerceptionBench — machine configuration template
 #
-# Copy this to config/<your-machine>.yaml, fill it in, and pass it as --config.
-# Every value below is REQUIRED and has no working default. That is deliberate:
-# a config file with plausible-looking defaults pointing at somebody else's
-# cluster is worse than one that refuses to start.
+# Copy this to config/<your-machine>.yaml, replace every <...> placeholder, and pass it as
+# --config:
 #
-# Version stamp: 0.9.0 (arXiv v1). The runner workstream owns this schema; if a
-# key here disagrees with runner/README.md, the runner is authoritative.
+#     python runner/run_benchmark.py --config config/<your-machine>.yaml --dry-run
+#
+# It holds what every machine must supply, plus the protocol settings that keep your numbers
+# comparable to the published baselines. Every other field, with its default and what it does,
+# is documented in runner/configs/example.yaml; the format is the same, so any section of that
+# file can be copied in here. No path has a working default: a missing required field stops the
+# runner with an error that names it, rather than falling back to somebody else's filesystem.
+#
+# Version stamp: 0.9.0 (arXiv v1). YAML needs PyYAML in the Python that runs the runner.
+
+version: 1
+
+# --- Protocol ----------------------------------------------------------------
+# Do not change these if you want numbers comparable to the published baselines: base seed 42,
+# three repetitions -> seeds 42, 43, 44. (PDM-Lite, the ceiling, is published at seed 42 only.)
+benchmark:
+  release: v0.9
+  arxiv_version: v1
+  seed: 42
+  repetitions: 3
 
 # --- Simulator ---------------------------------------------------------------
-# Must be CARLA 0.9.15 exactly. The content pack ships a cooked WalkerFactory
-# that overwrites base content and is version-locked. Other versions fail
-# silently, not loudly.
-carla_root: /REPLACE/ME/CARLA_0.9.15
+# The directory that holds CarlaUE4.sh. CARLA 0.9.15 exactly, with AdditionalMaps_0.9.15 and
+# the content pack installed (assets/INSTALL.md); other versions fail silently, not loudly.
+carla:
+  root: <path-to-carla-0.9.15>
 
 # --- Patched harness ---------------------------------------------------------
-# The directory you passed to setup.sh --upstream-dir.
-upstream_dir: /REPLACE/ME/carla_garage
-
-# --- Compute -----------------------------------------------------------------
-gpus:    [0]        # physical GPU ids the worker pool may use
-workers: 1          # processes; each pins exactly one GPU via CUDA_VISIBLE_DEVICES
-
-# Per-worker port allocation: worker i gets rpc_base + i*stride and
-# tm_base + i*stride. Give stride enough headroom that two workers can never
-# collide -- CARLA claims more than one port around its RPC port.
-ports:
-  rpc_base: 2000
-  tm_base:  8000
-  stride:   50
+# Inside the checkout setup.sh patched (the directory you gave --upstream-dir). work_dir is its
+# Bench2Drive/ directory, NOT the checkout root: the evaluator reads
+# <work_dir>/leaderboard/data/weather.xml on every route.
+leaderboard:
+  work_dir: <path-to-carla_garage-checkout>/Bench2Drive
+  root: <path-to-carla_garage-checkout>/Bench2Drive/leaderboard
+  scenario_runner_root: <path-to-carla_garage-checkout>/Bench2Drive/scenario_runner
 
 # --- Agent -------------------------------------------------------------------
 agent:
-  # Python file exposing get_entry_point() -> name of your AutonomousAgent subclass.
-  entrypoint: /REPLACE/ME/your_agent.py
-  # Optional config/checkpoint path handed to your agent's setup().
-  config: ""
-  # Command prefix used to launch the agent in its own environment.
-  # Leave empty to use the current interpreter. Example:
-  #   env_command: "conda run --no-capture-output -n <your-env>"
-  env_command: ""
+  # A Python file exposing get_entry_point() -> the name of your AutonomousAgent subclass.
+  entrypoint: <path-to-your-agent>.py
+  config: ""        # handed to your agent's setup(); leave "" if it reads none
+  track: SENSORS    # SENSORS | MAP
 
-# --- Output ------------------------------------------------------------------
-output_root: /REPLACE/ME/results
+# --- Environment the agent runs in -------------------------------------------
+environment:
+  # Shell lines that activate it, run before every route, e.g.
+  #   activate: ["source /opt/conda/etc/profile.d/conda.sh", "conda activate my-env"]
+  activate: []
+  # The ABSOLUTE path to that environment's interpreter, never a bare `python3`: it is what
+  # every route runs, whatever PATH holds after activation.
+  python: <absolute-path-to-your-environment>/bin/python3
 
-# --- Execution ---------------------------------------------------------------
-timeout_s: 1800     # per route, wall clock
-retries:   1        # bounded. Some model/route pairs fail intermittently in the
-                    # simulator and succeed on retry; unbounded retry hides a
-                    # genuinely broken agent.
-resume:    true     # skip routes whose output record is already FINALIZED
-                    # (finalized, not merely present -- a truncated record is
-                    # not a completed route)
+# --- Compute -----------------------------------------------------------------
+execution:
+  backend: local    # local | slurm (for slurm, copy the slurm: section of runner/configs/example.yaml)
+  workers: 1        # concurrent routes; each gets its own CARLA server and GPU
 
-# --- Protocol ----------------------------------------------------------------
-# Do not change this if you want numbers comparable to the published baselines.
-# The published protocol is THREE seeds (42, 43, 44): this is the base seed, and
-# the runner's `benchmark.repetitions: 3` (runner/configs/example.yaml) mints
-# 42/43/44 from it. PDM-Lite (ceiling) is seed 42 only.
-seed: 42
+# One entry per GPU the pool may use. CUDA and Vulkan number devices independently, and CARLA
+# renders with Vulkan: run `python runner/run_benchmark.py --check-gpus` to learn the pairs.
+gpus:
+  - {cuda: 0, vulkan: 0}
+
+# --- Output and routes -------------------------------------------------------
+output:
+  root: <path-to-output-dir>
+
+routes:
+  # The 475 canonical routes shipped in this repository, checked against their manifest.
+  root: <path-to-this-repo>/routes
+  manifest: <path-to-this-repo>/routes/MANIFEST.tsv
+  strict_manifest: true

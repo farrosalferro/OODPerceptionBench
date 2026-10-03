@@ -1530,7 +1530,7 @@ oodbench/
 reference_agent/
   constant_velocity_agent.py   stock AutonomousAgent, no ML dependency
 configs/
-  example.yaml, example.toml, reference_agent.yaml
+  example.yaml, reference_agent.yaml
 tests/                      stdlib unittest; no pytest, no GPU, no CARLA
 ```
 

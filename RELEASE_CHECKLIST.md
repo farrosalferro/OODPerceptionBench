@@ -32,7 +32,9 @@ is below; this file carries the parts a script cannot judge.
 - [x] `records/` — 24,700 rows × 64 columns, CSV + `load.py`, seeds 42/43/44, 17 models + PDM-Lite (PDM-Lite seed 42)
 - [x] `runner/` — `run_benchmark.py`, worker pool, resume, SLURM backend (**222 tests green**;
       local backend exercised against real CARLA; multi-GPU/full-scale open and SLURM broken —
-      see `runner/STATUS.md`)
+      see `runner/STATUS.md`). *As of that date. Since then: 292 tests, and the SLURM backend
+      validated on a real scheduler at two-way concurrency, one GPU per job; full scale and local
+      multi-GPU still unmeasured (`runner/STATUS.md` §2).*
 - [x] `docs/` — `replacing-props.md`, `ASSET_TRAPS.md`, the three `import_procedure_*.md`
       and the parameterised `stages/` scripts
 - [x] `classifier/` — the three dimension-checker notebooks (the admissibility rule itself)
