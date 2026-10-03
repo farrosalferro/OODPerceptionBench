@@ -67,6 +67,8 @@ than from this table, so the two cannot silently drift apart.
 | `420` | `leaderboard/team_code/config_report.py` | +2 / −0 | Same flag in the reporting config. |
 | `430` | `leaderboard/team_code/data_agent.py` | +3 / −1 | Gates the weather shuffle on that flag. Upstream randomises weather unconditionally in datagen mode; weather is part of an OOD route's definition, and randomising it would break comparability between a route's three levels. Three lines, but they are the enforcement half. |
 
+Patch 430 covers only the Bench2Drive data agent: the top-level PDM-Lite `team_code/data_agent.py` that generates the acceptance goldens is weather-safe because `DATAGEN` is 0 or unset, since it calls `shuffle_weather()` only under `if self.datagen:` and `team_code/autopilot.py` sets `self.datagen` from `DATAGEN == 1`.
+
 ## Layer 9 — authored but not exercised by the canonical route set
 
 These define scenario classes that **no route in `routes/` instantiates**. They belong to an

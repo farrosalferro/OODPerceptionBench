@@ -37,7 +37,11 @@ agent:
 
 environment:
   activate: []
-  python: python3
+  # Use an ABSOLUTE interpreter path here. The jobscript executes this value verbatim, and
+  # `conda activate` does not reliably win against an inherited PATH: a bare `python3` once
+  # resolved to a different system Python and that wrong version was stamped into a golden
+  # bundle.
+  python: <absolute-path-to-your-environment>/bin/python3
 
 execution:
   backend: local

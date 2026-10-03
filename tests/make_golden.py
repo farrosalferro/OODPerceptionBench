@@ -25,25 +25,45 @@ Usage
     python3 make_golden.py \\
         --replicate /runs/smoke_rep1 --replicate /runs/smoke_rep2 --replicate /runs/smoke_rep3 \\
         --reference-agent pdmlite \\
-        --reference-agent-version <commit-or-tag> \\
+        --reference-agent-repo /src/carla_garage \\
+        --reference-agent-commit beb3433407f42c1adced312b877a61fe04f338ba \\
+        --reference-agent-entrypoint team_code/data_agent.py \\
         --carla-version 0.9.15 \\
         --content-pack-version v0.9 \\
+        $(awk '{printf " --content-pack-archive %s=%s", $2, $1}' ../assets/SHA256SUMS) \\
         --out goldens/pdmlite_seed42_v0.9.golden.json
+
+Provenance it refuses to guess
+------------------------------
+* The reference agent must be fetchable by a stranger: a clean git checkout (no modified or
+  untracked file under the entrypoint's top directory) at the stated commit. The bundle records
+  repo URL, full commit, entrypoint and the entrypoint's sha256.
+* The Python that RAN the routes is read from <replicate>/_runner/env_provenance.json, which the
+  runner's preflight writes. All replicates must agree. The builder's own interpreter is never
+  stamped -- it ran no route.
+* The content pack is several archives. The bundle lists each archive's sha256 and a composite:
+  sha256 of the canonical SHA256SUMS text (one "<sha256>  <name>\\n" line per archive, sorted by
+  name in byte order). For a canonical sums file that is exactly `sha256sum SHA256SUMS`.
 
 Exit status
 -----------
     0  bundle written
-    1  an assertion failed in some replicate, or the runs disagree -- nothing written
-    2  usage / IO error
+    1  an assertion failed in some replicate, or the runs disagree (results, interpreter,
+       packages or agent entrypoint) -- nothing written
+    2  usage / IO error, or provenance that cannot be established -- nothing written
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import platform
+import posixpath
+import re
 import statistics
+import subprocess
 import sys
 import time
 from typing import Optional
@@ -94,6 +114,202 @@ def load_reference(path: str) -> dict:
     return out
 
 
+class ProvenanceError(Exception):
+    """Provenance that cannot be established. Carries the exit code to return."""
+
+    def __init__(self, msg: str, code: int = 2):
+        super().__init__(msg)
+        self.code = code
+
+
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_PY_VERSION = re.compile(r"^\d+\.\d+\.\d+$")
+ENV_PROVENANCE = os.path.join("_runner", "env_provenance.json")
+COMPOSITE_RULE_NOTE = (
+    "environment.content_pack_sha256 = sha256 of the canonical SHA256SUMS text of "
+    "environment.content_pack_archives ('<sha256>  <name>\\n' per archive, sorted by name).")
+# Packages whose versions go into the bundle. The runner records more (py_trees); those are
+# compared across replicates but not stamped.
+STAMPED_PACKAGES = ("numpy", "scipy", "carla")
+
+
+def _git(repo: str, *args: str) -> str:
+    p = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True)
+    if p.returncode != 0:
+        raise ProvenanceError(f"git -C {repo} {' '.join(args)} failed: "
+                              f"{(p.stderr or p.stdout).strip()}")
+    return p.stdout
+
+
+def _public_url(url: str) -> Optional[str]:
+    """An https URL a stranger can fetch, or None. Local paths and file:// never qualify."""
+    url = url.strip()
+    m = re.match(r"^(?:ssh://)?git@([^:/]+)[:/](.+)$", url)
+    if m:
+        url = f"https://{m.group(1)}/{m.group(2)}"
+    if not re.match(r"^https?://[^/]+/.+", url):
+        return None
+    return url[:-4] if url.endswith(".git") else url
+
+
+def reference_agent_provenance(args) -> dict:
+    """Prove the reference agent is retrievable, then describe it. Raises ProvenanceError."""
+    repo = os.path.abspath(args.reference_agent_repo)
+    if not os.path.isdir(repo):
+        raise ProvenanceError(f"--reference-agent-repo is not a directory: {repo}")
+    rel = posixpath.normpath(args.reference_agent_entrypoint.replace(os.sep, "/"))
+    if posixpath.isabs(rel) or rel == "." or rel.split("/")[0] == "..":
+        raise ProvenanceError("--reference-agent-entrypoint must be relative to the agent repo, "
+                              "e.g. team_code/data_agent.py")
+
+    head = _git(repo, "rev-parse", "HEAD").strip()
+    try:
+        want = _git(repo, "rev-parse", "--verify", "--quiet",
+                    f"{args.reference_agent_commit}^{{commit}}").strip()
+    except ProvenanceError:
+        want = None
+    if want != head:
+        raise ProvenanceError(
+            f"the agent checkout is at {head}, not at --reference-agent-commit "
+            f"{args.reference_agent_commit}. The bundle would name a commit that did not run.")
+
+    try:
+        _git(repo, "ls-files", "--error-unmatch", "--", rel)
+    except ProvenanceError:
+        raise ProvenanceError(f"{rel} is not tracked in {repo} at {head}. An untracked "
+                              f"entrypoint cannot be fetched by anyone else.")
+
+    # The v0.9 golden ran untracked *_debug.py copies sitting next to the real agent. A commit
+    # sha says nothing about those; `git status` does. Ignored files (__pycache__) do not count.
+    scope = rel.split("/")[0] if "/" in rel else "."
+    dirty = _git(repo, "status", "--porcelain", "--untracked-files=all", "--", scope).strip()
+    if dirty:
+        raise ProvenanceError(
+            f"the agent tree is not clean (git status --porcelain -- {scope}):\n"
+            + "\n".join(f"    {line}" for line in dirty.splitlines()[:20])
+            + "\n  A modified or untracked file there may be what actually ran, and nobody else "
+              "can fetch it. Commit it upstream, or remove it and re-run the replicates.")
+
+    if args.reference_agent_url:
+        url = _public_url(args.reference_agent_url)
+        if url is None:
+            raise ProvenanceError(f"--reference-agent-url must be an https URL, "
+                                  f"got {args.reference_agent_url!r}")
+    else:
+        try:
+            origin = _git(repo, "remote", "get-url", "origin").strip()
+        except ProvenanceError:
+            origin = ""
+        url = _public_url(origin)
+        if url is None:
+            raise ProvenanceError(
+                "cannot derive a public URL from the agent checkout's `origin` remote. Pass "
+                "--reference-agent-url https://github.com/<owner>/<repo>. A local path is not "
+                "provenance.")
+
+    with open(os.path.join(repo, rel), "rb") as fh:
+        entry_sha = hashlib.sha256(fh.read()).hexdigest()
+    name = url.rstrip("/").rsplit("/", 1)[-1]
+    version = f"{name}@{head} {rel}"
+    if args.reference_agent_version and args.reference_agent_version != version:
+        raise ProvenanceError(f"--reference-agent-version {args.reference_agent_version!r} "
+                              f"disagrees with the checkout, which is {version!r}")
+    return {"name": args.reference_agent, "version": version, "repo": url, "commit": head,
+            "entrypoint": rel, "entrypoint_sha256": entry_sha}
+
+
+def replicate_environment(reps: list, rep_label: dict, entrypoint: str,
+                          explicit_python: Optional[str]) -> tuple:
+    """(python, packages-or-None) that RAN the replicates. Raises ProvenanceError.
+
+    Reads <replicate>/_runner/env_provenance.json from every replicate. Paths in that file
+    (the interpreter, the agent) are checked, never returned.
+    """
+    if explicit_python is not None and not _PY_VERSION.match(explicit_python):
+        raise ProvenanceError(f"--replicate-python must look like X.Y.Z, got {explicit_python!r}")
+    seen: dict = {}
+    missing: list = []
+    for d in reps:
+        path = os.path.join(d, ENV_PROVENANCE)
+        if not os.path.isfile(path):
+            missing.append(d)
+            continue
+        try:
+            with open(path, encoding="utf-8") as fh:
+                doc = json.load(fh)
+        except (OSError, ValueError) as exc:
+            raise ProvenanceError(f"{rep_label[d]}: {ENV_PROVENANCE} does not parse: {exc}")
+        if doc.get("schema") != 1 or not isinstance(doc.get("packages"), dict) \
+                or not isinstance(doc.get("python_version"), str):
+            raise ProvenanceError(f"{rep_label[d]}: {ENV_PROVENANCE} is not schema 1")
+        if doc.get("agent_import_ok") is not True:
+            raise ProvenanceError(f"{rep_label[d]}: the runner preflight could not import the "
+                                  f"agent; its routes did not run the agent you think", code=1)
+        ran = str(doc.get("agent_entrypoint") or "").replace(os.sep, "/")
+        if ran != entrypoint and not ran.endswith("/" + entrypoint):
+            raise ProvenanceError(
+                f"{rep_label[d]}: the replicate ran agent entrypoint "
+                f"{os.path.basename(ran)!r}, which is not {entrypoint}", code=1)
+        seen[d] = (doc["python_version"], doc["packages"])
+
+    for d, (py, _) in seen.items():
+        if explicit_python is not None and py != explicit_python:
+            raise ProvenanceError(f"{rep_label[d]} ran Python {py}, but --replicate-python says "
+                                  f"{explicit_python}", code=1)
+    pythons = {py for py, _ in seen.values()}
+    if len(pythons) > 1:
+        detail = ", ".join(f"{rep_label[d]}={py}" for d, (py, _) in seen.items())
+        raise ProvenanceError(f"the replicates ran different Pythons ({detail}). They are not "
+                              f"replicates of one environment.", code=1)
+    pkgs = [json.dumps(p, sort_keys=True) for _, p in seen.values()]
+    if len(set(pkgs)) > 1:
+        detail = "; ".join(f"{rep_label[d]}={p}" for d, (_, p) in seen.items())
+        raise ProvenanceError(f"the replicates ran different package versions ({detail})",
+                              code=1)
+    if missing:
+        names = ", ".join(rep_label[d] for d in missing)
+        if explicit_python is None:
+            raise ProvenanceError(
+                f"no {ENV_PROVENANCE} in {names}. Pass --replicate-python X.Y.Z with the "
+                f"version of the interpreter the runner executed (environment.python in the "
+                f"config), NOT the one running this script.")
+        print(f"WARNING: no {ENV_PROVENANCE} in {names}; Python taken from --replicate-python "
+              f"and package versions are not stamped.", file=sys.stderr)
+    python = explicit_python if explicit_python is not None else pythons.pop()
+    packages = None
+    if not missing:
+        only = next(iter(seen.values()))[1]
+        packages = {k: only.get(k) for k in STAMPED_PACKAGES
+                    if k != "carla" or only.get(k) is not None}
+    return python, packages
+
+
+def content_pack_digest(specs: list, cross_check: Optional[str]) -> tuple:
+    """({name: sha256} sorted by name, composite). Raises ProvenanceError.
+
+    composite = sha256 of the canonical SHA256SUMS text: one "<sha256>  <name>\\n" line per
+    archive, sorted by name in byte order. Order of the command-line flags is irrelevant.
+    """
+    archives: dict = {}
+    for spec in specs:
+        name, sep, sha = spec.rpartition("=")
+        name, sha = name.strip(), sha.strip().lower()
+        if not sep or not name or not _SHA256.match(sha) or re.search(r"\s|/", name):
+            raise ProvenanceError(f"--content-pack-archive wants NAME=SHA256 (a bare archive "
+                                  f"file name and 64 hex digits), got {spec!r}")
+        if name in archives and archives[name] != sha:
+            raise ProvenanceError(f"--content-pack-archive {name} given twice with different "
+                                  f"digests")
+        archives[name] = sha
+    ordered = {n: archives[n] for n in sorted(archives, key=lambda n: n.encode("utf-8"))}
+    text = "".join(f"{sha}  {name}\n" for name, sha in ordered.items())
+    composite = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    if cross_check is not None and cross_check.strip().lower() != composite:
+        raise ProvenanceError(f"--content-pack-sha256 {cross_check} does not equal the composite "
+                              f"{composite} of the archives given")
+    return ordered, composite
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--replicate", action="append", required=True, metavar="DIR",
@@ -106,12 +322,31 @@ def main() -> int:
 
     ap.add_argument("--reference-agent", required=True,
                     help="name of the reference agent, e.g. pdmlite")
-    ap.add_argument("--reference-agent-version", required=True,
-                    help="commit / tag / checkpoint identity of the reference agent")
+    ap.add_argument("--reference-agent-repo", required=True, metavar="DIR",
+                    help="local git checkout the replicates ran the agent from. Must be clean "
+                         "under the entrypoint's top directory, at --reference-agent-commit")
+    ap.add_argument("--reference-agent-commit", required=True, metavar="SHA",
+                    help="commit of that checkout; stamped as the full sha")
+    ap.add_argument("--reference-agent-entrypoint", required=True, metavar="PATH",
+                    help="agent file relative to the repo, e.g. team_code/data_agent.py")
+    ap.add_argument("--reference-agent-url", default=None, metavar="URL",
+                    help="public https URL of the agent repo. Default: the checkout's origin "
+                         "remote, if that is a public URL")
+    ap.add_argument("--reference-agent-version", default=None,
+                    help="optional cross-check. The version is derived as "
+                         "'<repo>@<full sha> <entrypoint>'; a different value here is an error")
     ap.add_argument("--carla-version", required=True)
     ap.add_argument("--content-pack-version", required=True,
                     help="version of the OOD content pack these goldens are valid for")
-    ap.add_argument("--content-pack-sha256", default=None)
+    ap.add_argument("--content-pack-archive", action="append", required=True,
+                    metavar="NAME=SHA256",
+                    help="one content-pack archive and its sha256 (repeatable; take them from "
+                         "assets/SHA256SUMS). The bundle stamps each one plus their composite")
+    ap.add_argument("--content-pack-sha256", default=None,
+                    help="optional cross-check of the composite digest; a mismatch is an error")
+    ap.add_argument("--replicate-python", default=None, metavar="X.Y.Z",
+                    help="Python version the replicates ran under. Required only when a "
+                         "replicate has no _runner/env_provenance.json; otherwise a cross-check")
     ap.add_argument("--runner-version", default=None)
     ap.add_argument("--gpu", default=None, help="e.g. 'NVIDIA RTX A6000, driver 550.54.14'")
     ap.add_argument("--notes", default=None)
@@ -151,6 +386,16 @@ def main() -> int:
             return 2
 
     try:
+        agent = reference_agent_provenance(args)
+        python, packages = replicate_environment(reps, rep_label, agent["entrypoint"],
+                                                 args.replicate_python)
+        archives, composite = content_pack_digest(args.content_pack_archive,
+                                                  args.content_pack_sha256)
+    except ProvenanceError as exc:
+        print(f"\nREFUSING TO WRITE: {exc}", file=sys.stderr)
+        return exc.code
+
+    try:
         rows = load_split(args.split, args.tier)
     except (SplitError, OSError) as exc:
         print(f"\nERROR: {exc}", file=sys.stderr)
@@ -169,6 +414,9 @@ def main() -> int:
     print(f"replicates : {len(reps)}")
     for d in reps:
         print(f"             {d}")
+    print(f"agent      : {agent['version']}  ({agent['repo']})")
+    print(f"python     : {python}  (the replicates' interpreter)")
+    print(f"pack       : {composite}  ({len(archives)} archive(s))")
 
     reference = load_reference(DEFAULT_REFERENCE_TSV)
 
@@ -281,17 +529,16 @@ def main() -> int:
             "sha256": sha256_of(args.split),
             "n_routes": len(rows),
         },
-        "reference_agent": {
-            "name": args.reference_agent,
-            "version": args.reference_agent_version,
-        },
+        "reference_agent": agent,
         "environment": {
             "carla_version": args.carla_version,
             "content_pack_version": args.content_pack_version,
-            "content_pack_sha256": args.content_pack_sha256,
+            "content_pack_sha256": composite,
+            "content_pack_archives": archives,
             "gpu": args.gpu,
             "os": platform.platform(),
-            "python": platform.python_version(),
+            "python": python,
+            "python_packages": packages,
             "runner_version": args.runner_version,
         },
         "protocol": {
@@ -314,7 +561,7 @@ def main() -> int:
             "utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "by": "tests/make_golden.py",
             "procedure": "tests/goldens/GENERATING.md",
-            "notes": args.notes,
+            "notes": " ".join(filter(None, [COMPOSITE_RULE_NOTE, args.notes])),
         },
         "routes": routes_out,
     }

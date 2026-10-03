@@ -43,7 +43,11 @@
       "required": ["name", "version"],
       "properties": {
         "name": {"type": "string", "examples": ["pdmlite"]},
-        "version": {"type": "string", "description": "Commit, tag, or checkpoint identity. Free-form but must not be empty."}
+        "version": {"type": "string", "description": "Commit, tag, or checkpoint identity. Free-form but must not be empty. make_golden.py writes '<repo name>@<full commit> <entrypoint>'.", "examples": ["carla_garage@beb3433407f42c1adced312b877a61fe04f338ba team_code/data_agent.py"]},
+        "repo": {"type": "string", "description": "Optional (absent from bundles built before it existed; make_golden.py always writes it). Public https URL of the agent's repository. Never a local path.", "examples": ["https://github.com/autonomousvision/carla_garage"]},
+        "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$", "description": "Optional (make_golden.py always writes it). Full commit of a CLEAN checkout: make_golden.py refuses when `git status --porcelain` under the entrypoint's top directory is non-empty, because an untracked or modified file there may be what actually ran."},
+        "entrypoint": {"type": "string", "description": "Optional (make_golden.py always writes it). Agent file relative to the repository root.", "examples": ["team_code/data_agent.py"]},
+        "entrypoint_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "Optional (make_golden.py always writes it). sha256 of the entrypoint file at that commit."}
       }
     },
     "environment": {
@@ -52,10 +56,24 @@
       "properties": {
         "carla_version": {"type": "string", "examples": ["0.9.15"]},
         "content_pack_version": {"type": "string", "examples": ["v0.9"]},
-        "content_pack_sha256": {"type": ["string", "null"]},
+        "content_pack_sha256": {"type": ["string", "null"], "description": "Composite digest of the content pack. Rule (make_golden.py): sha256 of the canonical SHA256SUMS text built from content_pack_archives -- one line '<sha256><two spaces><archive name><LF>' per archive, sorted by archive name in byte order (LC_ALL=C sort). For a canonical sums file this equals `sha256sum SHA256SUMS`; for assets/SHA256SUMS it is exactly that. Bundles built before content_pack_archives existed carry an undocumented value here."},
+        "content_pack_archives": {
+          "type": "object",
+          "description": "Optional (make_golden.py always writes it). Archive file name -> sha256, one entry per content-pack archive, in the order the composite rule sorts them. Source of truth: assets/SHA256SUMS.",
+          "additionalProperties": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        },
         "gpu": {"type": ["string", "null"]},
-        "os": {"type": ["string", "null"]},
-        "python": {"type": ["string", "null"]},
+        "os": {"type": ["string", "null"], "description": "Platform string of the host that BUILT the bundle."},
+        "python": {"type": ["string", "null"], "description": "Python version that RAN the replicates. make_golden.py reads it from each replicate's _runner/env_provenance.json (all must agree) or, failing that, from --replicate-python. Never the builder's interpreter."},
+        "python_packages": {
+          "type": ["object", "null"],
+          "description": "Optional (make_golden.py always writes it). Versions of numpy, scipy and, if recorded, the carla client in the replicates' environment, from _runner/env_provenance.json. null when a replicate had no such file. Never a path.",
+          "properties": {
+            "numpy": {"type": ["string", "null"]},
+            "scipy": {"type": ["string", "null"]},
+            "carla": {"type": ["string", "null"]}
+          }
+        },
         "runner_version": {"type": ["string", "null"]}
       }
     },
