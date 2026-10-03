@@ -1,0 +1,75 @@
+# OOD-PerceptionBench -- Python requirements for the PDM-Lite evaluation environment.
+#
+# Install on Python 3.10:
+#
+#   pip install -r env/requirements-pdmlite.txt
+#
+# This is upstream's team_code/requirements.txt from autonomousvision/carla_garage at the
+# pinned commit beb3433407f42c1adced312b877a61fe04f338ba (see patches/UPSTREAM.txt), with
+# exactly ONE line changed:
+#
+#   numpy==1.26.4  ->  numpy==1.23.5
+#
+# Why that line, and why that exact version:
+#   * Bench2Drive's leaderboard and scenario_runner trees at the pinned commit still use the
+#     numpy aliases (np.float, np.int, np.bool, np.object) that numpy 1.24 removed -- in
+#     Bench2Drive/leaderboard/team_code/{birds_eye_view/chauffeurnet,privileged_route_planner,
+#     transfuser_utils}.py and Bench2Drive/scenario_runner/manual_control.py, the files
+#     upstream's later fix cc28a50 touches -- so numpy must stay below 1.24;
+#   * scipy==1.14.1 (unchanged below) requires numpy >= 1.23.5.
+# 1.23.5 is the only release that satisfies both.
+#
+# Why a copy and not a constraints file: upstream pins numpy EXACTLY, and pip treats an exact
+# requirement plus a conflicting `-c` constraint as a conflict, not as an override.
+#
+# setup.sh --verify-only checks that every other line still equals upstream's file at the
+# pinned commit, so this copy cannot drift silently. Change it only together with the pin.
+carla==0.9.15
+dictor==0.1.12
+diskcache==5.4.0
+einops==0.4.1
+ephem==4.1.5
+filterpy==1.4.5
+gym==0.17.2
+h5py==3.7.0
+imgaug==0.4.0
+jsonpickle==3.0.3
+laspy==2.5.4
+laszip==0.2.3
+lxml==5.1.0
+matplotlib==3.5.3
+networkx==3.4.2
+numpy==1.23.5
+omegaconf==2.3.0
+opencv-python==4.6.0.66
+pexpect==4.9.0
+Pillow==10.2.0
+psutil==5.9.8
+py-trees==0.8.3
+pygame==2.6.0
+pylint==2.15.0
+pytictoc==1.5.3
+rdp==0.8
+requests==2.31.0
+scikit-image==0.19.3
+scikit-learn==1.5.2
+scipy==1.14.1
+setuptools==59.8.0
+shapely==2.0.4
+simple_watchdog_timer==0.1.1
+six==1.16.0
+tabulate==0.9.0
+tensorboard==2.14.0
+tensorboardX==2.6.2.2
+timm==1.0.11
+torch==2.5.0
+torchaudio==2.5.0
+torchmetrics==0.11.0
+torchvision==0.20.0
+tqdm==4.66.1
+transformers==4.21.2
+transforms3d==0.4.1
+ujson==5.9.0
+wandb==0.16.6
+webcolors==1.13
+xmlschema==1.0.18

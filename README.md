@@ -112,13 +112,22 @@ exactly one repository to clone. Full detail in [`patches/UPSTREAM.txt`](patches
 
 > **The pin is deliberately not upstream's current tip.** Upstream has since merged a
 > numpy ≥ 1.24 compatibility fix. Our patches apply cleanly to that newer commit too — the two
-> change sets are file-disjoint — but it modifies PDM-Lite internals, and PDM-Lite is the
-> reference agent the acceptance golden was generated with, so we pin the tree the
-> published records were produced against. The shipped v0.9 golden is pinned to that measured
-> agent checkout.
+> change sets are file-disjoint — but we pin the tree the published records were produced
+> against. (That fix touches Bench2Drive's own PDM-Lite variant under
+> `Bench2Drive/leaderboard/team_code/`, not the top-level `team_code/` PDM-Lite that generates
+> the acceptance golden.)
 >
 > **Practical consequence:** at this pin, Bench2Drive still uses numpy aliases that numpy 1.24
-> removed. **Pin `numpy<1.24` in your evaluation environment.** Alternatively advance the pin
+> removed, while upstream's `scipy==1.14.1` needs numpy ≥ 1.23.5. **Use `numpy==1.23.5`**, the
+> one release that satisfies both. On Python 3.10, install the evaluation environment with
+>
+> ```bash
+> pip install -r env/requirements-pdmlite.txt
+> ```
+>
+> which is upstream's `team_code/requirements.txt` at the pin with only the numpy line changed
+> (upstream pins `numpy==1.26.4` exactly, so a `-c` constraints file cannot override it).
+> `setup.sh --verify-only` checks that the copy has not drifted. Alternatively advance the pin
 > yourself and accept that your run is no longer bit-identical to our baselines. The reasoning
 > and the verification are recorded in [`patches/UPSTREAM.txt`](patches/UPSTREAM.txt).
 

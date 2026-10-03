@@ -46,14 +46,22 @@ PINNED_BY           = OOD-PerceptionBench release v0.9
 #   * all 26 patches apply cleanly to the newer tip 72f39a6 as well.
 #
 # We nonetheless pin the OLDER commit, deliberately. The published baseline
-# records were produced against this tree, and two of the four changed files
-# (chauffeurnet.py, privileged_route_planner.py) are PDM-Lite internals — and
-# PDM-Lite is the reference agent that generates the acceptance goldens.
-# Reproducibility of the published numbers outranks currency of the pin.
+# records were produced against this tree, and reproducibility of the published
+# numbers outranks currency of the pin. (Correction, 2026-10-03: an earlier
+# version of this note said the changed chauffeurnet.py and
+# privileged_route_planner.py are internals of the PDM-Lite that generates the
+# acceptance goldens. They are not. They belong to Bench2Drive's own PDM-Lite
+# variant under Bench2Drive/leaderboard/team_code/; the goldens are generated
+# with the top-level team_code/data_agent.py, which that fix does not touch.)
 #
 # CONSEQUENCE FOR USERS ON MODERN NUMPY: at this pin, Bench2Drive still uses
-# numpy aliases removed in numpy 1.24. Pin numpy < 1.24 in the evaluation
-# environment, or advance the pin to 72f39a6 (patches apply either way) and
-# accept that your run is then not bit-identical to the published baselines.
+# numpy aliases removed in numpy 1.24, and upstream's scipy==1.14.1 needs
+# numpy >= 1.23.5. Use numpy==1.23.5, the one release that satisfies both:
+#   pip install -r env/requirements-pdmlite.txt        (Python 3.10)
+# That file is upstream's team_code/requirements.txt at this pin with only the
+# numpy line changed (upstream pins numpy==1.26.4 exactly, which a -c
+# constraints file cannot override); setup.sh --verify-only checks the copy
+# against upstream. Or advance the pin to 72f39a6 (patches apply either way)
+# and accept that your run is then not bit-identical to the published baselines.
 # This is a real trade-off, recorded here rather than hidden.
 # ---------------------------------------------------------------------------
