@@ -5,7 +5,7 @@
 > comparable. Every report this runner writes carries that stamp.
 >
 > **This is a hardware-validated local first cut, not a production-scale runner.** The
-> supervision logic is covered by 281 automated tests. On 2026-08-11/12 CARLA 0.9.15 executed
+> supervision logic is covered by 284 automated tests. On 2026-08-11/12 CARLA 0.9.15 executed
 > single routes, two 8-route/two-worker sweeps with one-GPU stacking and port isolation observed
 > live, a real Ctrl-C/reap/resume cycle, and three independent nine-route PDM-Lite golden
 > replicates. The SLURM backend is now validated on a real scheduler at two-way concurrency (one
@@ -209,16 +209,20 @@ Script your automation on the exit code — a partial sweep can never exit 0.
 The patched evaluator waits a fixed 60 s after starting CARLA, then probes the world
 (`get_world().get_settings()` with a 10 s timeout, every 10 s) until it answers, logging
 `world ready after N s` (N counted from launch) to the route's `.out` log. A world that has not
-answered `OODPB_WORLD_READY_S` seconds after launch (default `1800`) makes the evaluator exit
-with status **75**. That is the *evaluator's* status, not one of the runner's exit codes above:
-the runner settles it as an infrastructure failure — `infra_budget` is charged, the worker's
-quarantine streak advances, and nothing on disk is read as that attempt's result.
+answered `OODPB_WORLD_READY_S` seconds after launch makes the evaluator exit with status
+**75**. That is the *evaluator's* status, not one of the runner's exit codes above: the runner
+settles it as an infrastructure failure — `infra_budget` is charged, the worker's quarantine
+streak advances, and nothing on disk is read as that attempt's result.
 
-`OODPB_WORLD_READY_S` is an environment variable of the route job, not a config key, so it does
-not change the config digest. Set it through `environment.activate` (for example
-`export OODPB_WORLD_READY_S=2400`). Keep it below `execution.route_timeout_s`: the route's wall
-clock starts at launch (under SLURM, when the job starts running), so simulator start-up is
-spent from the same budget as the route itself.
+The deadline only works below `execution.route_timeout_s`. The route's wall clock starts at
+launch (under SLURM, when the job starts running), so simulator start-up is spent from the same
+budget as the route itself; a deadline at or above the route timeout never fires, and the
+attempt is killed as a timeout instead, which leaves the quarantine streak alone. Each route
+job therefore exports a default of two thirds of `execution.route_timeout_s`, at most 1800 s
+(1200 s for a 1800 s route timeout). To use another value, set it in `agent.env` (for example
+`OODPB_WORLD_READY_S: "2400"`) or export it in `environment.activate`; your value wins over the
+default, and like any other edit to those sections it changes the config digest. A value that is
+only set in the shell you start the runner from is ignored, so it cannot change a run unrecorded.
 
 ---
 
@@ -407,7 +411,7 @@ No GPU, no CARLA, no network, no third-party packages:
 python -m unittest discover -s tests -t .
 ```
 
-281 tests covering the port allocator (at worker counts far above any real GPU count), the
+284 tests covering the port allocator (at worker counts far above any real GPU count), the
 finalization predicate and status taxonomy, path mirroring, manifest integrity, the resume and
 budget decision, the attempt-accounting model of `DESIGN.md` §6A, the exit contract, the ledger,
 the generated job script, backend concurrency, and the SLURM backend — including the end-to-end

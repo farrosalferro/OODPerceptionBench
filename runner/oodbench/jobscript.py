@@ -84,6 +84,23 @@ RESERVED_ENV: Dict[str, str] = {
 }
 
 
+#: Patch 330's own readiness deadline when ``OODPB_WORLD_READY_S`` is unset (an evaluator run
+#: by hand, outside this runner).
+WORLD_READY_FALLBACK_S = 1800
+
+
+def world_ready_default_s(route_timeout_s: float) -> int:
+    """The simulator-readiness deadline a route job gets unless one is already set.
+
+    The deadline only works below the route's wall clock. That clock starts at launch, so a
+    deadline at or above ``route_timeout_s`` never fires: the attempt is killed as a TIMEOUT
+    first, which leaves the worker's quarantine streak alone, and a GPU whose simulator never
+    starts is retried as if it had been a slow route. Two thirds of the route timeout, capped at
+    the evaluator's own fallback.
+    """
+    return int(min(WORLD_READY_FALLBACK_S, route_timeout_s * 2 // 3))
+
+
 def _export(name: str, value: str) -> str:
     return f"export {name}={shlex.quote(str(value))}"
 
@@ -162,6 +179,10 @@ def render(task: "RouteTask", cfg: "Config", gpu: "GpuSpec", ports: "PortPair") 
 
     lines: List[str] = [HEADER.format(route=task.xml, seed=task.seed, result=task.result_path)]
 
+    # The readiness deadline may come from this config (digested) or the runner's default, never
+    # from the shell that launched the runner or from what sbatch copies into the job.
+    lines.append("unset OODPB_WORLD_READY_S")
+
     # ======================================================================================
     # USER-SUPPLIED SECTION. Everything below this block is runner-owned and overwrites it.
     # Order is load-bearing -- see property 3 in the module docstring.
@@ -196,6 +217,11 @@ def render(task: "RouteTask", cfg: "Config", gpu: "GpuSpec", ports: "PortPair") 
     lines.append(_export("PYTHONHASHSEED", str(task.seed)))
     lines.append(_export("PORT", str(ports.rpc)))
     lines.append(_export("TM_PORT", str(ports.tm)))
+    # Simulator readiness deadline for patch 330 (evaluator exit 75). Deliberately NOT forced:
+    # a value set in environment.activate or agent.env, above, wins over this default; an
+    # inherited one was cleared at the top of the script.
+    default_ready = world_ready_default_s(float(cfg.execution["route_timeout_s"]))
+    lines.append(f'export OODPB_WORLD_READY_S="${{OODPB_WORLD_READY_S:-{default_ready}}}"')
     lines.append("")
 
     record_flag = ""

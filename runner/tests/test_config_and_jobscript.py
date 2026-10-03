@@ -5,6 +5,8 @@ they assert the properties that, if broken, fail silently on real hardware.
 """
 
 import json
+import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -418,6 +420,47 @@ class TestJobScript(unittest.TestCase):
         script = jobscript.render(task, cfg, cfg.gpus[0], self.pair)
         import shlex
         self.assertIn(f"cd {shlex.quote(str(repo))} || exit 2", script)
+
+    def _world_ready_after_the_script_runs(self, route_timeout_s, agent_env=None, inherited=None):
+        """The OODPB_WORLD_READY_S a route job really ends up with: the script's own lines that
+        set or clear it, run by bash in order, with ``inherited`` (or nothing) as the value in
+        the environment the job starts from."""
+        site = self.tmp / f"site_{route_timeout_s}_{len(agent_env or {})}_{inherited}"
+        raw = make_site(site)
+        raw["execution"] = {"route_timeout_s": route_timeout_s}
+        if agent_env:
+            raw["agent"]["env"] = dict(agent_env)
+        cfg = config_mod.build(raw)
+        xml = site / "routes/vehicle/accident_two_ways/visual_shift/route_1_x.xml"
+        task = RouteTask.from_xml(xml, site / "routes", site / "out", seed=42, repetition=0)
+        script = jobscript.render(task, cfg, cfg.gpus[0], self.pair)
+        exports = [ln for ln in script.splitlines()
+                   if ln.startswith("export OODPB_WORLD_READY_S=")
+                   or ln == "unset OODPB_WORLD_READY_S"]
+        env = {k: v for k, v in os.environ.items() if k != "OODPB_WORLD_READY_S"}
+        if inherited is not None:
+            env["OODPB_WORLD_READY_S"] = inherited
+        out = subprocess.run(["bash", "-c", "\n".join(exports + ['echo "$OODPB_WORLD_READY_S"'])],
+                             env=env, capture_output=True, text=True, check=True)
+        return out.stdout.strip()
+
+    def test_the_readiness_deadline_defaults_below_the_route_timeout(self):
+        """RED BEFORE THE FIX: the job exported nothing, so patch 330 fell back to its own
+        1800 s. Under the 1800 s route timeout that the golden template and the reference-agent
+        config ship, that deadline could never fire: the route's wall clock starts earlier, at
+        launch, so the attempt was always killed as a TIMEOUT first."""
+        self.assertEqual(self._world_ready_after_the_script_runs(1800), "1200")
+        self.assertEqual(self._world_ready_after_the_script_runs(3600), "1800")
+
+    def test_a_readiness_deadline_set_in_agent_env_wins(self):
+        """GUARD: the default must not override an operator's own value."""
+        self.assertEqual(
+            self._world_ready_after_the_script_runs(1800, {"OODPB_WORLD_READY_S": "900"}), "900")
+
+    def test_a_readiness_deadline_inherited_from_the_shell_is_ignored(self):
+        """RED BEFORE THE FIX: a value left in the shell that launched the runner (or that sbatch
+        copied into the job) silently won over the default, yet the config digest never saw it."""
+        self.assertEqual(self._world_ready_after_the_script_runs(1800, inherited="999"), "1200")
 
     def test_no_cd_is_emitted_when_working_dir_is_unset(self):
         self.assertNotIn("\ncd ", self.script)
