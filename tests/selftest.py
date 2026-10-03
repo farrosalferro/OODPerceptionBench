@@ -753,35 +753,55 @@ class TestGoldenSchema(unittest.TestCase):
 
 
 class TestGoldenGenerationTemplate(unittest.TestCase):
-    """The template's three leaderboard paths must describe ONE Bench2Drive checkout.
-
-    It once set ``work_dir`` to the carla_garage root while ``root`` and
-    ``scenario_runner_root`` pointed inside its ``Bench2Drive/`` directory. The evaluator reads
-    ``<work_dir>/leaderboard/data/weather.xml`` on every route, so a config copied from the
-    template crashed every route before it wrote a result.
-    """
+    """Settings a config copied from the golden template cannot run without."""
 
     TEMPLATE = os.path.join(HERE, "configs", "golden_generation.yaml.template")
 
-    def _leaderboard_paths(self) -> dict:
-        paths, inside = {}, False
+    def _section(self, name: str) -> list:
+        """The non-comment lines indented under the top-level key ``name``."""
+        lines, inside = [], False
         with open(self.TEMPLATE, encoding="utf-8") as fh:
             for line in fh:
                 if not line.strip() or line.lstrip().startswith("#"):
                     continue
                 if not line.startswith(" "):
-                    inside = line.startswith("leaderboard:")
+                    inside = line.startswith(name + ":")
                     continue
                 if inside:
-                    key, _, value = line.strip().partition(":")
-                    paths[key] = value.split("#")[0].strip()
-        return paths
+                    lines.append(line.rstrip("\n"))
+        return lines
+
+    @staticmethod
+    def _value(line: str) -> tuple:
+        key, _, value = line.strip().partition(":")
+        return key, value.split("#")[0].strip().strip('"')
 
     def test_leaderboard_paths_share_one_bench2drive_root(self):
-        p = self._leaderboard_paths()
+        """It once set ``work_dir`` to the carla_garage root while ``root`` and
+        ``scenario_runner_root`` pointed inside its ``Bench2Drive/`` directory. The evaluator
+        reads ``<work_dir>/leaderboard/data/weather.xml`` on every route, so a config copied from
+        the template crashed every route before it wrote a result."""
+        p = dict(self._value(line) for line in self._section("leaderboard"))
         self.assertEqual(p["root"], p["work_dir"] + "/leaderboard")
         self.assertEqual(p["scenario_runner_root"], p["work_dir"] + "/scenario_runner")
 
+    def test_agent_env_names_the_pdmlite_log_folder(self):
+        """The runner exports SAVE_PATH for every route. With it set, setup() in the public
+        team_code/autopilot.py names its log folder from TOWN and REPETITION and raises KeyError
+        when either is missing, so every route ended "Failed - Agent couldn't be set up" and the
+        runner still exited 0. The v0.9 golden never hit it: its agent copies had the line
+        edited out."""
+        env, inside = {}, False
+        for line in self._section("agent"):
+            if not line.startswith("    "):
+                inside = line.strip() == "env:"
+                continue
+            if inside:
+                key, value = self._value(line)
+                env[key] = value
+        self.assertEqual(env.get("DATAGEN"), "0")
+        self.assertTrue(env.get("TOWN"), "agent.env must set TOWN")
+        self.assertTrue(env.get("REPETITION"), "agent.env must set REPETITION")
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

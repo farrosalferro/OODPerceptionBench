@@ -50,9 +50,14 @@ agent:
   env:
     # LOCKED. Weather safety for THIS agent comes from DATAGEN being 0/unset: data_agent.py
     # only shuffles the weather (and attaches data-collection sensors) when DATAGEN=1.
-    # Patch 430 does not cover it -- it patches the Bench2Drive data agent. Do not set
-    # SAVE_PATH either.
+    # Patch 430 does not cover it -- it patches the Bench2Drive data agent.
     DATAGEN: "0"
+    # REQUIRED, though they only name a folder. The runner gives every route a SAVE_PATH (its
+    # log folder), and with SAVE_PATH set, setup() in team_code/autopilot.py names its own
+    # sub-folder from TOWN and REPETITION. Without them every route ends "Failed - Agent
+    # couldn't be set up". Nothing else reads them, so the values do not affect the drive.
+    TOWN: "smoke"
+    REPETITION: "0"
 
 environment:
   activate:

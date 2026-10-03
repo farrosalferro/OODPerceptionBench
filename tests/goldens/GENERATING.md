@@ -66,13 +66,21 @@ which is a different PDM-Lite variant with its own `autopilot.py`.
 | `agent.entrypoint` | `<carla_garage>/team_code/data_agent.py` | the agent above |
 | `agent.working_dir` | `<carla_garage>` | the planner loads `team_code/speed_limits/*.npy` by a relative path |
 | `agent.pythonpath` | `[<carla_garage>/team_code]` | its sibling imports (`autopilot`, `config`, …) |
-| `agent.env` | `{DATAGEN: "0"}` | weather safety, see below |
+| `agent.env` | `{DATAGEN: "0", TOWN: "smoke", REPETITION: "0"}` | weather safety, and a folder name the agent needs; see below |
 
 **Weather safety comes from `DATAGEN`, not from patch 430.** Patch 430 gates the weather shuffle
 in the *Bench2Drive* data agent only. The top-level agent shuffles the weather only when
 `DATAGEN=1` (`self.datagen = int(os.environ.get("DATAGEN", 0)) == 1` in `team_code/autopilot.py`,
 checked before `shuffle_weather()` in `team_code/data_agent.py`). The template sets
 `DATAGEN: "0"` explicitly so an inherited environment variable cannot turn it on.
+
+**`TOWN` and `REPETITION` are required, but only name a folder.** The runner gives every route a
+`SAVE_PATH` (its log folder). With `SAVE_PATH` set, `setup()` in `team_code/autopilot.py` names
+its own sub-folder from `TOWN` and `REPETITION` and raises `KeyError` when either is missing, so
+every route ends `Failed - Agent couldn't be set up`. The runner still exits 0, because that is a
+settled result; `make_golden.py` is what refuses it, after the replicates have run. Nothing else
+in `team_code/` reads the two variables, so their values do not affect the drive. The v0.9 bundle
+never needed them: its agent copies (next paragraph) had that line edited out.
 
 **Keep `team_code/` clean.** `make_golden.py` refuses to build a bundle when
 `git -C <carla_garage> status --porcelain -- team_code` prints anything. The v0.9 bundle was
