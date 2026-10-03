@@ -59,7 +59,7 @@ average-per-route figures (seeds 42/43/44).
 | Content pack | 6 of 18 OOD props | replacement props for the other 12 |
 | Acceptance harness (`tests/`) | ✅ assertions A1–A4 | ✅ A1–A4 |
 | Acceptance goldens | measured PDM-Lite bundle for the 9-route smoke split | regenerate for v1.0 |
-| Zenodo DOI | — | ✅ |
+| Zenodo DOI | ✅ | ✅ |
 
 > **v0.9 ships `tests/goldens/pdmlite_seed42_v0.9.golden.json`.** It was measured on 2026-08-12
 > from three sequential, forced, one-worker PDM-Lite replicates with separate output roots on

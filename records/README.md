@@ -7,7 +7,8 @@ This directory is Tier A of the release: the per-route baseline records for all
 without a GPU**, and compare a new model against all 17 baselines **without
 re-simulating anything**.
 
-The records are a few MB. They ship in-repo; no external hosting, no Zenodo.
+The records are a few MB. They ship in-repo; no external hosting; the tagged
+release is archived on Zenodo.
 
 ---
 
