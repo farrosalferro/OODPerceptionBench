@@ -11,6 +11,7 @@ logic, not that CARLA starts on the right GPU. See STATUS.md.
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import textwrap
@@ -461,18 +462,48 @@ class TestFailureHandling(IntegrationBase):
 
 class TestPreflightAndConfig(IntegrationBase):
 
+    def _stand_in_simulator(self, rpc_port):
+        """A harmless process the reaper would take for a CARLA server on ``rpc_port``."""
+        proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)",
+                                 "CarlaUE4-Linux-Shipping", f"-carla-rpc-port={rpc_port}"])
+
+        def stop():
+            proc.kill()
+            proc.wait()
+        self.addCleanup(stop)
+        return proc
+
     def test_busy_port_block_is_a_preflight_error_not_a_silent_shift(self):
         import socket
         self.site.add_route("static/s1/base/route_1_a.xml")
         base = free_port_base()
         cfg_path = self.site.config(ports={"rpc_base": base, "tm_base": base + 100,
                                            "stride": 10})
+        # Whatever holds the block is not this run's, so refusing the block must leave it alone.
+        holder = self._stand_in_simulator(base)
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.bind(("localhost", base))
             s.listen(1)
             code = self.run_cli(cfg_path)
         self.assertEqual(code, EXIT_CONFIG)
         self.assertEqual(len(self.site.trace_rows()), 0)
+        self.assertIsNone(holder.poll(), "refusing a busy block killed what was holding it")
+
+    def test_dry_run_leaves_a_simulator_on_the_block_alone(self):
+        """Previewing a plan must not touch a process the preview never started.
+
+        A dry run skips the port preflight but still ran the backend's shutdown, which reaps
+        every CARLA of this user on the block: a dry run of the config a sweep was running
+        under, from another terminal, killed that sweep's simulator mid-route.
+        """
+        self.site.add_route("static/s1/base/route_1_a.xml")
+        base = free_port_base()
+        cfg_path = self.site.config(ports={"rpc_base": base, "tm_base": base + 100,
+                                           "stride": 10})
+        other_runs_simulator = self._stand_in_simulator(base)
+        self.assertEqual(self.run_cli(cfg_path, extra=["--dry-run"]), EXIT_OK)
+        self.assertIsNone(other_runs_simulator.poll(),
+                          "the dry run killed a simulator it never started")
 
     def test_dry_run_executes_nothing_and_exits_zero(self):
         self.site.add_route("static/s1/base/route_1_a.xml")

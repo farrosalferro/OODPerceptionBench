@@ -1374,6 +1374,11 @@ another user's CARLA can be reparented for entirely benign reasons. Reaping by *
 allocated port* touches only processes the runner is responsible for — which is only possible
 because ports are deterministic (§3).
 
+That premise needs the run to have *taken* its block, so the local backend reaps at shutdown
+only after its startup probe found the block free, or after the operator disabled the probe and
+so asserted the block is theirs. A `--dry-run` never takes the block and a refused run never got
+it: the CARLA on those ports then belongs to someone else, typically the sweep being previewed.
+
 Additional per-attempt hygiene, all inherited from the internal runners:
 
 - delete the checkpoint file before every attempt (a stale checkpoint plus resume semantics

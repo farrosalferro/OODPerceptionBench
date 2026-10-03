@@ -272,7 +272,7 @@ python -m unittest discover -s tests -t .    ->  258 tests, OK, ~91 s
 | Config validation | `test_config_and_jobscript.py` | Every required field is genuinely required and named in the error; unknown sections and mistyped keys are errors, not silent defaults; `workers > gpus` needs explicit opt-in; **both** the CUDA index and the Vulkan adapter are unique-checked, including when one side was defaulted; `agent.env` is rejected for every runner-owned name with the field to use instead, while composable ones (`PYTHONPATH`, `LD_LIBRARY_PATH`) stay allowed; digest is stable and sensitive. |
 | Job script | `test_config_and_jobscript.py` | Both CUDA **and** the Vulkan adapter are pinned; allocated ports are used verbatim; `--resume` is never passed; nothing is detached; the seed is independent of worker and port; `agent.pythonpath` wins the ordering; every runner-owned export is emitted **after** `agent.env`, and a reserved name smuggled past config validation still loses to the runner; `environment.activate` still precedes `agent.env`; `bash -n` clean, including paths containing spaces. |
 | **Backend concurrency** | `test_backend_concurrency.py` (14 tests) | The loop opens exactly the *backend's* slots, never `execution.workers`, in both directions (over- and under-parallelising); SLURM concurrency is `slurm.max_parallel` with one reserved port pair per slot, all disjoint; an out-of-range slot is refused without disturbing an existing record; `max_parallel < 1` is a config error; setting `execution.workers` under SLURM warns that it is ignored. No scheduler is contacted. |
-| **Supervision loop, end to end** | `test_integration_local.py` (21 tests) | Driven against a stand-in evaluator: full sweep exits 0; a re-run skips completed routes without re-executing them; a simulated interruption re-runs exactly the missing routes; the seed reaches the child identically across 3 workers; workers get disjoint, non-overlapping ports; a route that never writes a record exhausts the **infra** budget without touching the record budget and exits 1; an unfinalized checkpoint counts as infra; a retryable record is retried then accepted as the result; TickRuntime is not retried by default; a flaky route recovers; a hanging route is killed by the wall clock; `sensors were invalid` aborts the sweep at ≤1 route; a restart does not buy a fresh budget; a worker is quarantined; a busy port block is a preflight error with nothing executed; `--dry-run` writes no report; `resume.mode: none` requires `--force`; a strict-manifest mismatch refuses to run. |
+| **Supervision loop, end to end** | `test_integration_local.py` (22 tests) | Driven against a stand-in evaluator: full sweep exits 0; a re-run skips completed routes without re-executing them; a simulated interruption re-runs exactly the missing routes; the seed reaches the child identically across 3 workers; workers get disjoint, non-overlapping ports; a route that never writes a record exhausts the **infra** budget without touching the record budget and exits 1; an unfinalized checkpoint counts as infra; a retryable record is retried then accepted as the result; TickRuntime is not retried by default; a flaky route recovers; a hanging route is killed by the wall clock; `sensors were invalid` aborts the sweep at ≤1 route; a restart does not buy a fresh budget; a worker is quarantined; a busy port block is a preflight error with nothing executed and its holder left running; `--dry-run` writes no report and leaves a simulator on the block alone; `resume.mode: none` requires `--force`; a strict-manifest mismatch refuses to run. |
 
 Also verified by hand:
 
@@ -443,6 +443,19 @@ Found by the first real ML model to run through this runner (TFPP, seed 42), 14 
 Note the interaction: `killed_budget` sounds like the budget that governs a killed route, but a
 wall-clock kill is charged to `attempts_infra`, so `killed_budget` never applies to a hang. That
 is unchanged and still worth knowing when reading a ledger.
+
+### Fixed 2026-10-03 — port-block ownership
+
+Found on 2026-10-03, while reading the shutdown path.
+
+1. **A run that never took its port block still reaped it.** Shutdown sends SIGTERM, then
+   SIGKILL, to every CARLA of this user whose command line names a port in the block. A
+   `--dry-run` skips the startup probe but still shut the backend down, and so did a run that
+   was refused because the block was busy. Either one, pointed at the config of a sweep running
+   from another terminal, killed that sweep's simulator mid-route. Shutdown now reaps only after
+   the startup probe found the block free (or the probe was disabled). Regression tests:
+   `test_dry_run_leaves_a_simulator_on_the_block_alone`, and a holder check added to
+   `test_busy_port_block_is_a_preflight_error_not_a_silent_shift`.
 | Windows / macOS | `/proc` scanning and `killpg` are Linux-only. | Out of scope; CARLA + this benchmark are Linux. |
 
 ---

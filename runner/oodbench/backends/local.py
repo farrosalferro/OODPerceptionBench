@@ -74,6 +74,10 @@ class LocalBackend(Backend):
         }
         self._open_files: Dict[int, List] = {}
         self._port_release: Dict[int, _PortRelease] = {}
+        # Whether this run has taken its port block: set once preflight finds it free, or when
+        # the operator disables the probe and so asserts the block is theirs. Until then a CARLA
+        # on these ports belongs to someone else, and shutdown must not reap it.
+        self._owns_ports = False
 
     # -- lifecycle ----------------------------------------------------------------------
     def preflight(self) -> None:
@@ -88,6 +92,7 @@ class LocalBackend(Backend):
                 "is given, so an occupied port can put two workers on one simulator without "
                 "erroring. Only disable this if you know the block is yours."
             )
+            self._owns_ports = True
             return
 
         busy = ports_mod.probe_pairs(self.pairs)
@@ -99,6 +104,7 @@ class LocalBackend(Backend):
                 f"runs end up sharing a simulator. Free those ports, or move ports.rpc_base / "
                 f"ports.tm_base in the config."
             )
+        self._owns_ports = True
         self.log.info("port preflight OK: %d ports free across %d worker(s)",
                       sum(len(p.all_ports) for p in self.pairs), len(self.pairs))
 
@@ -400,6 +406,11 @@ class LocalBackend(Backend):
             time.sleep(cooldown)
 
     def shutdown(self) -> None:
+        # Reaping by port is safe only for a block this run took (DESIGN.md section 7). A dry run
+        # never takes it and a refused run never got it, so the CARLA found there is someone
+        # else's -- typically the sweep the dry run was previewing, killed mid-route.
+        if not self._owns_ports:
+            return
         for worker in range(self.concurrency):
             try:
                 self.cleanup_worker(worker)
