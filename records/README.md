@@ -398,8 +398,8 @@ result against the committed frozen artefacts.
 - Seeds 42, 43, 44 — the paper's 3-seed average-per-route. Seed 42 is derived
   independently from the raw result tree and validated cell-for-cell against the
   frozen paper CSVs; seeds 43/44 mirror the frozen eval (the authoritative 3-seed
-  analysis snapshot). PDM-Lite (ceiling) and the OOD-collision metric are
-  seed-42-based; Driving-Score is full 3-seed. See `SCHEMA.md` and the `seed_note`
+  analysis snapshot). Only PDM-Lite (the ceiling reference) is seed-42-only;
+  Driving-Score and the OOD-collision metric are full 3-seed. See `SCHEMA.md` and the `seed_note`
   in `*.meta.json`.
 - Nothing was re-simulated and nothing was re-cooked to produce these records.
 - The published CSV, parquet and `meta.json` were all written by one invocation

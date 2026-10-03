@@ -245,11 +245,9 @@ Each directory has its own `README.md` stating exactly what belongs there.
 
 - **Three seeds: 42, 43, 44.** The baseline records and the paper's headline are the 3-seed
   average-per-route over these seeds. Reproduce with base `seed: 42` and `repetitions: 3` (the
-  runner mints 42/43/44). Two scope notes: the privileged ceiling model (PDM-Lite) is
-  seed-42-only by design, and the OOD-collision (OOD-hit-rate) metric is seed-42-based for most
-  cells — it mirrors the paper's frozen attribution, which was run per-route on the extra seeds
-  (fully for UniAD, a few re-run routes elsewhere). The Driving-Score statistics use all three
-  seeds.
+  runner mints 42/43/44). One scope note: only the privileged ceiling model (PDM-Lite) is
+  seed-42-only, by design. Driving Score and the OOD-collision (OOD-hit-rate) metric are full
+  3-seed (see [`records/SCHEMA.md`](records/SCHEMA.md)).
 - **Unit of aggregation** is the **(model, category) cell** — 17 × 3 = 51 cells.
 - **Within a cell**, pairs are formed on `(scenario, route, seed)`, prop variants are averaged
   per side, and a paired Wilcoxon signed-rank test is run on reference-vs-visual and
