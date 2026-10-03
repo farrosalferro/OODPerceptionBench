@@ -9,8 +9,8 @@
 > single routes, two 8-route/two-worker sweeps with one-GPU stacking and port isolation observed
 > live, a real Ctrl-C/reap/resume cycle, and three independent nine-route PDM-Lite golden
 > replicates. The SLURM backend is now validated on a real scheduler at two-way concurrency (one
-> full route category, seed 42). **The full 475-route set has never been run and multi-GPU mapping
-> is unproven** — read `STATUS.md` §2 before trusting it with GPU-hours.
+> full route category, seed 42), one GPU per job. **The full 475-route set has never been run, and
+> local multi-GPU mapping is unproven** — read `STATUS.md` §2 before trusting it with GPU-hours.
 
 Evaluate a CARLA Leaderboard 2.0 agent on the OOD-PerceptionBench route set, on one machine or
 on a SLURM cluster, from a single configuration file.
@@ -73,8 +73,9 @@ python run_benchmark.py --config my_config.yaml
    python run_benchmark.py --config my_config.yaml --workers 4
    ```
 
-   Budget roughly **0.12 GPU-hours per route**, so ≈ 58 GPU-hours for the full 475-route set.
-   At 4-way parallelism that is about 15 hours.
+   Budget roughly **0.14 GPU-hours per route**, so ≈ 67 GPU-hours for the full 475-route set,
+   per model and seed. At 4-way parallelism that is about 17 hours. (Measured: 0.136 for one
+   inference model over one category; see [`STATUS.md`](STATUS.md) H8.)
 
 Interrupt with `Ctrl-C` at any point. Re-running the same command resumes: completed routes are
 skipped and retry budgets carry over.
@@ -256,8 +257,11 @@ result-shaped artifact that was actually produced by infrastructure. Which budge
 charges is decided by **how the attempt ended**, never by what happens to be on disk — the full
 table is normative in `DESIGN.md` §6A.
 
-`worker_quarantine_after` consecutive infra failures pull a worker from the pool: one worker
-failing while others progress is the signature of a wedged GPU.
+`worker_quarantine_after` consecutive infra failures on one worker slot pull that slot from the
+pool. Two causes produce this: a wedged GPU, or a port block that stays occupied (including
+`TIME_WAIT`). A `TIMEOUT` does not count toward the streak. A final record resets it, except a
+crash-type record left by an attempt that ended abnormally, which leaves the streak unchanged
+(`DESIGN.md` §6A.5). Only local backends have stable slots; SLURM workers are never quarantined.
 
 `infra_budget` is the one budget that never settles a route: exhausting it means *we do not know
 this route's answer*, so the run exits 1 rather than presenting whatever is on disk as a result.

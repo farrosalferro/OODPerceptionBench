@@ -104,8 +104,8 @@ is below; this file carries the parts a script cannot judge.
 
 - Tier C (re-running the 17 baselines) — deferred to `contrib/`.
 - Multi-seed records — v0.9 ships all three seeds (42/43/44), matching the paper's 3-seed
-  average-per-route headline. (PDM-Lite ceiling and the OOD-collision metric are seed-42-based;
-  see the records `SCHEMA.md`.)
+  average-per-route headline. (Only the PDM-Lite ceiling is seed-42-only; Driving-Score and the
+  OOD-collision metric are full 3-seed — see the records `SCHEMA.md`.)
 - Replacement assets for the twelve non-redistributable props — that is v1.0, and it requires a
   re-run and a re-stamp.
 - Accepting third-party result rows into `records/` — governance deferred to v1.0.

@@ -10,7 +10,8 @@
 > to the table in the paper. The local evaluation runner has now been exercised against CARLA
 > 0.9.15 on one RTX 3090, and a measured nine-route PDM-Lite acceptance golden ships. The SLURM
 > backend is now validated on a real scheduler at two-way concurrency (one full route category,
-> seed 42). That does **not** validate the full 475-route scale or cross-GPU placement.
+> seed 42), where concurrent jobs ran on distinct physical GPUs (one GPU per job). That does
+> **not** validate the full 475-route scale, and local multi-GPU mapping is unproven.
 >
 > A `v0.9.0` tag, a Zenodo DOI, and a citable record arrive when the paper goes to arXiv.
 
@@ -44,8 +45,8 @@ average-per-route figures (seeds 42/43/44).
 
 > **This is v0.9.0, and it corresponds to arXiv v1 of the paper.**
 >
-> v1.0 will correspond to arXiv v2. Between them, two pedestrian props and one static prop are
-> being replaced for licensing reasons and their routes re-run. **Scores from v0.9 and v1.0 are
+> v1.0 will correspond to arXiv v2. Between them, the OOD props that cannot be redistributed
+> ([`NOTICE`](NOTICE) §3) are being replaced and their routes re-run. **Scores from v0.9 and v1.0 are
 > not comparable on the affected props and must never be pooled into one table.** Every artifact
 > in this repository carries this stamp — see [`VERSION`](VERSION).
 
@@ -59,7 +60,7 @@ average-per-route figures (seeds 42/43/44).
 | Content pack | 6 of 18 OOD props | replacement props for the other 12 |
 | Acceptance harness (`tests/`) | ✅ assertions A1–A4 | ✅ A1–A4 |
 | Acceptance goldens | measured PDM-Lite bundle for the 9-route smoke split | regenerate for v1.0 |
-| Zenodo DOI | — | ✅ |
+| Zenodo DOI | ✅ | ✅ |
 
 > **v0.9 ships `tests/goldens/pdmlite_seed42_v0.9.golden.json`.** It was measured on 2026-08-12
 > from three sequential, forced, one-worker PDM-Lite replicates with separate output roots on
@@ -245,11 +246,9 @@ Each directory has its own `README.md` stating exactly what belongs there.
 
 - **Three seeds: 42, 43, 44.** The baseline records and the paper's headline are the 3-seed
   average-per-route over these seeds. Reproduce with base `seed: 42` and `repetitions: 3` (the
-  runner mints 42/43/44). Two scope notes: the privileged ceiling model (PDM-Lite) is
-  seed-42-only by design, and the OOD-collision (OOD-hit-rate) metric is seed-42-based for most
-  cells — it mirrors the paper's frozen attribution, which was run per-route on the extra seeds
-  (fully for UniAD, a few re-run routes elsewhere). The Driving-Score statistics use all three
-  seeds.
+  runner mints 42/43/44). One scope note: only the privileged ceiling model (PDM-Lite) is
+  seed-42-only, by design. Driving Score and the OOD-collision (OOD-hit-rate) metric are full
+  3-seed (see [`records/SCHEMA.md`](records/SCHEMA.md)).
 - **Unit of aggregation** is the **(model, category) cell** — 17 × 3 = 51 cells.
 - **Within a cell**, pairs are formed on `(scenario, route, seed)`, prop variants are averaged
   per side, and a paired Wilcoxon signed-rank test is run on reference-vs-visual and

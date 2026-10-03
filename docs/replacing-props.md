@@ -434,13 +434,14 @@ Re-running is only needed for the routes that reference the prop you replaced.
 
 | Category | Routes per prop | Scenarios spanned | ≈ GPU-h per prop, one model | ≈ GPU-h per prop, all 17 baselines |
 |---|---|---|---|---|
-| vehicle | 27 | 6 | ~3.2 | ~55 |
-| pedestrian | 18 | 4 | ~2.2 | ~37 |
-| static | 10 | 2 | ~1.2 | ~20 |
+| vehicle | 27 | 6 | ~3.8 | ~64 |
+| pedestrian | 18 | 4 | ~2.5 | ~43 |
+| static | 10 | 2 | ~1.4 | ~24 |
 
-Basis: ≈0.12 GPU-h per route, measured on a 4-parallel sweep of the 243-route vehicle category.
-Replacing all twelve and re-running all seventeen published baselines is ≈485 GPU-h. Replacing all
-twelve for **your own model only** is ≈29 GPU-h.
+Basis: ≈0.14 GPU-h per route, one seed (measured 0.136 for one model over the 70-route static
+category; see [`runner/STATUS.md`](../runner/STATUS.md) H8). Replacing all twelve and re-running
+all seventeen published baselines is ≈566 GPU-h. Replacing all twelve for **your own model only**
+is ≈33 GPU-h.
 
 You do not need to re-run our seventeen published baselines unless you want cross-model comparison
 *on your substituted props* — our records for those props were produced with different meshes and

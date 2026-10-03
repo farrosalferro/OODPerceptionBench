@@ -57,7 +57,7 @@ other 92 shift-level routes. The remaining 238 routes are **not runnable at v0.9
 |---|---|
 | [`INSTALL.md`](INSTALL.md) | install, verify, uninstall, rebuild — **including the `tar --keep-newer-files` trap** |
 | [`ATTRIBUTION.md`](ATTRIBUTION.md) | per-asset author, licence, source link; the required attribution strings |
-| [`WALKERFACTORY_DECISION.md`](WALKERFACTORY_DECISION.md) | why a base-content asset has to ship, and the nine phantom blueprint IDs it creates |
+| [`WALKERFACTORY_DECISION.md`](WALKERFACTORY_DECISION.md) | why a base-content asset has to ship |
 | [`SHA256SUMS`](SHA256SUMS) | checksums of the three tarballs — verify before installing |
 | [`MANIFEST.tsv`](MANIFEST.tsv) | every shipped file: path, sha256, size, owning asset, licence |
 | [`tools/verify_pack.py`](tools/verify_pack.py) | post-install verification against a live CARLA server. **Run it.** |

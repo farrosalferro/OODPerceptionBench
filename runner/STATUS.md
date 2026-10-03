@@ -306,7 +306,7 @@ observed;
 | H5 | **CLOSED — 2026-08-11** | Live listener and generated-job observations showed the evaluator retained each configured free RPC/TM base exactly; no silent relocation crossed a worker window. | Only the local backend was measured. |
 | H6 | **CLOSED — 2026-08-12** | Ctrl-C exited 3 after writing state/report; interrupted routes charged no retry axis and stayed unfinished. Resume ran exactly the unfinished routes, then a third invocation launched nothing. | None for the measured local two-worker case. |
 | H7 | **CLOSED — 2026-08-11/12** | Three real `Failed - TickRuntime` records were settled and reported complete at the configured zero retry budget. Eight deliberate setup failures each charged exactly one record attempt; rerun changed no counters and still exited 0 with all routes settled. | Hard-death/fault-pattern cases were not induced on hardware. |
-| H8 | **OPEN** | The largest run was nine smoke routes. Eight-route constant-velocity sweeps measured 0.044–0.079 physical GPU-hours/route. | The full 475-route run and the ~0.12 GPU-h/route figure for an inference model remain unvalidated. |
+| H8 | **PARTIAL — 2026-08-13** | One inference model (TFPP) ran the full 70-route static category, seed 42, as four concurrent one-GPU jobs on an RTX 6000 Ada node: **0.136 GPU-h/route** measured. A shared workstation GPU measured 0.211 on a partial run of the same category. Eight-route constant-velocity sweeps measured 0.044–0.079. | Budget ≈0.14 GPU-h/route (≈67 GPU-h for 475 routes, per model and seed). The full 475-route run is unmeasured, and the figure is one model on one category; other models and categories may differ. |
 | H9 | **CLOSED — 2026-08-15** | The repaired SLURM backend ran a full route category (70 routes, seed 42) on a real scheduler at two concurrent jobs: every route settled with a genuine final checkpoint, concurrent jobs used distinct physical GPUs with the scheduler's CUDA allocation preserved and each job's configured Vulkan adapter selected, held disjoint RPC+TM ports, and every job was reaped with no orphan. SLURM statuses and §6A axes match the local backend for the same nine routes and seed. | Validated at two-way concurrency on one node. The full 475-route scale and larger multi-node fan-out are unmeasured, and a transient simulator freeze (the "no liveness probe" gap in §3) is only caught by `route_timeout_s` — absorbed by the infra-retry budget, but with no early detector. |
 | H10 | **PARTIAL — 2026-08-11/12** | A fresh GitHub clone ran setup twice (26/26 patches, idempotent), 222 runner tests, a strict 475-route dry run, real smoke routes, and the nine-route PDM-Lite golden/acceptance flow with every path supplied by config. | The host still had the maintainers' internal mounts available; the stronger “those mounts do not exist” portability proof must be repeated externally. |
 
@@ -341,6 +341,29 @@ observed;
 > the infra-retry budget absorbs the transient and the route settles on a later attempt, but a
 > long, generous `route_timeout_s` makes each freeze expensive. Size `infra_budget` and
 > `route_timeout_s` for your agent. The local backend is unaffected by any of the above.
+>
+> **Known SLURM residuals (open; a fix is planned).** Three rare paths are not yet handled
+> cleanly. None affects the local backend.
+>
+> - **A job the runner cannot identify keeps running.** If `sbatch` accepts a job but prints no
+>   usable job id, or prints a malformed one and the runner's `scancel` of that job is not
+>   confirmed within 60 s, the run stops with an error. That job may still be running
+>   unsupervised, and the route's previous checkpoint was set aside in memory and is lost. To
+>   recover: find the job by name (`oodbench-<route stem>`, as in the newest `.sbatch` script the
+>   run wrote) with `squeue -u $USER -n <name>`, `scancel` it, wait until it has left the queue,
+>   then restore that route's checkpoint from a backup, or delete whatever the cancelled job left
+>   at that path so the route runs again. Then resume.
+> - **Missing accounting can be charged to the model.** If `squeue` fails, or `sacct` returns
+>   nothing (accounting lag), just as a job ends, the attempt settles as an ordinary exit with the
+>   detail `SLURM state unknown`. A job killed by a signal in that window is then charged to the
+>   model's record budget instead of the bounded infrastructure axis. If a route's reason reads
+>   `SLURM state unknown`, check the job with `sacct -j <id>`; if it was an infrastructure
+>   failure, delete that route's checkpoint and resume so it runs again.
+> - **Queue time can be recorded as runtime.** A job that finishes before the runner ever sees it
+>   `RUNNING` keeps a start time taken before `sbatch`, so its recorded duration includes the
+>   time it waited in the queue. This changes no settlement and no `route_timeout_s` decision;
+>   only the persisted duration figures are inflated. For cost estimates, use `sacct`'s
+>   `Elapsed` for the job instead.
 
 ### Hardware-validation measurement notes
 
@@ -361,9 +384,9 @@ the sweep exited 1, and recovery needed a manual `--retry-infra-exhausted`. Freq
 now uses the schema defaults (3/3); see the comment there for the reasoning.
 
 Throughput, for planning only: **0.044–0.079 physical GPU-hours per route** across the two
-sweeps. That is *below* the 0.12 planning figure, but it was measured with the constant-velocity
-reference agent, which does no inference — it does **not** confirm the figure for a real model,
-and should not be quoted as if it did.
+sweeps, measured with the constant-velocity reference agent, which does no inference. For a real
+model, see H8: TFPP measured 0.136 GPU-h/route over the 70-route static category on a separate
+multi-GPU node, so budget ≈0.14.
 
 **Remaining validation order** (cheapest first, each gates the next):
 
@@ -371,8 +394,8 @@ and should not be quoted as if it did.
    exist. Closes the remaining H10 wording.
 2. Repeat the two-worker live GPU observation on a host with at least two physical GPUs. Closes
    H3 if agents and simulators spread together.
-3. Run a real inference model on one category, then the full 475-route set if stable. Measures
-   the remaining H8 scale and throughput claim.
+3. A real inference model has run one category (H8). Run the full 475-route set to measure the
+   remaining H8 scale claim.
 4. SLURM is repaired, reviewed, and validated at category scale (H9, 2026-08-15). What remains for
    it is the full 475-route scale and larger multi-node fan-out, and an early liveness probe so a
    transient simulator freeze need not wait out `route_timeout_s`.
