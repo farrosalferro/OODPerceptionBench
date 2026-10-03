@@ -9,8 +9,8 @@
 > single routes, two 8-route/two-worker sweeps with one-GPU stacking and port isolation observed
 > live, a real Ctrl-C/reap/resume cycle, and three independent nine-route PDM-Lite golden
 > replicates. The SLURM backend is now validated on a real scheduler at two-way concurrency (one
-> full route category, seed 42). **The full 475-route set has never been run and multi-GPU mapping
-> is unproven** — read `STATUS.md` §2 before trusting it with GPU-hours.
+> full route category, seed 42), one GPU per job. **The full 475-route set has never been run, and
+> local multi-GPU mapping is unproven** — read `STATUS.md` §2 before trusting it with GPU-hours.
 
 Evaluate a CARLA Leaderboard 2.0 agent on the OOD-PerceptionBench route set, on one machine or
 on a SLURM cluster, from a single configuration file.

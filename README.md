@@ -10,7 +10,8 @@
 > to the table in the paper. The local evaluation runner has now been exercised against CARLA
 > 0.9.15 on one RTX 3090, and a measured nine-route PDM-Lite acceptance golden ships. The SLURM
 > backend is now validated on a real scheduler at two-way concurrency (one full route category,
-> seed 42). That does **not** validate the full 475-route scale or cross-GPU placement.
+> seed 42), where concurrent jobs ran on distinct physical GPUs (one GPU per job). That does
+> **not** validate the full 475-route scale, and local multi-GPU mapping is unproven.
 >
 > A `v0.9.0` tag, a Zenodo DOI, and a citable record arrive when the paper goes to arXiv.
 
