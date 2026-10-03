@@ -146,6 +146,29 @@ def test_version_stamp_disagreeing_with_filesystem_fails(checker, monkeypatch, t
     assert "goldens_present" in why
 
 
+def test_missing_version_stamp_fails(checker, monkeypatch, tmp_path):
+    root = _make_repo(str(tmp_path), bundles=0, cell="none", declared=False)
+    os.remove(os.path.join(root, "tests", "VERSION"))
+    state, why = _verdict(checker, monkeypatch, root)
+    assert state == checker.TODO
+    assert "tests/VERSION is missing" in why
+
+
+@pytest.mark.parametrize("readme", ["| Feature | v0.9 | v1.0 |\n|---|---|---|\n", None])
+def test_readme_without_the_goldens_row_fails(checker, monkeypatch, tmp_path, readme):
+    # With no row there is nothing to compare, and the check used to pass anyway.
+    root = _make_repo(str(tmp_path), bundles=0, cell="none", declared=False)
+    path = os.path.join(root, "README.md")
+    if readme is None:
+        os.remove(path)
+    else:
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(readme)
+    state, why = _verdict(checker, monkeypatch, root)
+    assert state == checker.TODO
+    assert "no '| Acceptance goldens' row" in why
+
+
 def test_the_real_repository_passes(checker):
     state, why = checker._goldens_claim_is_honest()
     assert state == checker.PASS, why

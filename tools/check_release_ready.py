@@ -161,13 +161,17 @@ def _goldens_claim_is_honest() -> tuple[str, str]:
     no bundle means the v0.9 cell must say "none"; a bundle means the cell must advertise a
     measured bundle and state its size as "N-route". Every real bundle must then be readable,
     all of them must cover the same number of routes (one cell describes one split), and that
-    number must be N. Tests: tools/tests/test_check_release_ready.py.
+    number must be N. A claim that cannot be found cannot be checked, so a missing
+    tests/VERSION or a README without the row fails too. Tests:
+    tools/tests/test_check_release_ready.py.
     """
     n = _goldens_present()
     problems: list[str] = []
 
     version_path = os.path.join(REPO, "tests", "VERSION")
-    if os.path.isfile(version_path):
+    if not os.path.isfile(version_path):
+        problems.append("tests/VERSION is missing, so goldens_present cannot be checked")
+    else:
         txt = open(version_path, encoding="utf-8").read()
         m = re.search(r"^goldens_present:\s*(\S+)", txt, re.M)
         if not m:
@@ -179,10 +183,12 @@ def _goldens_claim_is_honest() -> tuple[str, str]:
                                 f"but {n} bundle(s) exist")
 
     readme = os.path.join(REPO, "README.md")
+    rows = 0
     if os.path.isfile(readme):
         for line in open(readme, encoding="utf-8"):
             if not line.lstrip().startswith("| Acceptance goldens"):
                 continue
+            rows += 1
             cells = [c.strip() for c in line.strip().strip("|").split("|")]
             v09 = cells[1] if len(cells) > 1 else ""
             if n == 0 and "none" not in v09.lower():
@@ -208,6 +214,9 @@ def _goldens_claim_is_honest() -> tuple[str, str]:
                 elif actual and int(claimed.group(1)) not in actual:
                     problems.append(f"README claims a {claimed.group(1)}-route golden but the "
                                     f"bundle(s) cover {', '.join(map(str, actual))} route(s)")
+    if not rows:
+        problems.append("README.md has no '| Acceptance goldens' row, so its goldens claim "
+                        "cannot be checked")
     return (PASS if not problems else TODO), ("; ".join(problems) if problems else
                                               f"{n} bundle(s); README and tests/VERSION agree")
 
