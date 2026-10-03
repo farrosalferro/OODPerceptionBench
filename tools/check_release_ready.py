@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import json
 import os
 import re
 import subprocess
@@ -123,13 +124,32 @@ def _goldens_present() -> int:
                 if not os.path.basename(p).startswith("EXAMPLE")])
 
 
+def _golden_route_counts() -> set[int]:
+    """split.n_routes of every real bundle (EXAMPLE excluded); unreadable bundles are skipped."""
+    counts: set[int] = set()
+    for p in glob.glob(os.path.join(REPO, "tests", "goldens", "*.golden.json")):
+        if os.path.basename(p).startswith("EXAMPLE"):
+            continue
+        try:
+            with open(p, encoding="utf-8") as fh:
+                n = json.load(fh).get("split", {}).get("n_routes")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if isinstance(n, int):
+            counts.add(n)
+    return counts
+
+
 def _goldens_claim_is_honest() -> tuple[str, str]:
     """The README feature table and tests/VERSION must agree with the filesystem.
 
     The v0.9 feature table used to advertise `Acceptance goldens | base level only`
     while `tests/goldens/` held nothing but a self-described non-golden with an
     all-zero split hash. A shipped feature table is a promise; this makes the
-    promise mechanically checkable so it cannot drift back.
+    promise mechanically checkable so it cannot drift back. It checks both directions:
+    no bundle means the v0.9 cell must say "none"; a bundle means the cell must advertise a
+    measured bundle whose "N-route" count matches the bundle's split.n_routes.
+    Tests: tools/tests/test_check_release_ready.py.
     """
     n = _goldens_present()
     problems: list[str] = []
@@ -156,6 +176,15 @@ def _goldens_claim_is_honest() -> tuple[str, str]:
             if n == 0 and "none" not in v09.lower():
                 problems.append("README feature table advertises acceptance goldens at v0.9, "
                                 "but no golden bundle exists")
+            if n > 0:
+                if "none" in v09.lower() or "measured" not in v09.lower():
+                    problems.append(f"{n} golden bundle(s) exist but the README feature table's "
+                                    f"v0.9 cell does not advertise a measured bundle ({v09!r})")
+                claimed = re.search(r"(\d+)-route", v09)
+                actual = sorted(_golden_route_counts())
+                if claimed and actual and int(claimed.group(1)) not in actual:
+                    problems.append(f"README claims a {claimed.group(1)}-route golden but the "
+                                    f"bundle(s) cover {', '.join(map(str, actual))} route(s)")
     return (PASS if not problems else TODO), ("; ".join(problems) if problems else
                                               f"{n} bundle(s); README and tests/VERSION agree")
 

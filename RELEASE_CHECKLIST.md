@@ -36,7 +36,7 @@ is below; this file carries the parts a script cannot judge.
 - [x] `docs/` — `replacing-props.md`, `ASSET_TRAPS.md`, the three `import_procedure_*.md`
       and the parameterised `stages/` scripts
 - [x] `classifier/` — the three dimension-checker notebooks (the admissibility rule itself)
-- [x] `tests/` — smoke split + harness + self-tests (**34 tests green**) plus the measured
+- [x] `tests/` — smoke split + harness + self-tests (**48 tests green**) plus the measured
       nine-route PDM-Lite v0.9 golden
 - [x] `assets/` — install / verify / attribution / checksums for the six shippable props
 
@@ -95,8 +95,10 @@ is below; this file carries the parts a script cannot judge.
       not run on the repaired history yet. Do not silently count the old red schedule as green.
 - [ ] **The numpy pin decision reviewed.** Upstream has merged a numpy ≥ 1.24 compatibility fix
       *after* our pinned SHA. We stay on the older commit for reproducibility, which means users
-      on modern numpy must pin `numpy<1.24`. If the runner or the environment documentation ends
-      up specifying a numpy version, it has to agree with `patches/UPSTREAM.txt` — verified, all
+      must pin `numpy==1.23.5` (below 1.24 for Bench2Drive's aliases, at least 1.23.5 for
+      upstream's `scipy==1.14.1`), shipped as `env/requirements-pdmlite.txt`. Any other numpy
+      version in the runner or environment documentation has to agree with
+      `patches/UPSTREAM.txt` and that file — verified, all
       26 patches also apply to the newer tip, so advancing the pin is available if the
       reproducibility argument is judged to be outweighed.
 

@@ -118,8 +118,27 @@ else
   APPLY=1
 fi
 
+# env/requirements-pdmlite.txt is upstream's team_code/requirements.txt with ONE line changed
+# (numpy). A copy can drift from what it copies, so prove it has not: every non-comment line
+# except numpy must equal upstream's file at the pinned SHA, and numpy must be the pinned value.
+check_pdmlite_requirements() {
+  local ours="$REPO_ROOT/env/requirements-pdmlite.txt" want_numpy="numpy==1.23.5" up
+  [[ -f "$ours" ]] || die "missing $ours"
+  up="$("$GIT" show "${UPSTREAM_SHA}:team_code/requirements.txt" 2>/dev/null)" \
+    || die "cannot read team_code/requirements.txt at $UPSTREAM_SHA"
+  grep -qx "$want_numpy" "$ours" || die "$ours must pin exactly $want_numpy"
+  grep -q '^numpy==' <<<"$up" || die "upstream requirements.txt no longer pins numpy; re-derive $ours"
+  if ! diff <(grep -v '^numpy==' <<<"$up" | sed '/^[[:space:]]*$/d') \
+            <(grep -v -e '^#' -e '^numpy==' "$ours" | sed '/^[[:space:]]*$/d') >/dev/null; then
+    die "env/requirements-pdmlite.txt differs from upstream team_code/requirements.txt at
+       $UPSTREAM_SHA on a line other than numpy. Re-derive it from upstream; see its header."
+  fi
+  info "  OK  env/requirements-pdmlite.txt = upstream team_code/requirements.txt except $want_numpy"
+}
+
 if [[ $VERIFY_ONLY -eq 1 ]]; then
   [[ $already -eq ${#PATCHES[@]} ]] || die "verify-only: tree is not fully patched ($already/${#PATCHES[@]})"
+  check_pdmlite_requirements
   info "verify-only: OK"
   exit 0
 fi

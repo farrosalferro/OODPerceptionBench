@@ -18,6 +18,7 @@ third-party packages.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -33,6 +34,9 @@ SPLIT = os.path.join(HERE, "smoke", "SMOKE_SPLIT.tsv")
 CHECK = os.path.join(HERE, "check_acceptance.py")
 MAKE_GOLDEN = os.path.join(HERE, "make_golden.py")
 MATERIALIZE = os.path.join(HERE, "smoke", "materialize.py")
+SCHEMA = os.path.join(HERE, "goldens", "golden_schema.json")
+SHIPPED_GOLDEN = os.path.join(HERE, "goldens", "pdmlite_seed42_v0.9.golden.json")
+ASSET_SUMS = os.path.join(REPO_ROOT, "assets", "SHA256SUMS")
 
 PY = sys.executable or "python3"
 
@@ -496,20 +500,91 @@ class TestGoldens(TempCase):
 
 
 # ---------------------------------------------------------------------------------------
+def make_agent_repo(root: str, entrypoint: str = "team_code/data_agent.py") -> tuple:
+    """A git checkout standing in for the reference agent's repository: one commit, clean."""
+    os.makedirs(os.path.join(root, os.path.dirname(entrypoint)), exist_ok=True)
+    with open(os.path.join(root, entrypoint), "w", encoding="utf-8") as fh:
+        fh.write("# synthetic reference agent\n")
+    env = dict(os.environ, GIT_AUTHOR_NAME="selftest", GIT_AUTHOR_EMAIL="selftest@invalid",
+               GIT_COMMITTER_NAME="selftest", GIT_COMMITTER_EMAIL="selftest@invalid")
+    for cmd in (["init", "-q"], ["add", "-A"], ["commit", "-q", "-m", "agent"]):
+        subprocess.run(["git", "-C", root, *cmd], check=True, env=env, capture_output=True)
+    sha = subprocess.run(["git", "-C", root, "rev-parse", "HEAD"], check=True,
+                         capture_output=True, text=True).stdout.strip()
+    return root, sha
+
+
+def write_env_provenance(rep_root: str, python: str = "3.10.15", numpy: str = "1.23.5",
+                         scipy: str = "1.14.1", carla="0.9.15",
+                         entrypoint: str = "/opt/cg/team_code/data_agent.py") -> None:
+    """The file the runner's preflight writes into every output root (schema 1)."""
+    d = os.path.join(rep_root, "_runner")
+    os.makedirs(d, exist_ok=True)
+    doc = {
+        "schema": 1,
+        "checked_at": "2026-10-03T00:00:00Z",
+        "python_executable": "/opt/envs/pdmlite/bin/python3",
+        "python_version": python,
+        "packages": {"numpy": numpy, "scipy": scipy, "carla": carla, "py_trees": "0.8.3"},
+        "agent_entrypoint": entrypoint,
+        "agent_import_ok": True,
+    }
+    with open(os.path.join(d, "env_provenance.json"), "w", encoding="utf-8") as fh:
+        json.dump(doc, fh)
+
+
+def read_asset_sums() -> list:
+    """(name, sha256) pairs from assets/SHA256SUMS, the content pack's source of truth."""
+    out = []
+    with open(ASSET_SUMS, encoding="utf-8") as fh:
+        for line in fh:
+            if line.strip():
+                sha, name = line.split(None, 1)
+                out.append((name.strip().lstrip("*"), sha))
+    return out
+
+
 class TestMakeGolden(TempCase):
-    def _args(self, out):
-        return ["--reference-agent", "synthetic", "--reference-agent-version", "selftest",
+    def setUp(self):
+        super().setUp()
+        self.agent_repo, self.agent_sha = make_agent_repo(self.path("agent"))
+
+    def rep(self, name: str, mutate=None, provenance: bool = True, **prov) -> str:
+        root = build_results(self.path(name), mutate=mutate)
+        if provenance:
+            write_env_provenance(root, **prov)
+        return root
+
+    def _args(self, out, archives=None):
+        archives = read_asset_sums() if archives is None else archives
+        args = ["--reference-agent", "synthetic",
+                "--reference-agent-repo", self.agent_repo,
+                "--reference-agent-url", "https://example.invalid/synthetic/carla_garage",
+                "--reference-agent-commit", self.agent_sha,
+                "--reference-agent-entrypoint", "team_code/data_agent.py",
                 "--carla-version", "0.9.15", "--content-pack-version", "v0.9",
                 "--routes-root", ROUTES_ROOT, "--out", out]
+        for name, sha in archives:
+            args += ["--content-pack-archive", f"{name}={sha}"]
+        return args
+
+    def build(self, *reps, archives=None, extra=()):
+        out = self.path("g", "x.golden.json")
+        argv = []
+        for r in reps:
+            argv += ["--replicate", r]
+        p = run(MAKE_GOLDEN, *argv, *self._args(out, archives), *extra)
+        doc = None
+        if p.returncode == 0:
+            with open(out, encoding="utf-8") as fh:
+                doc = json.load(fh)
+        return p, out, doc
 
     def test_builds_a_bundle_the_harness_then_accepts(self):
-        r1 = build_results(self.path("rep1"))
-        r2 = build_results(self.path("rep2"), mutate=lambda row: {"ds": 99.6})
-        out = self.path("g", "x.golden.json")
-        p = run(MAKE_GOLDEN, "--replicate", r1, "--replicate", r2, *self._args(out))
+        r1 = self.rep("rep1")
+        r2 = self.rep("rep2", mutate=lambda row: {"ds": 99.6})
+        p, out, doc = self.build(r1, r2)
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        with open(out, encoding="utf-8") as fh:
-            doc = json.load(fh)
         self.assertEqual(len(doc["routes"]), 9)
         self.assertAlmostEqual(doc["tolerance"]["max_observed_spread"], 0.4, places=3)
         self.assertAlmostEqual(doc["tolerance"]["driving_score_abs"], 1.0, places=3)
@@ -519,43 +594,162 @@ class TestMakeGolden(TempCase):
         self.assertEqual(p2.returncode, EXIT_PASS, p2.stdout + p2.stderr)
 
     def test_tolerance_is_derived_from_the_measured_spread(self):
-        r1 = build_results(self.path("rep1"), mutate=lambda row: {"ds": 100.0})
-        r2 = build_results(self.path("rep2"), mutate=lambda row: {"ds": 96.0})
-        out = self.path("g", "x.golden.json")
-        p = run(MAKE_GOLDEN, "--replicate", r1, "--replicate", r2, *self._args(out))
+        r1 = self.rep("rep1", mutate=lambda row: {"ds": 100.0})
+        r2 = self.rep("rep2", mutate=lambda row: {"ds": 96.0})
+        p, out, doc = self.build(r1, r2)
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        with open(out, encoding="utf-8") as fh:
-            doc = json.load(fh)
         self.assertAlmostEqual(doc["tolerance"]["max_observed_spread"], 4.0, places=3)
         self.assertAlmostEqual(doc["tolerance"]["driving_score_abs"], 8.0, places=3)
 
     def test_refuses_to_mint_a_golden_on_a_broken_install(self):
-        r1 = build_results(self.path("rep1"))
-        r2 = build_results(self.path("rep2"),
-                           mutate=lambda row: {"agent_type": "unknown"}
-                           if row["asset_class"] == "shipped_v0.9" else None)
-        out = self.path("g", "x.golden.json")
-        p = run(MAKE_GOLDEN, "--replicate", r1, "--replicate", r2, *self._args(out))
+        r1 = self.rep("rep1")
+        r2 = self.rep("rep2", mutate=lambda row: {"agent_type": "unknown"}
+                      if row["asset_class"] == "shipped_v0.9" else None)
+        p, out, _ = self.build(r1, r2)
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         self.assertIn("REFUSING TO WRITE", p.stdout)
         self.assertFalse(os.path.exists(out), "nothing may be written on refusal")
 
     def test_refuses_a_single_replicate_by_default(self):
-        r1 = build_results(self.path("rep1"))
-        out = self.path("g", "x.golden.json")
-        p = run(MAKE_GOLDEN, "--replicate", r1, *self._args(out))
+        p, _, _ = self.build(self.rep("rep1"))
         self.assertEqual(p.returncode, 2)
         self.assertIn("At least 2", p.stdout + p.stderr)
 
     def test_refuses_when_replicates_disagree_on_status(self):
-        r1 = build_results(self.path("rep1"))
-        r2 = build_results(self.path("rep2"),
-                           mutate=lambda row: {"status": "Perfect"}
-                           if row["category"] == "static" else None)
-        out = self.path("g", "x.golden.json")
-        p = run(MAKE_GOLDEN, "--replicate", r1, "--replicate", r2, *self._args(out))
+        r1 = self.rep("rep1")
+        r2 = self.rep("rep2", mutate=lambda row: {"status": "Perfect"}
+                      if row["category"] == "static" else None)
+        p, _, _ = self.build(r1, r2)
         self.assertEqual(p.returncode, 1)
         self.assertIn("disagree on status", p.stdout)
+
+    # ---- HV-07: the reference agent must be retrievable ------------------------------
+    def test_stamps_a_retrievable_reference_agent(self):
+        p, _, doc = self.build(self.rep("rep1"), self.rep("rep2"))
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        ra = doc["reference_agent"]
+        self.assertEqual(ra["commit"], self.agent_sha)
+        self.assertEqual(ra["version"], f"carla_garage@{self.agent_sha} team_code/data_agent.py")
+        self.assertEqual(ra["entrypoint"], "team_code/data_agent.py")
+        self.assertEqual(ra["repo"], "https://example.invalid/synthetic/carla_garage")
+        with open(os.path.join(self.agent_repo, "team_code", "data_agent.py"), "rb") as fh:
+            self.assertEqual(ra["entrypoint_sha256"], hashlib.sha256(fh.read()).hexdigest())
+
+    def test_refuses_a_dirty_agent_tree(self):
+        # The v0.9 golden ran untracked *_debug.py copies sitting next to the real agent. An
+        # untracked file is exactly what `git status --porcelain` catches and a commit sha does not.
+        with open(os.path.join(self.agent_repo, "team_code", "data_agent_debug.py"), "w") as fh:
+            fh.write("# local edit\n")
+        p, out, _ = self.build(self.rep("rep1"), self.rep("rep2"))
+        self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+        self.assertIn("data_agent_debug.py", p.stdout + p.stderr)
+        self.assertFalse(os.path.exists(out))
+
+    def test_refuses_an_agent_checkout_at_another_commit(self):
+        p, out, _ = self.build(self.rep("rep1"), self.rep("rep2"),
+                               extra=("--reference-agent-commit", "0" * 40))
+        self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+        self.assertFalse(os.path.exists(out))
+
+    def test_refuses_replicates_that_ran_a_different_entrypoint(self):
+        r1 = self.rep("rep1", entrypoint="/opt/cg/team_code/data_agent_debug.py")
+        p, out, _ = self.build(r1, self.rep("rep2"))
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("entrypoint", p.stdout + p.stderr)
+        self.assertFalse(os.path.exists(out))
+
+    # ---- HV-04: stamp the interpreter that RAN the routes, not the builder's -----------
+    def test_stamps_the_replicates_python_not_the_builders(self):
+        p, _, doc = self.build(self.rep("rep1", python="3.10.99"),
+                               self.rep("rep2", python="3.10.99"))
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        env = doc["environment"]
+        self.assertEqual(env["python"], "3.10.99")
+        self.assertEqual(env["python_packages"],
+                         {"numpy": "1.23.5", "scipy": "1.14.1", "carla": "0.9.15"})
+        blob = json.dumps(doc)
+        self.assertNotIn("/opt/", blob, "no interpreter or agent path may enter the bundle")
+
+    def test_refuses_replicates_with_different_pythons(self):
+        p, out, _ = self.build(self.rep("rep1", python="3.10.15"),
+                               self.rep("rep2", python="3.8.10"))
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("3.8.10", p.stdout + p.stderr)
+        self.assertFalse(os.path.exists(out))
+
+    def test_refuses_replicates_with_different_numpy(self):
+        p, out, _ = self.build(self.rep("rep1"), self.rep("rep2", numpy="1.23.0"))
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertFalse(os.path.exists(out))
+
+    def test_missing_provenance_requires_an_explicit_python(self):
+        r1 = self.rep("rep1", provenance=False)
+        r2 = self.rep("rep2", provenance=False)
+        p, out, _ = self.build(r1, r2)
+        self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+        self.assertIn("--replicate-python", p.stdout + p.stderr)
+        p, out, doc = self.build(r1, r2, extra=("--replicate-python", "3.10.15"))
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(doc["environment"]["python"], "3.10.15")
+
+    def test_explicit_python_must_agree_with_provenance(self):
+        p, out, _ = self.build(self.rep("rep1"), self.rep("rep2"),
+                               extra=("--replicate-python", "3.8.10"))
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertFalse(os.path.exists(out))
+
+    # ---- HV-06: one composite digest over several archives, with a stated rule ----------
+    def test_composite_is_independent_of_archive_order(self):
+        sums = read_asset_sums()
+        self.assertGreaterEqual(len(sums), 2)
+        p1, _, d1 = self.build(self.rep("rep1"), self.rep("rep2"), archives=sums)
+        self.assertEqual(p1.returncode, 0, p1.stdout + p1.stderr)
+        p2, _, d2 = self.build(self.rep("rep1"), self.rep("rep2"), archives=sums[::-1])
+        self.assertEqual(p2.returncode, 0, p2.stdout + p2.stderr)
+        self.assertEqual(d1["environment"]["content_pack_sha256"],
+                         d2["environment"]["content_pack_sha256"])
+        self.assertEqual(list(d1["environment"]["content_pack_archives"]),
+                         sorted(n for n, _ in sums))
+
+    def test_composite_equals_sha256_of_the_shipped_sums_file(self):
+        # The rule is "sha256 of the canonical SHA256SUMS text", so feeding the shipped
+        # assets/SHA256SUMS must reproduce `sha256sum assets/SHA256SUMS`. If this fails, either
+        # the file stopped being canonical (sorted, two spaces, LF) or the rule drifted.
+        with open(ASSET_SUMS, "rb") as fh:
+            want = hashlib.sha256(fh.read()).hexdigest()
+        p, _, doc = self.build(self.rep("rep1"), self.rep("rep2"), archives=read_asset_sums())
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(doc["environment"]["content_pack_sha256"], want)
+
+    def test_content_pack_sha256_is_only_a_cross_check(self):
+        p, out, _ = self.build(self.rep("rep1"), self.rep("rep2"),
+                               extra=("--content-pack-sha256", "f" * 64))
+        self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+        self.assertFalse(os.path.exists(out))
+
+    def test_new_bundle_validates_against_the_schema(self):
+        try:
+            import jsonschema
+        except ImportError:
+            self.skipTest("jsonschema not installed (pip install -r requirements-test.txt)")
+        p, _, doc = self.build(self.rep("rep1"), self.rep("rep2"))
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        with open(SCHEMA, encoding="utf-8") as fh:
+            jsonschema.validate(doc, json.load(fh))
+
+
+class TestGoldenSchema(unittest.TestCase):
+    def test_shipped_golden_still_validates(self):
+        # Provenance fields added after v0.9 are optional, so the bundle measured before they
+        # existed must keep validating against the schema.
+        try:
+            import jsonschema
+        except ImportError:
+            self.skipTest("jsonschema not installed (pip install -r requirements-test.txt)")
+        with open(SCHEMA, encoding="utf-8") as fh:
+            schema = json.load(fh)
+        with open(SHIPPED_GOLDEN, encoding="utf-8") as fh:
+            jsonschema.validate(json.load(fh), schema)
 
 
 if __name__ == "__main__":

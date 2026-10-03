@@ -30,16 +30,36 @@ leaderboard:
 agent:
   # PDM-Lite is the reference agent: privileged perception, so run-to-run variance reflects
   # the simulator rather than the model. See GENERATING.md section 0.
-  entrypoint: <path-to-pdmlite-agent.py>
-  config: <path-to-pdmlite-config-or-checkpoint>
+  #
+  # LOCKED: the TOP-LEVEL team_code/data_agent.py of the carla_garage checkout setup.sh
+  # patched, at the pinned commit and UNMODIFIED -- not Bench2Drive/leaderboard/team_code/,
+  # which is a different PDM-Lite variant. make_golden.py refuses to stamp a bundle unless
+  # `git status --porcelain -- team_code` is empty in that checkout, so leave no edited or
+  # untracked file (e.g. a *_debug.py copy) under team_code/.
+  entrypoint: <path-to-the-patched-carla_garage-checkout>/team_code/data_agent.py
+  config: ""          # PDM-Lite reads no config file; the value is only used as a log label.
   track: MAP
-  pythonpath: []
-  env: {}
+  # The planner loads team_code/speed_limits/*.npy by a path relative to the working
+  # directory, so the agent must run from the checkout root.
+  working_dir: <path-to-the-patched-carla_garage-checkout>
+  pythonpath:
+    - <path-to-the-patched-carla_garage-checkout>/team_code
+  env:
+    # LOCKED. Weather safety for THIS agent comes from DATAGEN being 0/unset: data_agent.py
+    # only shuffles the weather (and attaches data-collection sensors) when DATAGEN=1.
+    # Patch 430 does not cover it -- it patches the Bench2Drive data agent. Do not set
+    # SAVE_PATH either.
+    DATAGEN: "0"
 
 environment:
   activate:
     - <command to activate the environment PDM-Lite runs in>
-  python: python3
+  # MUST be an ABSOLUTE path to the interpreter of that environment, never a bare `python3`.
+  # The jobscript executes this value verbatim, and `conda activate` does not reliably win
+  # against an inherited PATH: a bare `python3` once resolved to a different system Python
+  # and that wrong version was stamped into a golden bundle. Build the environment with
+  # `pip install -r env/requirements-pdmlite.txt` on Python 3.10.
+  python: <absolute-path-to-that-environment>/bin/python3
 
 execution:
   backend: local

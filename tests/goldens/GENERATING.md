@@ -35,16 +35,50 @@ Any deterministic reference agent works. If you use a different one, say so in
 | CARLA | 0.9.15, the packaged build you will run the benchmark with |
 | Content pack | the v0.9 pack installed into that build — see `../../assets/INSTALL.md` |
 | Overlay | `setup.sh` run against the pinned upstream SHAs |
-| Agent | PDM-Lite, reachable through a runner config |
+| Agent | PDM-Lite from that same checkout, unmodified — see "The reference agent" below |
+| Python | 3.10, with `pip install -r ../../env/requirements-pdmlite.txt` (numpy 1.23.5) |
 | GPU | one is enough; the replicates are sequential by design |
 
-> **Use an explicit interpreter path everywhere below, not a bare `python3`.** `conda activate`
-> does not reliably win against an inherited `PATH`: on the first real golden run it silently
-> selected the system Python 3.8, which cannot `import carla`, and the replicate died as an
-> infrastructure failure rather than as a wrong-interpreter error. Set `environment.python` in
-> the config to the absolute interpreter, and invoke `make_golden.py` with **that same
-> interpreter** — the bundle stamps the interpreter that *built* it, so running the generator
-> under a different one records a version that never ran a route.
+> **Set `environment.python` to an absolute interpreter path, not a bare `python3`.** The
+> jobscript executes that value verbatim, and `conda activate` does not reliably win against an
+> inherited `PATH`: on the first real golden run it silently selected the system Python 3.8,
+> which cannot `import carla`, and the replicate died as an infrastructure failure rather than
+> as a wrong-interpreter error. The bundle's `environment.python` is read from each replicate's
+> `_runner/env_provenance.json` (written by the runner's preflight), not from the interpreter
+> that runs `make_golden.py`.
+
+### The reference agent
+
+The golden's agent is the **top-level** `team_code/data_agent.py` of the carla_garage checkout
+that `setup.sh` patched, at the pinned commit `beb3433407f42c1adced312b877a61fe04f338ba`, with no
+local edits. Anyone can fetch it:
+
+```bash
+git clone https://github.com/autonomousvision/carla_garage.git
+git -C carla_garage checkout --detach beb3433407f42c1adced312b877a61fe04f338ba
+```
+
+(`setup.sh` does exactly this.) It is **not** `Bench2Drive/leaderboard/team_code/data_agent.py`,
+which is a different PDM-Lite variant with its own `autopilot.py`.
+
+| Config key | Value | Why |
+|---|---|---|
+| `agent.entrypoint` | `<carla_garage>/team_code/data_agent.py` | the agent above |
+| `agent.working_dir` | `<carla_garage>` | the planner loads `team_code/speed_limits/*.npy` by a relative path |
+| `agent.pythonpath` | `[<carla_garage>/team_code]` | its sibling imports (`autopilot`, `config`, …) |
+| `agent.env` | `{DATAGEN: "0"}` | weather safety, see below |
+
+**Weather safety comes from `DATAGEN`, not from patch 430.** Patch 430 gates the weather shuffle
+in the *Bench2Drive* data agent only. The top-level agent shuffles the weather only when
+`DATAGEN=1` (`self.datagen = int(os.environ.get("DATAGEN", 0)) == 1` in `team_code/autopilot.py`,
+checked before `shuffle_weather()` in `team_code/data_agent.py`). The template sets
+`DATAGEN: "0"` explicitly so an inherited environment variable cannot turn it on.
+
+**Keep `team_code/` clean.** `make_golden.py` refuses to build a bundle when
+`git -C <carla_garage> status --porcelain -- team_code` prints anything. The v0.9 bundle was
+produced by untracked `*_debug.py` copies of the agent, which no one else could fetch; a commit
+sha cannot reveal that, `git status` can. `setup.sh` itself never writes under the top-level
+`team_code/` (all 26 patches target `Bench2Drive/`), and `__pycache__/` is ignored upstream.
 
 The content pack matters more than any other line in that table. **A golden generated against a
 build with a missing asset is worse than no golden**: it pins the broken value, and from then on
@@ -122,15 +156,45 @@ python3 make_golden.py \
   --replicate /scratch/smoke_rep2 \
   --replicate /scratch/smoke_rep3 \
   --reference-agent pdmlite \
-  --reference-agent-version <commit-or-tag-of-the-agent-you-ran> \
+  --reference-agent-repo <carla_garage> \
+  --reference-agent-commit beb3433407f42c1adced312b877a61fe04f338ba \
+  --reference-agent-entrypoint team_code/data_agent.py \
+  --reference-agent-url https://github.com/autonomousvision/carla_garage \
   --carla-version 0.9.15 \
   --content-pack-version v0.9 \
-  --content-pack-sha256 <sha256-of-the-pack-archive> \
+  $(awk '{printf " --content-pack-archive %s=%s", $2, $1}' ../assets/SHA256SUMS) \
+  --runner-version "$(git rev-parse HEAD)" \
   --gpu "<model>, driver <version>" \
   --out goldens/pdmlite_seed42_v0.9.golden.json
 ```
 
-What it does:
+Provenance it establishes before reading any result, refusing (nothing written) if it cannot:
+
+- **Agent.** `<carla_garage>` must be at `--reference-agent-commit`, the entrypoint must be a
+  tracked file, and `git status --porcelain -- team_code` must be empty. The bundle records
+  `repo` (a public URL, never a local path), the full `commit`, the `entrypoint`, its
+  `entrypoint_sha256`, and `version` = `carla_garage@<full sha> team_code/data_agent.py`.
+- **Interpreter.** Each replicate's `_runner/env_provenance.json` must exist and all of them must
+  agree on the Python version and package versions, and must have run the stated entrypoint. The
+  bundle stamps `environment.python` and `environment.python_packages` (numpy, scipy, and the
+  carla client if recorded) — never an interpreter path. For replicates produced by a runner
+  without that preflight, pass `--replicate-python X.Y.Z` (the version of `environment.python`
+  in the config); the package versions are then left unstamped. Any disagreement exits 1.
+- **Content pack.** One `--content-pack-archive NAME=SHA256` per archive, taken from
+  `assets/SHA256SUMS`. The bundle lists them in `environment.content_pack_archives` and sets
+  `environment.content_pack_sha256` to the composite:
+
+  ```text
+  composite = sha256( "".join(f"{sha256}  {name}\n" for name, sha256 sorted by name) )
+  ```
+
+  i.e. the sha256 of the canonical `SHA256SUMS` text (two spaces, LF line ends, sorted by
+  archive name in byte order). `assets/SHA256SUMS` is in that form, so the composite equals
+  `sha256sum assets/SHA256SUMS`, whatever order the flags are given in. `--content-pack-sha256`
+  is now only a cross-check: a value that differs from the composite is an error. The rule is
+  also written into `generated.notes`.
+
+What it then does with the results:
 
 1. Re-derives each route's expected blueprint from the XML — not from the split's own column, so
    a doctored split cannot lower the bar.
@@ -206,7 +270,8 @@ Regenerate whenever any of these change:
   comparable even where the blueprint id is unchanged);
 - the **route XMLs** — the harness hard-fails on a sha256 mismatch before comparing anything;
 - the **smoke split** — the bundle pins the split's sha256 and refuses to be used with another;
-- the **reference agent** version;
+- the **reference agent** version or entrypoint;
+- the **evaluation environment** (`env/requirements-pdmlite.txt`, or the Python version);
 - the **CARLA** version.
 
 The bundle carries `bundle_version`, `binds_to`, the split sha256, the content-pack version and
