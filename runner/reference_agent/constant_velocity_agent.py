@@ -8,7 +8,8 @@ and drives at a constant target speed with a trivial proportional controller.
 **It is a plumbing test, not a baseline.** It will crash, get blocked and score badly, which is
 fine: its job is to prove that CARLA starts on the right GPU, the route loads, the agent
 interface binds, criteria attach, and a finalized checkpoint JSON lands in the right place. Use
-it before spending ~58 GPU-hours on a real model.
+it before spending ≈67 GPU-hours (all 475 routes, one model, one seed; see ``STATUS.md`` H8) on a
+real model.
 
 The reference agent for *goldens* is PDM-Lite (privileged perception, stable), which is a
 separate deliverable.

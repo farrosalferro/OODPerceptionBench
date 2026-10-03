@@ -5,7 +5,8 @@
 # The reference agent is a plumbing test, not a baseline: it drives forward at a constant speed
 # and will score badly. Its job is to prove that CARLA starts on the intended GPU, the route
 # loads, the agent interface binds, criteria attach, and a finalized checkpoint JSON lands in
-# the right place — before you spend ~58 GPU-hours on a real model.
+# the right place — before you spend ≈67 GPU-hours (all 475 routes, one model, one seed; see
+# STATUS.md H8) on a real model.
 #
 #   python run_benchmark.py --config configs/reference_agent.yaml --limit 1 --dry-run
 #   python run_benchmark.py --config configs/reference_agent.yaml --limit 1

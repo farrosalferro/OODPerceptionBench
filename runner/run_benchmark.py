@@ -417,8 +417,8 @@ class Runner:
                 f"simulator world never became ready (evaluator exit "
                 f"{EVALUATOR_WORLD_NOT_READY})", record, never_started=False)
 
-        abnormal =attempt.outcome in (AttemptOutcome.TIMEOUT, AttemptOutcome.FAULT,
-                                       AttemptOutcome.KILLED)
+        abnormal = attempt.outcome in (AttemptOutcome.TIMEOUT, AttemptOutcome.FAULT,
+                                        AttemptOutcome.KILLED)
 
         # -- no final record: infrastructure, for both remaining classes ------------------
         if not record.final:
