@@ -468,8 +468,9 @@ The one exception is an interrupted attempt whose record is *accepted* (`Complet
 After `retry.worker_quarantine_after` consecutive infra failures **on one worker slot**, that
 slot is removed from the pool and its routes are returned to the queue. Two causes produce this:
 a wedged GPU, or a port block that stays occupied (including `TIME_WAIT`). A `TIMEOUT` does not
-count toward the streak, and a produced record resets it. Only local backends have stable slots;
-SLURM workers are never quarantined (a SLURM slot is a concurrency token, not a device). If
+count toward the streak. A final record resets it, except a crash-type record left by an attempt
+that ended abnormally, which leaves the streak unchanged (§6A.5). Only local backends have stable
+slots; SLURM workers are never quarantined (a SLURM slot is a concurrency token, not a device). If
 every worker quarantines, the run aborts with exit 4 rather than grinding the whole route set
 into infra failures. (A wedged GPU on the internal cluster once absorbed 64 % of a sweep's submissions,
 because fail-fast without quarantine feeds a retry loop.)
