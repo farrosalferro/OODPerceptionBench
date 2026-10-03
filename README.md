@@ -44,8 +44,8 @@ average-per-route figures (seeds 42/43/44).
 
 > **This is v0.9.0, and it corresponds to arXiv v1 of the paper.**
 >
-> v1.0 will correspond to arXiv v2. Between them, two pedestrian props and one static prop are
-> being replaced for licensing reasons and their routes re-run. **Scores from v0.9 and v1.0 are
+> v1.0 will correspond to arXiv v2. Between them, the OOD props that cannot be redistributed
+> ([`NOTICE`](NOTICE) §3) are being replaced and their routes re-run. **Scores from v0.9 and v1.0 are
 > not comparable on the affected props and must never be pooled into one table.** Every artifact
 > in this repository carries this stamp — see [`VERSION`](VERSION).
 
