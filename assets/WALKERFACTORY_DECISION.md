@@ -16,6 +16,8 @@
 > installs the pack and runs a route needing a non-shipped prop now gets a *loud* failure
 > (unregistered blueprint) rather than a quiet one (registered, contentless). The analysis
 > below is retained as the record of why the factory must ship at all.
+> `tools/verify_pack.py` now fails if any of the nine formerly phantom IDs listed in §5 is
+> registered at all.
 
 **Status:** decided and implemented for v0.9. The open item in §7 is resolved at v1.0.
 **Date:** 2026-08-04 · **Version stamp:** pack v0.9 ↔ arXiv v1
@@ -155,8 +157,9 @@ from the build that produced every published number
 > Because this file overwrites base content, the pack is **hard-locked to CARLA 0.9.15**.
 > Do not install it over any other CARLA version.
 
-`tools/verify_pack.py` asserts all of this — that the six shipped IDs spawn, and that
-every phantom does *not*.
+Before the 2026-08-06 re-cook, `tools/verify_pack.py` asserted all of this — that the six
+shipped IDs spawn, and that every phantom does *not*. It now asserts the stronger condition
+that none of the nine IDs is registered at all.
 
 ---
 

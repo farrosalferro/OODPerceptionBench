@@ -60,7 +60,8 @@ SHIPPED = {
 
 # Walker blueprint IDs that must NOT be registered. Earlier cooks of WalkerFactory
 # registered all of these without shipping their content; the shipped factory registers
-# none of them. If one is registered, the factory in use is not this pack's.
+# none of them. If one is registered, the factory in use is not this pack's -- or you
+# deliberately registered your own substitute under that ID (docs/replacing-props.md).
 MUST_NOT_REGISTER = [
     "walker.pedestrian.soldier",       # not redistributable (see ASSETS.tsv)
     "walker.pedestrian.wheelchair",    # not redistributable (see ASSETS.tsv)
@@ -173,8 +174,11 @@ def main() -> int:
         if any(b.id == bp_id for b in lib.filter(bp_id)):
             failures.append(f"{bp_id}: REGISTERED, but this pack does not ship it — the "
                             f"WalkerFactory in use is not the one this pack ships, so a route "
-                            f"using this ID would not measure what the published records did")
-            print(f"  FAIL  {bp_id}: registered")
+                            f"using this ID would not measure what the published records did. "
+                            f"Expected if you registered your own substitute under this ID "
+                            f"(docs/replacing-props.md): this pack check then does not apply")
+            print(f"  FAIL  {bp_id}: registered (expected only if you registered a substitute "
+                  f"under this ID)")
         else:
             print(f"  OK    {bp_id}: not registered")
 
