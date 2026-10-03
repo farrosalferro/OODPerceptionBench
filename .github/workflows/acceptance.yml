@@ -62,6 +62,10 @@ jobs:
       - name: Show the version stamp
         run: cat tests/VERSION
 
+      - name: Install the test dependencies
+        # Without jsonschema the golden-schema self-tests skip, and on CI a skip reads as a pass.
+        run: python3 -m pip install --quiet -r requirements-test.txt
+
       - name: Smoke split still agrees with the frozen route bundle
         # Every route in the split is pinned by sha256 into routes/. If a route XML is edited
         # the benchmark definition has changed, and any golden generated before that edit is
@@ -88,7 +92,13 @@ jobs:
             echo "::error title=Route tree missing::the self-tests assert against the real frozen route tree, which is absent."
             exit 1
           fi
-          python3 tests/selftest.py
+          python3 tests/selftest.py 2>&1 | tee selftest.log
+          # Every dependency is installed above, so nothing may skip here. A skipped test is
+          # exactly the "harness quietly stopped checking" failure this workflow exists for.
+          if tail -n 1 selftest.log | grep -q "skipped="; then
+            echo "::error title=Self-test skipped::$(tail -n 1 selftest.log) -- a self-test skipped on CI, where every dependency is installed."
+            exit 1
+          fi
 
       - name: Golden schema and example parse
         run: |
