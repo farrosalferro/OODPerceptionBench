@@ -11,7 +11,7 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, Sequence
 
 from ..plan import RouteTask
 
@@ -106,6 +106,12 @@ class Backend:
     #: block -- checks it, so a stop ends the wait instead of being noticed only after it. The
     #: default never asks, so a backend driven by something other than the runner is unaffected.
     stop_requested: Callable[[], bool] = staticmethod(lambda: False)
+
+    #: Messages :meth:`preflight` wants in the run report: things that did not stop the run but
+    #: weakened a guarantee the operator should know about. The runner copies them into the
+    #: report's warnings after preflight returns. An immutable default; a backend that has
+    #: warnings sets its own list.
+    preflight_warnings: Sequence[str] = ()
 
     def preflight(self) -> None:
         """Raise on anything that would make the whole run pointless. Called once."""

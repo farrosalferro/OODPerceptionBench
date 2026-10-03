@@ -74,10 +74,17 @@ class LocalBackend(Backend):
         }
         self._open_files: Dict[int, List] = {}
         self._port_release: Dict[int, _PortRelease] = {}
-        # Whether this run has taken its port block: set once preflight finds it free, or when
-        # the operator disables the probe and so asserts the block is theirs. Until then a CARLA
-        # on these ports belongs to someone else, and shutdown must not reap it.
+        # Whether this run has taken its port block: set once preflight holds the block's locks
+        # and finds it free, or when the operator disables the probe and so asserts the block
+        # is theirs. Until then a CARLA on these ports belongs to someone else, and shutdown
+        # must not reap it.
         self._owns_ports = False
+        # One lock per reserved port, taken before the probe and held until shutdown, so a
+        # second oodbench run cannot probe the same block free while this one is still in its
+        # preflight and then reap this run's simulators as orphans. See DESIGN.md section 3.
+        self._port_locks = ports_mod.PortLocks(
+            p for pair in self.pairs for p in pair.all_ports)
+        self.preflight_warnings: List[str] = []
 
     # -- lifecycle ----------------------------------------------------------------------
     def preflight(self) -> None:
@@ -85,6 +92,10 @@ class LocalBackend(Backend):
         for i, pair in enumerate(self.pairs):
             gpu = self.gpu_for[i]
             self.log.info("worker %d -> cuda:%d vulkan-adapter:%d", i, gpu.cuda, gpu.vulkan)
+
+        # Before the probe and the startup wait, and whether or not the probe is enabled: the
+        # probe can only say the block is free now, the lock is what keeps it this run's.
+        self._lock_ports()
 
         if not self.cfg.ports["probe"]:
             self.log.warning(
@@ -114,6 +125,40 @@ class LocalBackend(Backend):
         self._owns_ports = True
         self.log.info("port preflight OK: %d ports free across %d worker(s)",
                       sum(len(p.all_ports) for p in self.pairs), len(self.pairs))
+
+    def _lock_ports(self) -> None:
+        """Take this run's per-port locks, or refuse the run if another oodbench run holds any.
+
+        A held lock is refused at once, with no wait: its holder is a whole sweep. A lock
+        directory we cannot use is only a warning, because the probe below still guards the
+        block; the run then simply lacks protection against a second run started during its
+        own preflight.
+        """
+        locks = self._port_locks
+        try:
+            locks.acquire()
+        except ports_mod.PortLockHeld as exc:
+            shown = ", ".join(str(p) for p in exc.ports[:10])
+            more = " ..." if len(exc.ports) > 10 else ""
+            raise LocalBackendError(
+                f"reserved port(s) {shown}{more} are held by another oodbench run on this "
+                f"machine (lock file {exc.paths[0]}). Nothing on those ports was touched. Find "
+                f"that run with `fuser -v {exc.paths[0]}` or `lsof {exc.paths[0]}` (as root if "
+                f"another user started it), then let it finish, stop it, or move ports.rpc_base "
+                f"/ ports.tm_base in the config so the two blocks do not overlap."
+            ) from None
+        except OSError as exc:
+            msg = (f"could not take the port locks in {locks.directory} ({exc}); continuing "
+                   f"without them. The startup probe still refuses a block that is busy now, "
+                   f"but a second oodbench run started on this block during this run's "
+                   f"preflight is no longer detected, and either run could then reap the "
+                   f"other's simulators. Set {ports_mod.PORT_LOCK_DIR_ENV} to a writable "
+                   f"directory that every run on this machine shares.")
+            self.log.warning("%s", msg)
+            self.preflight_warnings.append(msg)
+            return
+        self.log.info("port locks held: %d file(s) under %s",
+                      len(locks.ports), locks.directory)
 
     def _wait_for_startup_ports(self, busy):
         """Give a block that is busy at startup the time :meth:`can_submit` gives it mid-run.
@@ -444,13 +489,18 @@ class LocalBackend(Backend):
         # Reaping by port is safe only for a block this run took (DESIGN.md section 7). A dry run
         # never takes it and a refused run never got it, so the CARLA found there is someone
         # else's -- typically the sweep the dry run was previewing, killed mid-route.
-        if not self._owns_ports:
-            return
-        for worker in range(self.concurrency):
-            try:
-                self.cleanup_worker(worker)
-            except Exception as exc:  # pragma: no cover - best effort
-                self.log.warning("cleanup of worker %d failed: %s", worker, exc)
+        try:
+            if self._owns_ports:
+                for worker in range(self.concurrency):
+                    try:
+                        self.cleanup_worker(worker)
+                    except Exception as exc:  # pragma: no cover - best effort
+                        self.log.warning("cleanup of worker %d failed: %s", worker, exc)
+        finally:
+            # Only after the reaping: released earlier, another run could take the block while
+            # this one is still stopping simulators on it. Also reached when ownership was never
+            # established (a refused or interrupted preflight), so no failure keeps a lock.
+            self._port_locks.release()
 
     # -- helpers ------------------------------------------------------------------------
     def _close(self, attempt: Attempt) -> None:

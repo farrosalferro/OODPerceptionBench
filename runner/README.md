@@ -5,7 +5,7 @@
 > comparable. Every report this runner writes carries that stamp.
 >
 > **This is a hardware-validated local first cut, not a production-scale runner.** The
-> supervision logic is covered by 292 automated tests. On 2026-08-11/12 CARLA 0.9.15 executed
+> supervision logic is covered by 306 automated tests. On 2026-08-11/12 CARLA 0.9.15 executed
 > single routes, two 8-route/two-worker sweeps with one-GPU stacking and port isolation observed
 > live, a real Ctrl-C/reap/resume cycle, and three independent nine-route PDM-Lite golden
 > replicates. The SLURM backend is now validated on a real scheduler at two-way concurrency (one
@@ -279,6 +279,20 @@ The whole block is probed at startup and the runner **refuses to run** if any of
 will not relocate itself: silently shifting is how two concurrent runs end up sharing a
 simulator. If the block is taken, free it or move `rpc_base`/`tm_base`.
 
+Before probing, the local backend also takes a lock on every port of its block — one file per
+port, `/tmp/oodbench-port-<port>.lock` — and holds it until the run ends. A second oodbench run
+on the same machine whose block shares *any* port with it is refused at once with
+"held by another oodbench run", instead of starting and then killing the first run's
+simulators as orphans (each run reaps its own block on the way out). The locks are taken even
+with `probe: false`, are shared by all users, and vanish with the process if a run crashes; the
+empty files stay and are harmless. Set `OODPB_PORT_LOCK_DIR` to use another directory; every
+run that should see the others must use the same one. If that directory cannot be used, the run
+logs a warning (also in the report) and continues without the locks.
+
+The locks only coordinate oodbench runs that share the lock directory — the same machine and
+the same `/tmp`, so two containers with private `/tmp`s do not see each other. A CARLA started
+by hand on the block takes no lock; the startup probe still catches it.
+
 ### `resume.mode`
 
 | Mode | Behaviour |
@@ -433,9 +447,10 @@ templates need PyYAML and are skipped without it):
 python -m unittest discover -s tests -t .
 ```
 
-292 tests covering the port allocator (at worker counts far above any real GPU count), the
-finalization predicate and status taxonomy, path mirroring, manifest integrity, the resume and
-budget decision, the attempt-accounting model of `DESIGN.md` §6A, the exit contract, the ledger,
+306 tests covering the port allocator (at worker counts far above any real GPU count) and its
+run locks, the finalization predicate and status taxonomy, path mirroring, manifest integrity,
+the resume and budget decision, the attempt-accounting model of `DESIGN.md` §6A, the exit
+contract, the ledger,
 the generated job script, the shipped configuration templates, backend concurrency, and the
 SLURM backend — including the end-to-end
 tests (24 in `tests/test_integration_local.py`, plus more for infra-gate recovery and for the
@@ -455,6 +470,7 @@ What they do **not** cover is anything that requires a running simulator. See `S
 
 | Symptom | Likely cause |
 |---|---|
+| exit 2, "reserved port(s) ... are held by another oodbench run on this machine" | another sweep holds a lock on part of this block (its lock file is named in the message). Find it with `fuser -v <lockfile>` or `lsof <lockfile>` (as root if another user started it). Let it finish, stop it, or move `ports.rpc_base` / `ports.tm_base` so the two blocks do not overlap. Nothing on the ports was touched. |
 | exit 2, "reserved port(s) already in use" | another run, or a leftover simulator, still holding the block after the startup wait (`execution.port_release_timeout_s`, 90 s by default). Free the ports or move `ports.rpc_base`. The runner will not relocate silently. |
 | exit 5 immediately | the agent's `sensors()` was rejected for the configured `track`. Fix the sensor set; it would fail identically on all 475 routes. |
 | exit 2, "environment preflight: ... cannot import ..." | `environment.python` lacks a dependency, or is not the interpreter you think (see the logged `sys.executable`). Fix it, using an absolute path; see Quickstart step 3. |

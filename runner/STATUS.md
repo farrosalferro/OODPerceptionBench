@@ -252,12 +252,13 @@ All of these run with no GPU, no CARLA, no network and no third-party packages (
 shipped-template tests need PyYAML and are skipped without it):
 
 ```
-python -m unittest discover -s tests -t .    ->  292 tests, OK, ~96 s
+python -m unittest discover -s tests -t .    ->  306 tests, OK, ~96 s
 ```
 
 | Area | Covered by | Notes |
 |---|---|---|
 | Port allocator | `test_ports.py` | Determinism; no duplicate port at 1/2/5/8/16/33/**64** workers; RPC windows never touch at the minimum legal stride; RPC/TM block overlap rejected in both directions; >65535 and privileged bases rejected; probe reports a bound port busy and an unbound one free. Satisfies the "N > physical GPU count" criterion *for the allocator*, which is hardware-independent by construction. |
+| **Port run locks** | `test_port_locks.py` (14 tests) | A second backend on the same block is refused at once, without probing, waiting or reaping, and never marks the block its own; a block sharing a single port is refused too; once the holder shuts down the block can be taken again; the holder releases its locks only after reaping; a refused or failed preflight leaves no lock after `shutdown()`; an unusable lock directory is a warning (in the log and in the report, end to end through `main()`) and the run proceeds; locks are taken with `ports.probe` disabled; a read-only lock file someone else created still locks and is not modified; a created file is 0644 under umask 077; lock descriptors are not inheritable; a planted symlink is not followed. The suite points `OODPB_PORT_LOCK_DIR` at a private per-process directory (`tests/__init__.py`), so it never writes to `/tmp` itself and two suites on one machine never refuse each other. |
 | Finalization predicate | `test_results.py` | Missing / malformed / in-progress / `[0,0]`-progress / empty-records checkpoints all correctly not-final. |
 | Status taxonomy | `test_results.py` | Every status observed in ~4,000 real seed-42 records is known; disposition sets are disjoint; the retry set matches the internal orchestrator exactly; `sensors were invalid` is fatal; unknown statuses are flagged rather than absorbed. |
 | Resume predicate | `test_results.py`, `test_plan.py` | `skip_terminal` vs `skip_any_final` vs `none`; a crashed route is re-run under the default and skipped under the legacy mode; unfinalized is never skipped. |
@@ -415,6 +416,7 @@ multi-GPU node, so budget ≈0.14.
 | **No blueprint-spawn assertion** | Same failure class: the runner cannot tell whether the intended OOD prop actually spawned. | That is what `tests/` is for. The runner should eventually surface that check as an opt-in flag. |
 | **An unexpected exception mid-sweep exits 2 and writes no report** | `main()` catches everything not already handled and returns `EXIT_CONFIG`. Non-zero, so the exit contract holds and `state.json` is still saved — but exit 2 means "configuration or preflight error", which sends an operator debugging their config when the sweep actually died 300 routes in. The per-route results on disk are fine and a re-run resumes correctly; only the diagnosis and the report are lost. | Split the handler: before the sweep starts keep exit 2; once `runner.run()` is under way, build and write the report, then exit 1. Small, worth doing before a 475-route sweep. |
 | SLURM: no array jobs | One `sbatch` per route is 475 submissions. Works, but an array job would be kinder to the scheduler. | Deferred. |
+| **Port locks are per lock directory** | The local backend's per-port locks (`DESIGN.md` §3, defence 0) coordinate only oodbench runs that share the lock directory: one machine and one `/tmp` (or one `OODPB_PORT_LOCK_DIR`). Two containers with private `/tmp`s on one host do not see each other's locks, and a CARLA started by hand takes none; for both, only the startup probe guards, and only at startup. A lock directory the run cannot use degrades to probe-only, with a report warning. | Document. Containers sharing a host should bind-mount one lock directory. |
 | SLURM: node-level port collisions | Ports come from the deterministic allocator, but two *independent* runs by different users on one node could still collide. | Document; consider deriving the base from the SLURM job ID. |
 | No structured progress output | Progress is log lines only; long sweeps want a machine-readable heartbeat. | `state.json` is already written continuously and can be polled. Good enough for v0.9. |
 | Windows / macOS | `/proc` scanning and `killpg` are Linux-only. | Out of scope; CARLA + this benchmark are Linux. |
@@ -468,6 +470,17 @@ Item 1 was found on 2026-10-03 while reading the shutdown path; item 2 on hardwa
    while it waits; a stop request ends the wait as an interrupted run. Regression tests:
    `test_ports_still_draining_from_a_previous_run_are_waited_for_at_startup`,
    `test_a_stop_request_ends_the_startup_port_wait`.
+3. **A free probe was taken for ownership.** Found by a pre-push code review. After the probe
+   the run waits — the startup wait, then the environment preflight, up to 600 s — before its
+   first launch, and a second oodbench run on the same or an overlapping block could probe it
+   free in that window. Both then believed they owned the block, so each one's orphan handling
+   (SIGTERM, then SIGKILL) and shutdown reaping killed the other's simulators, and a route whose
+   ambiguous-kill budget ran out had its crash record accepted as the result. The local backend
+   now takes an exclusive `flock` on one file per reserved port *before* probing (also with the
+   probe disabled), holds it for the whole run, and releases it in `shutdown()` after reaping.
+   A second run on any of those ports is refused at once with exit 2, naming the ports and the
+   lock file. The limits are listed in §3 under "Port locks are per lock directory". Regression
+   tests: `tests/test_port_locks.py`.
 
 ---
 

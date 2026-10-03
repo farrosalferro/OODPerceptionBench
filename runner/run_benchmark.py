@@ -790,6 +790,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         backend.stop_requested = lambda: _interrupted["flag"]
         if not args.dry_run:
             backend.preflight()
+            # Already logged by the backend; copied so the report says the run went ahead with
+            # a weakened guarantee (the local pool without its port locks, say).
+            for w in getattr(backend, "preflight_warnings", ()):
+                if w not in runner.warnings:
+                    runner.warnings.append(w)
             if _interrupted["flag"]:  # a signal ended a wait inside preflight
                 raise Interrupted()
             # After the backend's own checks and before the first route: an interpreter that

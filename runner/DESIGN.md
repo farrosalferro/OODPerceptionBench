@@ -241,8 +241,34 @@ zombie CARLA from a previous attempt — the evaluator will happily walk into wo
 window and two live CARLA servers end up interleaved. Nothing crashes; the routes just quietly
 share a simulator.
 
-Two defences, both required:
+Three defences, all required:
 
+0. **Lock the block before probing it, and hold the lock for the whole run.** A free probe says
+   only that the block is free *now*. Between that probe and the first launch the run waits
+   (the startup wait below, then the environment preflight, tens of seconds and up to 600 s),
+   and a second run on the same block could probe it free inside that window. Both would then
+   believe they owned the block, and each one's orphan handling (defence 2) and shutdown
+   reaping (§7) would kill the other's simulators; a route whose ambiguous-kill budget ran out
+   would then have its crash record accepted as the result. So before the probe -- and also
+   when `ports.probe` is disabled -- the local backend takes an exclusive, non-blocking `flock`
+   on one file per reserved port (`/tmp/oodbench-port-<port>.lock`; the directory is
+   overridden by `OODPB_PORT_LOCK_DIR`). One file per *port*, not per block, so blocks that
+   only partly overlap collide as well. A lock held by another process refuses the run at once,
+   with no wait (its holder is a whole sweep), naming the ports and the lock file, touching
+   nothing on the block. The files are opened read-only (`flock` needs no write access), so a
+   file another user created still locks; a file the run creates is `fchmod`ed to 0644 so the
+   umask cannot lock other users out. The descriptors are not inherited by the evaluator or
+   CARLA, and the kernel drops the lock when the run dies, so a crashed run leaves no stale
+   lock. The locks are released in `shutdown()`, *after* the reaping, and on every path where
+   ownership was never established. A lock directory the run cannot use (not writable, say) is
+   a logged warning, copied into the report, and the run proceeds unlocked: the probe still
+   guards against a block busy at startup.
+
+   **Limits.** The lock coordinates only oodbench runs that share the lock directory: one
+   machine and one `/tmp`, so containers with private `/tmp`s do not see each other. It says
+   nothing about a CARLA started by hand on the reserved ports; the startup probe still catches
+   that one, but only at startup. The SLURM backend takes no lock (its ports live on whatever
+   node the scheduler picks).
 1. **Probe the entire reserved block at startup** using the *same* bind call `find_free_port`
    uses (`bind(("localhost", port))`, no `SO_REUSEADDR`), plus a `0.0.0.0` probe because that
    is what the CARLA server itself binds. If any port is busy, re-probe once a second for up to
@@ -260,8 +286,9 @@ Two defences, both required:
    probe to pass. That timeout must cover the 10 s TERM grace plus the configured post-kill
    cooldown, and the SIGKILL tick always retains the slot for a later probe even if supervisor
    polling reached the deadline late. The final pre-launch probe closes the readiness-to-launch
-   race. Persistent occupation still fails closed and reaches the ordinary bounded
-   infra/quarantine path; it is never allowed to wander upward.
+   race against this run's own teardown; it is the lock (defence 0), not this probe, that keeps
+   another oodbench run off the block. Persistent occupation still fails closed and reaches the
+   ordinary bounded infra/quarantine path; it is never allowed to wander upward.
 
 Given a genuinely free port, `find_free_port` returns it unchanged, so the port the runner
 allocated is the port CARLA binds — which is also what makes reaping by port possible (§7).
@@ -1378,10 +1405,14 @@ another user's CARLA can be reparented for entirely benign reasons. Reaping by *
 allocated port* touches only processes the runner is responsible for — which is only possible
 because ports are deterministic (§3).
 
-That premise needs the run to have *taken* its block, so the local backend reaps at shutdown
-only after its startup probe found the block free, or after the operator disabled the probe and
-so asserted the block is theirs. A `--dry-run` never takes the block and a refused run never got
-it: the CARLA on those ports then belongs to someone else, typically the sweep being previewed.
+That premise needs the run to have *taken* its block. Taking it means two things (§3, defences
+0 and 1): holding the block's per-port locks, so no other oodbench run can take it for the life
+of this one, and then finding it free, or the operator disabling the probe and so asserting the
+block is theirs. The local backend reaps at shutdown only after that, and releases the locks
+only after reaping. A probe alone was not ownership: a second run could probe the same block
+free during the first run's preflight, and from then on each reaped the other. A `--dry-run`
+never takes the block and a refused run never got it: the CARLA on those ports then belongs to
+someone else, typically the sweep being previewed.
 
 Additional per-attempt hygiene, all inherited from the internal runners:
 
@@ -1517,7 +1548,7 @@ oodbench/
   config.py                 schema, loader (yaml|toml|json), strict validation
   plan.py                   route discovery, manifest check, route -> paths mirroring
   results.py                finalization predicate + status taxonomy + classification
-  ports.py                  deterministic allocator, invariants, probing
+  ports.py                  deterministic allocator, invariants, probing, per-port run locks
   gpus.py                   cuda/vulkan pair resolution, --check-gpus preflight
   jobscript.py              per-route bash generation (the inverted template)
   state.py                  attempt ledger, atomic persistence, resume
