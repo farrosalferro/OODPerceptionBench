@@ -88,21 +88,9 @@ def _export(name: str, value: str) -> str:
     return f"export {name}={shlex.quote(str(value))}"
 
 
-def render(task: "RouteTask", cfg: "Config", gpu: "GpuSpec", ports: "PortPair") -> str:
-    """Return the bash source for one route attempt."""
-    lb_root = Path(cfg.leaderboard["root"])
-    sr_root = Path(cfg.leaderboard["scenario_runner_root"])
-    work_dir = Path(cfg.leaderboard["work_dir"])
-    carla_root = Path(cfg.carla["root"])
-    evaluator = cfg.evaluator_path
-
-    lines: List[str] = [HEADER.format(route=task.xml, seed=task.seed, result=task.result_path)]
-
-    # ======================================================================================
-    # USER-SUPPLIED SECTION. Everything below this block is runner-owned and overwrites it.
-    # Order is load-bearing -- see property 3 in the module docstring.
-    # ======================================================================================
-
+def _user_env_lines(cfg: "Config") -> List[str]:
+    """``environment.activate`` then ``agent.env``: the user-supplied section, in that order."""
+    lines: List[str] = []
     # -- user-supplied environment activation (conda / venv / module). Empty by default. ----
     if cfg.environment["activate"]:
         lines.append("# environment.activate")
@@ -119,17 +107,16 @@ def render(task: "RouteTask", cfg: "Config", gpu: "GpuSpec", ports: "PortPair") 
         for k in sorted(cfg.agent["env"]):
             lines.append(_export(k, cfg.agent["env"][k]))
         lines.append("")
+    return lines
 
-    # ======================================================================================
-    # RUNNER-OWNED SECTION. Nothing above may override any of it.
-    # ======================================================================================
 
-    # -- GPU pinning: two independent indices, see DESIGN.md section 4 ----------------------
-    lines.append("# GPU pinning: CUDA for the agent, Vulkan adapter for the CARLA server.")
-    lines.append(_export("CUDA_VISIBLE_DEVICES", str(gpu.cuda)))
-    lines.append(_export("NVIDIA_VISIBLE_DEVICES", str(gpu.cuda)))
-    lines.append(_export("GPU_RANK", str(gpu.vulkan)))
-    lines.append("")
+def _path_lines(cfg: "Config") -> List[str]:
+    """``LD_LIBRARY_PATH``, the CARLA / leaderboard roots and the composed ``PYTHONPATH``."""
+    lb_root = Path(cfg.leaderboard["root"])
+    sr_root = Path(cfg.leaderboard["scenario_runner_root"])
+    work_dir = Path(cfg.leaderboard["work_dir"])
+    carla_root = Path(cfg.carla["root"])
+    lines: List[str] = []
 
     # -- LD_LIBRARY_PATH -------------------------------------------------------------------
     if cfg.environment["ld_library_path_prepend"]:
@@ -149,6 +136,50 @@ def render(task: "RouteTask", cfg: "Config", gpu: "GpuSpec", ports: "PortPair") 
     quoted = ":".join(shlex.quote(p) for p in pp_parts)
     lines.append(f'export PYTHONPATH={quoted}:"${{PYTHONPATH:-}}"')
     lines.append("")
+    return lines
+
+
+def _cd_lines(cfg: "Config") -> List[str]:
+    if cfg.agent["working_dir"]:
+        # Several published models must run from their own repository root.
+        return [f'cd {shlex.quote(str(cfg.agent["working_dir"]))} || exit 2']
+    return []
+
+
+def environment_prelude(cfg: "Config") -> List[str]:
+    """The job's interpreter environment without its route, GPU or port: the same activation,
+    ``agent.env``, paths and working directory a route attempt gets, in the same order.
+
+    Used by the environment preflight (:mod:`oodbench.envcheck`), so that what it checks is
+    what a route will run under. Built from the same helpers as :func:`render`, never copied.
+    """
+    return _user_env_lines(cfg) + _path_lines(cfg) + _cd_lines(cfg)
+
+
+def render(task: "RouteTask", cfg: "Config", gpu: "GpuSpec", ports: "PortPair") -> str:
+    """Return the bash source for one route attempt."""
+    evaluator = cfg.evaluator_path
+
+    lines: List[str] = [HEADER.format(route=task.xml, seed=task.seed, result=task.result_path)]
+
+    # ======================================================================================
+    # USER-SUPPLIED SECTION. Everything below this block is runner-owned and overwrites it.
+    # Order is load-bearing -- see property 3 in the module docstring.
+    # ======================================================================================
+    lines.extend(_user_env_lines(cfg))
+
+    # ======================================================================================
+    # RUNNER-OWNED SECTION. Nothing above may override any of it.
+    # ======================================================================================
+
+    # -- GPU pinning: two independent indices, see DESIGN.md section 4 ----------------------
+    lines.append("# GPU pinning: CUDA for the agent, Vulkan adapter for the CARLA server.")
+    lines.append(_export("CUDA_VISIBLE_DEVICES", str(gpu.cuda)))
+    lines.append(_export("NVIDIA_VISIBLE_DEVICES", str(gpu.cuda)))
+    lines.append(_export("GPU_RANK", str(gpu.vulkan)))
+    lines.append("")
+
+    lines.extend(_path_lines(cfg))
 
     # -- run parameters --------------------------------------------------------------------
     lines.append("# run parameters")
@@ -174,9 +205,7 @@ def render(task: "RouteTask", cfg: "Config", gpu: "GpuSpec", ports: "PortPair") 
 
     lines.append('echo "[runner] host=$(hostname) rpc_port=${PORT} tm_port=${TM_PORT} '
                  'cuda=${CUDA_VISIBLE_DEVICES} vulkan_adapter=${GPU_RANK} seed=${SEED}"')
-    if cfg.agent["working_dir"]:
-        # Several published models must run from their own repository root.
-        lines.append(f'cd {shlex.quote(str(cfg.agent["working_dir"]))} || exit 2')
+    lines.extend(_cd_lines(cfg))
     lines.append("")
 
     python = cfg.environment["python"]

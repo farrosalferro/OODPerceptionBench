@@ -1,8 +1,19 @@
 diff --git a/Bench2Drive/leaderboard/leaderboard/leaderboard_evaluator.py b/Bench2Drive/leaderboard/leaderboard/leaderboard_evaluator.py
-index 0aa615e..d00982f 100644
+index 0aa615e..0254c5e 100644
 --- a/Bench2Drive/leaderboard/leaderboard/leaderboard_evaluator.py
 +++ b/Bench2Drive/leaderboard/leaderboard/leaderboard_evaluator.py
-@@ -207,9 +207,21 @@ class LeaderboardEvaluator(object):
+@@ -42,6 +42,10 @@ import time
+ import random
+ from datetime import datetime
+ 
++# OOD-PerceptionBench: exit status for "the CARLA world never became ready". Must stay in sync
++# with EVALUATOR_WORLD_NOT_READY in the benchmark runner (runner/oodbench/__init__.py).
++WORLD_NOT_READY_EXIT_CODE = 75
++
+ sensors_to_icons = {
+     'sensor.camera.rgb':        'carla_camera',
+     'sensor.lidar.ray_cast':    'carla_lidar',
+@@ -207,10 +211,49 @@ class LeaderboardEvaluator(object):
          self.carla_path = os.environ["CARLA_ROOT"]
          args.port = find_free_port(args.port)
          cmd1 = f"{os.path.join(self.carla_path, 'CarlaUE4.sh')} -RenderOffScreen -nosound -carla-rpc-port={args.port} -graphicsadapter={args.gpu_rank}"
@@ -14,6 +25,7 @@ index 0aa615e..d00982f 100644
 +        # instead of orphaning (which previously caused VRAM pile-up on
 +        # timeout-resubmit cycles). atexit now uses os.kill (by PID) since
 +        # self.server.pid is no longer a PGID leader.
++        carla_launched_at = time.time()
 +        self.server = subprocess.Popen(cmd1, shell=True)
          print(cmd1, self.server.returncode, flush=True)
 -        atexit.register(os.killpg, self.server.pid, signal.SIGKILL)
@@ -24,9 +36,36 @@ index 0aa615e..d00982f 100644
 +                pass
 +        atexit.register(_kill_carla_pid, self.server.pid)
          time.sleep(60)
++        # OOD-PerceptionBench: a listening RPC port is not a usable world. The server can
++        # accept connections for minutes before get_world() answers (a Town12 load took about
++        # 20 min), and the connect loop below would then block on the full --timeout. Probe
++        # with a short timeout until the world answers, for at most OODPB_WORLD_READY_S seconds
++        # from launch. Never ready -> exit WORLD_NOT_READY_EXIT_CODE, which the benchmark runner
++        # charges to its infrastructure budget, not to the route.
++        try:
++            world_ready_s = float(os.environ.get("OODPB_WORLD_READY_S", "1800"))
++        except ValueError:
++            print(f"ignoring OODPB_WORLD_READY_S={os.environ['OODPB_WORLD_READY_S']!r}; using 1800", flush=True)
++            world_ready_s = 1800.0
++        while True:
++            try:
++                probe = carla.Client(args.host, args.port)
++                probe.set_timeout(10.0)
++                probe.get_world().get_settings()
++                probe.set_timeout(args.timeout)
++                print(f"world ready after {time.time() - carla_launched_at:.0f} s", flush=True)
++                break
++            except Exception as e:
++                waited = time.time() - carla_launched_at
++                if waited >= world_ready_s:
++                    print(f"world NOT ready after {waited:.0f} s (OODPB_WORLD_READY_S={world_ready_s:.0f}); "
++                          f"last error: {e}. Exiting with code {WORLD_NOT_READY_EXIT_CODE}.", flush=True)
++                    sys.exit(WORLD_NOT_READY_EXIT_CODE)
++                time.sleep(10)
              
          attempts = 0
-@@ -364,10 +376,13 @@ class LeaderboardEvaluator(object):
+         num_max_restarts = 20
+@@ -364,10 +407,13 @@ class LeaderboardEvaluator(object):
                  self._ros1_server = ROS1Server()
                  self._ros1_server.start()
  
@@ -42,7 +81,7 @@ index 0aa615e..d00982f 100644
  
              # Check and store the sensors
              if not self.sensors:
-@@ -504,9 +519,13 @@ class LeaderboardEvaluator(object):
+@@ -504,9 +550,13 @@ class LeaderboardEvaluator(object):
              self.statistics_manager.validate_and_write_statistics(self.sensors_initialized, crashed)
          
          if crashed:

@@ -17,3 +17,8 @@ EXIT_CONFIG = 2
 EXIT_INTERRUPTED = 3
 EXIT_NO_WORKERS = 4
 EXIT_AGENT_FATAL = 5
+
+# NOT a runner exit code: the status the patched leaderboard evaluator exits with when the CARLA
+# world never answered a readiness probe (patch 330, OODPB_WORLD_READY_S). Settlement charges it
+# to the infrastructure budget. Must equal WORLD_NOT_READY_EXIT_CODE in that patch; a test checks.
+EVALUATOR_WORLD_NOT_READY = 75

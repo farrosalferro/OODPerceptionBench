@@ -139,6 +139,12 @@ class Site:
         (ev / "leaderboard_evaluator.py").write_text(FAKE_EVALUATOR, encoding="utf-8")
         (root / "b2d" / "scenario_runner").mkdir(parents=True)
         (root / "agent.py").write_text("", encoding="utf-8")
+        # Stand-ins for what the environment preflight imports, so every run passes it on a
+        # host that has none of them. tests/test_env_preflight.py exercises the failures.
+        self.stubs = root / "env_stubs"
+        self.stubs.mkdir()
+        for name in ("carla", "py_trees", "numpy", "scipy"):
+            (self.stubs / f"{name}.py").write_text('__version__ = "0+stub"\n', encoding="utf-8")
         self.routes = root / "routes"
         self.out = root / "out"
         self.out.mkdir()
@@ -163,6 +169,7 @@ class Site:
                 "scenario_runner_root": str(self.root / "b2d" / "scenario_runner"),
             },
             "agent": {"entrypoint": str(self.root / "agent.py"),
+                      "pythonpath": [str(self.stubs)],
                       "env": {"FAKE_TRACE": str(self.trace),
                               "FAKE_COUNTER": str(self.counter)}},
             "environment": {"python": sys.executable},
