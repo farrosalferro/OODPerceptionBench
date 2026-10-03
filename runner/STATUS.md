@@ -272,7 +272,7 @@ python -m unittest discover -s tests -t .    ->  258 tests, OK, ~91 s
 | Config validation | `test_config_and_jobscript.py` | Every required field is genuinely required and named in the error; unknown sections and mistyped keys are errors, not silent defaults; `workers > gpus` needs explicit opt-in; **both** the CUDA index and the Vulkan adapter are unique-checked, including when one side was defaulted; `agent.env` is rejected for every runner-owned name with the field to use instead, while composable ones (`PYTHONPATH`, `LD_LIBRARY_PATH`) stay allowed; digest is stable and sensitive. |
 | Job script | `test_config_and_jobscript.py` | Both CUDA **and** the Vulkan adapter are pinned; allocated ports are used verbatim; `--resume` is never passed; nothing is detached; the seed is independent of worker and port; `agent.pythonpath` wins the ordering; every runner-owned export is emitted **after** `agent.env`, and a reserved name smuggled past config validation still loses to the runner; `environment.activate` still precedes `agent.env`; `bash -n` clean, including paths containing spaces. |
 | **Backend concurrency** | `test_backend_concurrency.py` (14 tests) | The loop opens exactly the *backend's* slots, never `execution.workers`, in both directions (over- and under-parallelising); SLURM concurrency is `slurm.max_parallel` with one reserved port pair per slot, all disjoint; an out-of-range slot is refused without disturbing an existing record; `max_parallel < 1` is a config error; setting `execution.workers` under SLURM warns that it is ignored. No scheduler is contacted. |
-| **Supervision loop, end to end** | `test_integration_local.py` (22 tests) | Driven against a stand-in evaluator: full sweep exits 0; a re-run skips completed routes without re-executing them; a simulated interruption re-runs exactly the missing routes; the seed reaches the child identically across 3 workers; workers get disjoint, non-overlapping ports; a route that never writes a record exhausts the **infra** budget without touching the record budget and exits 1; an unfinalized checkpoint counts as infra; a retryable record is retried then accepted as the result; TickRuntime is not retried by default; a flaky route recovers; a hanging route is killed by the wall clock; `sensors were invalid` aborts the sweep at ≤1 route; a restart does not buy a fresh budget; a worker is quarantined; a busy port block is a preflight error with nothing executed and its holder left running; `--dry-run` writes no report and leaves a simulator on the block alone; `resume.mode: none` requires `--force`; a strict-manifest mismatch refuses to run. |
+| **Supervision loop, end to end** | `test_integration_local.py` (24 tests) | Driven against a stand-in evaluator: full sweep exits 0; a re-run skips completed routes without re-executing them; a simulated interruption re-runs exactly the missing routes; the seed reaches the child identically across 3 workers; workers get disjoint, non-overlapping ports; a route that never writes a record exhausts the **infra** budget without touching the record budget and exits 1; an unfinalized checkpoint counts as infra; a retryable record is retried then accepted as the result; TickRuntime is not retried by default; a flaky route recovers; a hanging route is killed by the wall clock; `sensors were invalid` aborts the sweep at ≤1 route; a restart does not buy a fresh budget; a worker is quarantined; a busy port block is a preflight error with nothing executed and its holder left running; a block still draining from a previous run is waited for at startup, and a stop request ends that wait; `--dry-run` writes no report and leaves a simulator on the block alone; `resume.mode: none` requires `--force`; a strict-manifest mismatch refuses to run. |
 
 Also verified by hand:
 
@@ -415,6 +415,7 @@ multi-GPU node, so budget ≈0.14.
 | SLURM: no array jobs | One `sbatch` per route is 475 submissions. Works, but an array job would be kinder to the scheduler. | Deferred. |
 | SLURM: node-level port collisions | Ports come from the deterministic allocator, but two *independent* runs by different users on one node could still collide. | Document; consider deriving the base from the SLURM job ID. |
 | No structured progress output | Progress is log lines only; long sweeps want a machine-readable heartbeat. | `state.json` is already written continuously and can be polled. Good enough for v0.9. |
+| Windows / macOS | `/proc` scanning and `killpg` are Linux-only. | Out of scope; CARLA + this benchmark are Linux. |
 
 ### Fixed 2026-08-13 — hang accounting
 
@@ -444,9 +445,9 @@ Note the interaction: `killed_budget` sounds like the budget that governs a kill
 wall-clock kill is charged to `attempts_infra`, so `killed_budget` never applies to a hang. That
 is unchanged and still worth knowing when reading a ledger.
 
-### Fixed 2026-10-03 — port-block ownership
+### Fixed 2026-10-03 — the port block at startup and shutdown
 
-Found on 2026-10-03, while reading the shutdown path.
+Item 1 was found on 2026-10-03 while reading the shutdown path; item 2 on hardware the same day.
 
 1. **A run that never took its port block still reaped it.** Shutdown sends SIGTERM, then
    SIGKILL, to every CARLA of this user whose command line names a port in the block. A
@@ -456,7 +457,15 @@ Found on 2026-10-03, while reading the shutdown path.
    the startup probe found the block free (or the probe was disabled). Regression tests:
    `test_dry_run_leaves_a_simulator_on_the_block_alone`, and a holder check added to
    `test_busy_port_block_is_a_preflight_error_not_a_silent_shift`.
-| Windows / macOS | `/proc` scanning and `killpg` are Linux-only. | Out of scope; CARLA + this benchmark are Linux. |
+2. **A run started straight after another one on the same block was refused.** Between routes
+   the runner already waits for a finished simulator's sockets to drain (CARLA's streaming socket
+   lingers for about a minute and refuses the bind like a live server), but the startup probe
+   did not wait: a golden replicate scripted to start the moment the previous run exited failed
+   with exit 2 in the same second. Startup now re-probes once a second for up to
+   `execution.port_release_timeout_s` (90 s by default) before refusing, and signals nothing
+   while it waits; a stop request ends the wait as an interrupted run. Regression tests:
+   `test_ports_still_draining_from_a_previous_run_are_waited_for_at_startup`,
+   `test_a_stop_request_ends_the_startup_port_wait`.
 
 ---
 

@@ -11,7 +11,7 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from ..plan import RouteTask
 
@@ -100,6 +100,12 @@ class Backend:
     #: broken machine at all. Conservative default preserves the established local behavior and
     #: third-party adapters must opt out explicitly when placement is scheduler-owned.
     stable_worker_slots: bool = True
+
+    #: Set by the runner to report whether the operator has asked the run to stop (a signal).
+    #: A backend that waits inside a call -- the local adapter's startup wait for its port
+    #: block -- checks it, so a stop ends the wait instead of being noticed only after it. The
+    #: default never asks, so a backend driven by something other than the runner is unaffected.
+    stop_requested: Callable[[], bool] = staticmethod(lambda: False)
 
     def preflight(self) -> None:
         """Raise on anything that would make the whole run pointless. Called once."""

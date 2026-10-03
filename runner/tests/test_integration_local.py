@@ -20,7 +20,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import run_benchmark
-from oodbench import EXIT_CONFIG, EXIT_OK, EXIT_PARTIAL, ports
+from oodbench import EXIT_CONFIG, EXIT_INTERRUPTED, EXIT_OK, EXIT_PARTIAL, ports
 
 FAKE_EVALUATOR = textwrap.dedent('''\
     """Stand-in for leaderboard_evaluator.py. Behaviour is driven by FAKE_MODE."""
@@ -484,10 +484,56 @@ class TestPreflightAndConfig(IntegrationBase):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.bind(("localhost", base))
             s.listen(1)
-            code = self.run_cli(cfg_path)
+            # The startup wait probes once a second; skip the waiting, not the probing.
+            with patch("oodbench.backends.local.time.sleep", side_effect=lambda _s: None):
+                code = self.run_cli(cfg_path)
         self.assertEqual(code, EXIT_CONFIG)
         self.assertEqual(len(self.site.trace_rows()), 0)
         self.assertIsNone(holder.poll(), "refusing a busy block killed what was holding it")
+
+    def test_ports_still_draining_from_a_previous_run_are_waited_for_at_startup(self):
+        """A run started the moment another ended on the same block must wait, not refuse.
+
+        The previous run's simulator sockets can still be draining (CARLA's RPC+1 streaming
+        socket lingers in TIME_WAIT, which refuses the evaluator-equivalent bind like a live
+        server). On hardware, a replicate scripted to start right after the previous one
+        exited 2 within the same second. can_submit waits this out between routes; startup
+        must too.
+        """
+        self.site.add_route("static/s1/base/route_1_a.xml")
+        cfg = self.site.config()
+        probes = []
+
+        def draining_for_three_probes(_pairs):
+            probes.append(1)
+            return [(0, 20001)] if len(probes) <= 3 else []
+
+        with patch("oodbench.backends.local.ports_mod.probe_pairs",
+                   side_effect=draining_for_three_probes), \
+             patch("oodbench.backends.local.time.sleep", side_effect=lambda _s: None):
+            code = self.run_cli(cfg)
+        self.assertEqual(code, EXIT_OK)
+        self.assertEqual(len(probes), 4, "re-probe until the block binds, then stop probing")
+        self.assertEqual(len(self.site.trace_rows()), 1)
+
+    def test_a_stop_request_ends_the_startup_port_wait(self):
+        """Ctrl-C during the startup wait exits as interrupted, not as a port error later."""
+        self.site.add_route("static/s1/base/route_1_a.xml")
+        cfg = self.site.config()
+        sleeps = []
+
+        def operator_presses_ctrl_c_during_the_third_second(seconds):
+            sleeps.append(seconds)
+            if len(sleeps) == 3:
+                run_benchmark._interrupted["flag"] = True
+
+        with patch("oodbench.backends.local.ports_mod.probe_pairs", return_value=[(0, 20001)]), \
+             patch("oodbench.backends.local.time.sleep",
+                   side_effect=operator_presses_ctrl_c_during_the_third_second):
+            code = self.run_cli(cfg)
+        self.assertEqual(code, EXIT_INTERRUPTED)
+        self.assertEqual(len(sleeps), 3, "the wait must end at the first look after the stop")
+        self.assertEqual(len(self.site.trace_rows()), 0)
 
     def test_dry_run_leaves_a_simulator_on_the_block_alone(self):
         """Previewing a plan must not touch a process the preview never started.

@@ -245,9 +245,13 @@ Two defences, both required:
 
 1. **Probe the entire reserved block at startup** using the *same* bind call `find_free_port`
    uses (`bind(("localhost", port))`, no `SO_REUSEADDR`), plus a `0.0.0.0` probe because that
-   is what the CARLA server itself binds. If any port is busy, abort with the offending port
-   number and the suggestion to move `ports.rpc_base`. Never auto-shift the base — silently
-   relocating means two concurrent runs on the same host can overlap.
+   is what the CARLA server itself binds. If any port is busy, re-probe once a second for up to
+   `execution.port_release_timeout_s`: a run that has just ended on the same block leaves
+   CARLA's streaming socket draining for about a minute, and that refuses the bind exactly like
+   a live server. The wait signals nothing, because at startup no process on the block is this
+   run's (§7). If the block is still busy, abort with the offending port number and the
+   suggestion to move `ports.rpc_base`. Never auto-shift the base — silently relocating means
+   two concurrent runs on the same host can overlap.
 2. **Reap and re-verify the worker's own window before assigning another route.** A busy window
    holds only that worker slot idle; no attempt or checkpoint belongs to the pending route yet,
    so teardown cannot consume its infrastructure budget. The supervisor sends SIGTERM without

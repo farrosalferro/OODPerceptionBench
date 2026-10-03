@@ -787,8 +787,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         tasks = runner.plan()
         backend = backends.make(cfg, log)
+        backend.stop_requested = lambda: _interrupted["flag"]
         if not args.dry_run:
             backend.preflight()
+            if _interrupted["flag"]:  # a signal ended a wait inside preflight
+                raise Interrupted()
             # After the backend's own checks and before the first route: an interpreter that
             # cannot import the evaluator's dependencies otherwise costs a simulator start-up
             # per route to find out. Both backends; see oodbench/envcheck.py.

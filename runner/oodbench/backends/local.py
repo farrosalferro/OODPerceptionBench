@@ -97,9 +97,16 @@ class LocalBackend(Backend):
 
         busy = ports_mod.probe_pairs(self.pairs)
         if busy:
+            busy = self._wait_for_startup_ports(busy)
+            if busy is None:
+                self.log.warning("stop requested during the startup port wait")
+                return
+        if busy:
             detail = ", ".join(f"worker {w} port {p}" for w, p in busy[:10])
+            timeout = int(self.cfg.execution["port_release_timeout_s"])
             raise LocalBackendError(
-                f"{len(busy)} reserved port(s) already in use ({detail}). The runner will not "
+                f"{len(busy)} reserved port(s) already in use ({detail}), and not released "
+                f"within {timeout} s (execution.port_release_timeout_s). The runner will not "
                 f"relocate its block automatically -- silently shifting it is how two concurrent "
                 f"runs end up sharing a simulator. Free those ports, or move ports.rpc_base / "
                 f"ports.tm_base in the config."
@@ -107,6 +114,34 @@ class LocalBackend(Backend):
         self._owns_ports = True
         self.log.info("port preflight OK: %d ports free across %d worker(s)",
                       sum(len(p.all_ports) for p in self.pairs), len(self.pairs))
+
+    def _wait_for_startup_ports(self, busy):
+        """Give a block that is busy at startup the time :meth:`can_submit` gives it mid-run.
+
+        A run that has just ended on this block can leave CARLA's RPC+1 streaming socket
+        draining for about a minute, and that refuses the evaluator's bind like a live server
+        does -- a run started straight after another one used to exit 2 here. Returns the ports
+        still busy when the wait ends (empty once the block binds), or None if the operator
+        asked the run to stop first. Unlike can_submit this signals nothing: at startup no
+        process on the block was started by this run, so none is this run's to stop.
+        """
+        timeout = int(self.cfg.execution["port_release_timeout_s"])
+        self.log.warning(
+            "reserved port(s) %s busy at startup; waiting up to %d s for them to be released "
+            "(a run that just ended on this block leaves its sockets draining). Nothing on them "
+            "is stopped: no process there was started by this run.",
+            ", ".join(str(p) for _, p in busy[:10]), timeout)
+        started = time.monotonic()
+        for _ in range(timeout):
+            time.sleep(1)
+            if self.stop_requested():
+                return None
+            busy = ports_mod.probe_pairs(self.pairs)
+            if not busy:
+                self.log.info("reserved ports released %.1fs into the startup wait",
+                              time.monotonic() - started)
+                return busy
+        return busy
 
     def can_submit(self, worker: int) -> bool:
         """Hold an idle slot until its exact evaluator ports are bindable again.
