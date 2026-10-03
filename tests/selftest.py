@@ -519,18 +519,50 @@ PDMLITE_AGENT_ENV = {"DATAGEN": "0", "TOWN": "smoke", "REPETITION": "0"}
 REPLICATE_PLATFORM = "Linux-6.8.0-31-generic-x86_64-with-glibc2.39"
 
 
+def agent_code_of(repo: str, entrypoint: str = "team_code/data_agent.py", **overrides) -> dict:
+    """The ``agent_code`` fingerprint the runner's preflight records for a clean ``repo``.
+
+    Computed the way ``runner/oodbench/envcheck.py`` (``agent_fingerprint``) computes it, so by
+    default it matches what make_golden establishes about the same checkout. ``overrides``
+    replace single fields, to stand in for a replicate that ran something else.
+    """
+    with open(os.path.join(repo, entrypoint), "rb") as fh:
+        sha = hashlib.sha256(fh.read()).hexdigest()
+    head = subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"], check=True,
+                          capture_output=True, text=True).stdout.strip()
+    code = {"entrypoint_sha256": sha, "entrypoint_rel": entrypoint, "git_head": head,
+            "scope": entrypoint.split("/")[0], "scope_clean": True, "scope_dirty": [],
+            "git_error": None}
+    code.update(overrides)
+    return code
+
+
+def runner_agent_fingerprint(entrypoint: str) -> dict:
+    """The runner's own ``agent_fingerprint`` (standard library only), not a copy of it."""
+    runner = os.path.join(REPO_ROOT, "runner")
+    sys.path.insert(0, runner)
+    try:
+        from oodbench.envcheck import agent_fingerprint
+    finally:
+        sys.path.remove(runner)
+    return agent_fingerprint(entrypoint)
+
+
 def write_env_provenance(rep_root: str, python: str = "3.10.15", numpy: str = "1.23.5",
                          scipy: str = "1.14.1", carla="0.9.15",
                          entrypoint: str = "/opt/cg/team_code/data_agent.py",
-                         agent_env: Optional[dict] = PDMLITE_AGENT_ENV) -> None:
-    """The file the runner's preflight writes into every output root (schema 1).
+                         agent_env: Optional[dict] = PDMLITE_AGENT_ENV,
+                         agent_code: Optional[dict] = None, schema: int = 2) -> None:
+    """The file the runner's preflight writes into every output root (schema 2).
 
-    ``agent_env=None`` leaves the key out, as a runner from before it was recorded did.
+    ``agent_env=None`` leaves the key out, as a runner from before it was recorded did;
+    ``agent_code=None`` leaves the fingerprint out, as a schema-1 runner did. TestMakeGolden
+    passes the fingerprint of its reference fixture (:func:`agent_code_of`) by default.
     """
     d = os.path.join(rep_root, "_runner")
     os.makedirs(d, exist_ok=True)
     doc = {
-        "schema": 1,
+        "schema": schema,
         "checked_at": "2026-10-03T00:00:00Z",
         "python_executable": "/opt/envs/pdmlite/bin/python3",
         "python_version": python,
@@ -540,6 +572,8 @@ def write_env_provenance(rep_root: str, python: str = "3.10.15", numpy: str = "1
     }
     if agent_env is not None:
         doc["agent_env"] = dict(agent_env)
+    if agent_code is not None:
+        doc["agent_code"] = dict(agent_code)
     with open(os.path.join(d, "env_provenance.json"), "w", encoding="utf-8") as fh:
         json.dump(doc, fh)
 
@@ -570,8 +604,10 @@ class TestMakeGolden(TempCase):
 
     def rep(self, name: str, mutate=None, provenance: bool = True,
             platform: Optional[str] = REPLICATE_PLATFORM, **prov) -> str:
+        """A replicate; by default its provenance says it ran the clean reference fixture."""
         root = build_results(self.path(name), mutate=mutate)
         if provenance:
+            prov.setdefault("agent_code", agent_code_of(self.agent_repo))
             write_env_provenance(root, **prov)
         if platform is not None:
             write_run_report(root, platform)
@@ -674,10 +710,84 @@ class TestMakeGolden(TempCase):
         self.assertFalse(os.path.exists(out))
 
     def test_refuses_replicates_that_ran_a_different_entrypoint(self):
-        r1 = self.rep("rep1", entrypoint="/opt/cg/team_code/data_agent_debug.py")
+        r1 = self.rep("rep1", entrypoint="/opt/cg/team_code/data_agent_debug.py",
+                      agent_code=agent_code_of(self.agent_repo,
+                                               entrypoint_rel="team_code/data_agent_debug.py"))
         p, out, _ = self.build(r1, self.rep("rep2"))
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
-        self.assertIn("entrypoint", p.stdout + p.stderr)
+        self.assertIn("agent_code.entrypoint_rel", p.stdout + p.stderr)
+        self.assertFalse(os.path.exists(out))
+
+    # ---- the replicates ran THE reference checkout, not some copy of it ----------------
+    def test_the_runners_own_fingerprint_of_the_reference_checkout_is_accepted(self):
+        # The runner and make_golden each apply the scope rule, and agent_code_of() mirrors the
+        # runner. This pins the runner's real output to the builder, so the copies cannot drift.
+        code = runner_agent_fingerprint(os.path.join(self.agent_repo, "team_code",
+                                                     "data_agent.py"))
+        self.assertEqual(code, agent_code_of(self.agent_repo))
+        p, _, _ = self.build(self.rep("rep1", agent_code=code), self.rep("rep2", agent_code=code))
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+
+    def assertRefusesAgentCode(self, field: str, **overrides):
+        """rep1's fingerprint differs from the reference checkout in ``overrides``: refused."""
+        r1 = self.rep("rep1", agent_code=agent_code_of(self.agent_repo, **overrides))
+        p, out, _ = self.build(r1, self.rep("rep2"))
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn(f"replicate_1: agent_code.{field}", p.stderr)
+        self.assertIn("did not demonstrably run the reference checkout", p.stderr)
+        self.assertFalse(os.path.exists(out), "nothing may be written on refusal")
+
+    def test_refuses_a_replicate_from_another_checkout_at_another_commit(self):
+        # RED BEFORE THE FIX: any path ending in team_code/data_agent.py passed as the reference
+        # entrypoint, so a replicate run from some other clone was stamped as the clean one.
+        r1 = self.rep("rep1", entrypoint="/other/repo/team_code/data_agent.py",
+                      agent_code=agent_code_of(self.agent_repo, git_head="1" * 40))
+        p, out, _ = self.build(r1, self.rep("rep2"))
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("agent_code.git_head", p.stderr)
+        self.assertIn("1" * 40, p.stderr)
+        self.assertFalse(os.path.exists(out))
+
+    def test_refuses_a_replicate_whose_agent_tree_was_dirty(self):
+        # The entrypoint's hash is unchanged by an edit to the driving code it imports; only
+        # the scope check sees that.
+        self.assertRefusesAgentCode("scope_clean", scope_clean=False,
+                                    scope_dirty=[" M team_code/autopilot.py"])
+
+    def test_refusal_of_a_dirty_replicate_names_the_dirty_file(self):
+        r1 = self.rep("rep1", agent_code=agent_code_of(
+            self.agent_repo, scope_clean=False, scope_dirty=["?? team_code/data_agent_debug.py"]))
+        p, _, _ = self.build(r1, self.rep("rep2"))
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("team_code/data_agent_debug.py", p.stderr)
+
+    def test_refuses_a_clean_scope_that_covered_other_files(self):
+        # Clean, but only the entrypoint was looked at: an edit next to it would not show.
+        self.assertRefusesAgentCode("scope", scope="team_code/data_agent.py")
+
+    def test_refuses_a_replicate_that_ran_an_edited_entrypoint(self):
+        self.assertRefusesAgentCode("entrypoint_sha256", entrypoint_sha256="e" * 64)
+
+    def test_refuses_a_replicate_whose_checkout_git_could_not_read(self):
+        self.assertRefusesAgentCode("git_head", git_head=None,
+                                    git_error="git rev-parse failed: fatal: not a git repository")
+
+    def test_refuses_a_replicate_with_an_unknown_scope_state(self):
+        self.assertRefusesAgentCode("scope_clean", scope_clean=None,
+                                    git_error="git status failed: fatal: dubious ownership")
+
+    def test_refuses_schema_1_provenance_without_a_fingerprint(self):
+        r1 = self.rep("rep1", schema=1, agent_code=None)
+        p, out, _ = self.build(r1, self.rep("rep2"))
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("replicate_1", p.stderr)
+        self.assertIn("schema 2", p.stderr)
+        self.assertFalse(os.path.exists(out))
+        # Nor a schema-2 file that lacks the fingerprint.
+        r1 = self.rep("rep1b", agent_code=None)
+        p, out, _ = self.build(r1, self.rep("rep2"))
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("no agent_code", p.stderr)
         self.assertFalse(os.path.exists(out))
 
     # ---- HV-04: stamp the interpreter that RAN the routes, not the builder's -----------
@@ -704,13 +814,21 @@ class TestMakeGolden(TempCase):
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         self.assertFalse(os.path.exists(out))
 
-    def test_missing_provenance_requires_an_explicit_python(self):
+    def test_missing_provenance_is_refused_even_with_an_explicit_python(self):
+        # RED BEFORE THE FIX: --replicate-python let a replicate without env_provenance.json
+        # through with a warning, and then nothing at all checked which agent code it ran.
         r1 = self.rep("rep1", provenance=False)
-        r2 = self.rep("rep2", provenance=False)
-        p, out, _ = self.build(r1, r2)
-        self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
-        self.assertIn("--replicate-python", p.stdout + p.stderr)
-        p, out, doc = self.build(r1, r2, extra=("--replicate-python", "3.10.15"))
+        r2 = self.rep("rep2")
+        for extra in ((), ("--replicate-python", "3.10.15")):
+            p, out, _ = self.build(r1, r2, extra=extra)
+            self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+            self.assertIn("replicate_1: no", p.stderr)
+            self.assertIn("current runner", p.stderr)
+            self.assertFalse(os.path.exists(out))
+
+    def test_explicit_python_that_agrees_with_provenance_is_accepted(self):
+        p, _, doc = self.build(self.rep("rep1"), self.rep("rep2"),
+                               extra=("--replicate-python", "3.10.15"))
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertEqual(doc["environment"]["python"], "3.10.15")
 

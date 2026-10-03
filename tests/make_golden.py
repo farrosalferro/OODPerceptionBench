@@ -40,11 +40,18 @@ Provenance it refuses to guess
   repo URL, full commit, entrypoint and the entrypoint's sha256.
 * The Python that RAN the routes is read from <replicate>/_runner/env_provenance.json, which the
   runner's preflight writes. All replicates must agree. The builder's own interpreter is never
-  stamped -- it ran no route.
+  stamped -- it ran no route. Every replicate must have that file, at schema 2: a replicate
+  without it is refused, with or without --replicate-python, which is only a cross-check.
 * So are the agent.env the routes ran with (all replicates must agree, and DATAGEN must be "0":
   the carla_garage data agent shuffles the weather when it is 1) and, from
   <replicate>/_runner/report.json, the platform of the host the replicates ran on. The
   builder's own platform is never stamped either.
+* The agent code that RAN is tied to the reference checkout through the same file: the
+  preflight fingerprints the agent's git checkout (entrypoint path within the repo, entrypoint
+  sha256, HEAD, and whether the entrypoint's top directory is clean), and every field must
+  equal the reference checkout's. A path check alone accepted any other checkout of the agent,
+  and the entrypoint's hash alone misses an edit to the driving code it imports. The
+  fingerprint is taken once, at preflight time: a file edited mid-sweep is not caught.
 * The content pack is several archives. The bundle lists each archive's sha256 and a composite:
   sha256 of the canonical SHA256SUMS text (one "<sha256>  <name>\\n" line per archive, sorted by
   name in byte order). For a canonical sums file that is exactly `sha256sum SHA256SUMS`.
@@ -54,7 +61,8 @@ Exit status
     0  bundle written
     1  an assertion failed in some replicate, or the runs disagree (results, interpreter,
        packages, platform, agent.env or agent entrypoint), or a replicate ran without
-       DATAGEN "0" -- nothing written
+       DATAGEN "0", or a replicate did not demonstrably run the clean reference checkout,
+       or ran without the runner's env_provenance.json -- nothing written
     2  usage / IO error, or provenance that cannot be established -- nothing written
 """
 
@@ -157,6 +165,14 @@ def _public_url(url: str) -> Optional[str]:
     return url[:-4] if url.endswith(".git") else url
 
 
+def agent_scope(rel: str) -> str:
+    """Where the agent's code is checked for edits: the entrypoint's top directory in its
+    repository, or the whole tree for a file at the top. The runner's preflight
+    (``agent_fingerprint`` in runner/oodbench/envcheck.py) applies the same rule, and
+    check_agent_code refuses a replicate whose fingerprint used another one."""
+    return rel.split("/")[0] if "/" in rel else "."
+
+
 def reference_agent_provenance(args) -> dict:
     """Prove the reference agent is retrievable, then describe it. Raises ProvenanceError."""
     repo = os.path.abspath(args.reference_agent_repo)
@@ -186,7 +202,7 @@ def reference_agent_provenance(args) -> dict:
 
     # The v0.9 golden ran untracked *_debug.py copies sitting next to the real agent. A commit
     # sha says nothing about those; `git status` does. Ignored files (__pycache__) do not count.
-    scope = rel.split("/")[0] if "/" in rel else "."
+    scope = agent_scope(rel)
     dirty = _git(repo, "status", "--porcelain", "--untracked-files=all", "--", scope).strip()
     if dirty:
         raise ProvenanceError(
@@ -223,39 +239,91 @@ def reference_agent_provenance(args) -> dict:
             "entrypoint": rel, "entrypoint_sha256": entry_sha}
 
 
-def replicate_environment(reps: list, rep_label: dict, entrypoint: str,
-                          explicit_python: Optional[str]) -> tuple:
-    """(python, packages-or-None, agent_env-or-None) that RAN the replicates.
+#: Fields of a replicate's agent_code fingerprint and the reference_agent key each must equal.
+AGENT_CODE_FIELDS = (("entrypoint_rel", "entrypoint"), ("entrypoint_sha256", "entrypoint_sha256"),
+                     ("git_head", "commit"))
 
-    Reads <replicate>/_runner/env_provenance.json from every replicate. Paths in that file
-    (the interpreter, the agent) are checked, never returned. Raises ProvenanceError.
+
+def check_agent_code(label: str, doc: dict, agent: dict) -> None:
+    """Refuse a replicate that did not demonstrably run the reference checkout. Raises.
+
+    ``doc`` is the replicate's env_provenance.json; ``agent`` is what
+    reference_agent_provenance() established about the clean checkout. The runner's preflight
+    applies the same scope rule to the checkout it ran, so a replicate that ran this checkout
+    has exactly these values. Anything else -- another clone, an edited copy, a checkout git
+    could not read -- may have produced scores the reference agent would not.
+    """
+    why = ("so it did not demonstrably run the reference checkout: a different or edited copy "
+           "of the agent may have produced its scores. Run it from the clean "
+           "--reference-agent-repo checkout at --reference-agent-commit.")
+    code = doc.get("agent_code")
+    if not isinstance(code, dict):
+        raise ProvenanceError(f"{label}: {ENV_PROVENANCE} has no agent_code fingerprint, {why}",
+                              code=1)
+    for field, ref_key in AGENT_CODE_FIELDS:
+        got = code.get(field)
+        if got is None:
+            raise ProvenanceError(
+                f"{label}: agent_code.{field} is null (git said: {code.get('git_error')}), "
+                f"{why}", code=1)
+        if got != agent[ref_key]:
+            raise ProvenanceError(
+                f"{label}: agent_code.{field} is {got!r}, but the reference checkout's "
+                f"{ref_key} is {agent[ref_key]!r}, {why}", code=1)
+    # A clean scope proves nothing unless it covered the files the reference check covered.
+    scope = agent_scope(agent["entrypoint"])
+    if code.get("scope") != scope:
+        raise ProvenanceError(
+            f"{label}: agent_code.scope is {code.get('scope')!r}, but the reference checkout's "
+            f"scope is {scope!r}, {why}", code=1)
+    if code.get("scope_clean") is not True:
+        if code.get("scope_clean") is None:
+            detail = f"null (git said: {code.get('git_error')})"
+        else:
+            detail = "False:\n" + "\n".join(f"    {line}"
+                                             for line in code.get("scope_dirty") or [])
+        raise ProvenanceError(f"{label}: agent_code.scope_clean is {detail}\n  {why}", code=1)
+
+
+def replicate_environment(reps: list, rep_label: dict, agent: dict,
+                          explicit_python: Optional[str]) -> tuple:
+    """(python, packages, agent_env-or-None) that RAN the replicates.
+
+    Reads <replicate>/_runner/env_provenance.json from every replicate; a replicate without
+    one is refused. ``agent`` is reference_agent_provenance()'s result: every replicate's
+    agent_code must match it (check_agent_code). Paths in that file (the interpreter, the
+    agent) are never returned. ``explicit_python`` is only a cross-check. Raises
+    ProvenanceError.
     """
     if explicit_python is not None and not _PY_VERSION.match(explicit_python):
         raise ProvenanceError(f"--replicate-python must look like X.Y.Z, got {explicit_python!r}")
     seen: dict = {}
-    missing: list = []
     agent_envs: dict = {}
     for d in reps:
         path = os.path.join(d, ENV_PROVENANCE)
         if not os.path.isfile(path):
-            missing.append(d)
-            continue
+            # Without it nothing ties the replicate's routes to the reference checkout (nor to
+            # an interpreter), so --replicate-python cannot stand in for it.
+            raise ProvenanceError(
+                f"{rep_label[d]}: no {ENV_PROVENANCE}. It is written by the runner's "
+                f"environment preflight and is the only record of which agent code and "
+                f"interpreter ran the routes. Re-run this replicate with a current runner, "
+                f"without --skip-env-preflight.", code=1)
         try:
             with open(path, encoding="utf-8") as fh:
                 doc = json.load(fh)
         except (OSError, ValueError) as exc:
             raise ProvenanceError(f"{rep_label[d]}: {ENV_PROVENANCE} does not parse: {exc}")
-        if doc.get("schema") != 1 or not isinstance(doc.get("packages"), dict) \
+        if doc.get("schema") != 2 or not isinstance(doc.get("packages"), dict) \
                 or not isinstance(doc.get("python_version"), str):
-            raise ProvenanceError(f"{rep_label[d]}: {ENV_PROVENANCE} is not schema 1")
+            raise ProvenanceError(
+                f"{rep_label[d]}: {ENV_PROVENANCE} is not schema 2 (it has schema "
+                f"{doc.get('schema')!r}). Schema 2 adds the agent_code fingerprint this "
+                f"builder requires; re-run this replicate with a current runner.", code=1)
         if doc.get("agent_import_ok") is not True:
             raise ProvenanceError(f"{rep_label[d]}: the runner preflight could not import the "
                                   f"agent; its routes did not run the agent you think", code=1)
-        ran = str(doc.get("agent_entrypoint") or "").replace(os.sep, "/")
-        if ran != entrypoint and not ran.endswith("/" + entrypoint):
-            raise ProvenanceError(
-                f"{rep_label[d]}: the replicate ran agent entrypoint "
-                f"{os.path.basename(ran)!r}, which is not {entrypoint}", code=1)
+        check_agent_code(rep_label[d], doc, agent)
         seen[d] = (doc["python_version"], doc["packages"])
         env = doc.get("agent_env")  # absent from files written before it was recorded
         if env is None:
@@ -292,21 +360,10 @@ def replicate_environment(reps: list, rep_label: dict, entrypoint: str,
         detail = "; ".join(f"{rep_label[d]}={json.dumps(e, sort_keys=True)}"
                            for d, e in agent_envs.items())
         raise ProvenanceError(f"the replicates ran with different agent.env ({detail})", code=1)
-    if missing:
-        names = ", ".join(rep_label[d] for d in missing)
-        if explicit_python is None:
-            raise ProvenanceError(
-                f"no {ENV_PROVENANCE} in {names}. Pass --replicate-python X.Y.Z with the "
-                f"version of the interpreter the runner executed (environment.python in the "
-                f"config), NOT the one running this script.")
-        print(f"WARNING: no {ENV_PROVENANCE} in {names}; Python taken from --replicate-python "
-              f"and package versions are not stamped.", file=sys.stderr)
-    python = explicit_python if explicit_python is not None else pythons.pop()
-    packages = None
-    if not missing:
-        only = next(iter(seen.values()))[1]
-        packages = {k: only.get(k) for k in STAMPED_PACKAGES
-                    if k != "carla" or only.get(k) is not None}
+    python = pythons.pop()
+    only = next(iter(seen.values()))[1]
+    packages = {k: only.get(k) for k in STAMPED_PACKAGES
+                if k != "carla" or only.get(k) is not None}
     agent_env = None
     unrecorded = [d for d in reps if d not in agent_envs]
     if unrecorded:
@@ -412,8 +469,9 @@ def main() -> int:
     ap.add_argument("--content-pack-sha256", default=None,
                     help="optional cross-check of the composite digest; a mismatch is an error")
     ap.add_argument("--replicate-python", default=None, metavar="X.Y.Z",
-                    help="Python version the replicates ran under. Required only when a "
-                         "replicate has no _runner/env_provenance.json; otherwise a cross-check")
+                    help="optional cross-check: the Python version the replicates ran under. "
+                         "It is read from each replicate's _runner/env_provenance.json, which "
+                         "every replicate must have; a different value here is an error")
     ap.add_argument("--runner-version", default=None)
     ap.add_argument("--gpu", default=None, help="e.g. 'NVIDIA RTX A6000, driver 550.54.14'")
     ap.add_argument("--notes", default=None)
@@ -454,7 +512,7 @@ def main() -> int:
 
     try:
         agent = reference_agent_provenance(args)
-        python, packages, agent_env = replicate_environment(reps, rep_label, agent["entrypoint"],
+        python, packages, agent_env = replicate_environment(reps, rep_label, agent,
                                                             args.replicate_python)
         host_os = replicate_platform(reps, rep_label)
         archives, composite = content_pack_digest(args.content_pack_archive,

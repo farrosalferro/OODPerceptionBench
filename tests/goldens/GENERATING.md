@@ -45,7 +45,9 @@ Any deterministic reference agent works. If you use a different one, say so in
 > which cannot `import carla`, and the replicate died as an infrastructure failure rather than
 > as a wrong-interpreter error. The bundle's `environment.python` is read from each replicate's
 > `_runner/env_provenance.json` (written by the runner's preflight), not from the interpreter
-> that runs `make_golden.py`.
+> that runs `make_golden.py`. Do not pass `--skip-env-preflight` to a replicate: that file is
+> also the only record of which agent code the replicate ran, and `make_golden.py` refuses a
+> replicate without it.
 
 ### The reference agent
 
@@ -182,12 +184,21 @@ Provenance it establishes before reading any result, refusing (nothing written) 
   tracked file, and `git status --porcelain -- team_code` must be empty. The bundle records
   `repo` (a public URL, never a local path), the full `commit`, the `entrypoint`, its
   `entrypoint_sha256`, and `version` = `carla_garage@<full sha> team_code/data_agent.py`.
-- **Interpreter.** Each replicate's `_runner/env_provenance.json` must exist and all of them must
-  agree on the Python version and package versions, and must have run the stated entrypoint. The
+- **The replicates ran that checkout.** Each replicate's `_runner/env_provenance.json` must
+  exist at schema 2, which a current runner's preflight writes. Its `agent_code` fingerprint must
+  match the checkout above field by field: `entrypoint_rel` = `--reference-agent-entrypoint`,
+  the same `entrypoint_sha256`, `git_head` = the commit, the same `scope` (the entrypoint's top
+  directory), and `scope_clean` true (the same `git status` rule, applied to the checkout the
+  replicate actually ran). Otherwise it exits 1:
+  the replicate did not demonstrably run the reference checkout, and another clone or an edited
+  copy of the agent may have produced its scores. Re-run it from the clean checkout. A missing
+  or schema-1 file exits 1 too — `--replicate-python` does not stand in for it. The fingerprint
+  is taken once, when the runner's preflight runs: a file edited mid-sweep is not caught, so
+  leave the checkout alone until every replicate has finished.
+- **Interpreter.** All replicates must agree on the Python version and package versions. The
   bundle stamps `environment.python` and `environment.python_packages` (numpy, scipy, and the
-  carla client if recorded) — never an interpreter path. For replicates produced by a runner
-  without that preflight, pass `--replicate-python X.Y.Z` (the version of `environment.python`
-  in the config); the package versions are then left unstamped. Any disagreement exits 1.
+  carla client if recorded) — never an interpreter path. `--replicate-python X.Y.Z` is an
+  optional cross-check of the recorded version. Any disagreement exits 1.
 - **Agent environment.** The same file records the `agent.env` the routes ran with. All
   replicates must agree, and every one must have `DATAGEN: "0"` set explicitly — left out, the
   runner's own environment decides; anything else exits 1. The bundle stamps it as

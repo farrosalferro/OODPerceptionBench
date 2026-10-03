@@ -10,8 +10,8 @@ activation, ``agent.env``, ``PYTHONPATH`` and working directory a route gets (bu
 :func:`oodbench.jobscript.environment_prelude`, never copied), and imports what the evaluator
 imports: ``carla``, ``py_trees``, ``numpy``, ``scipy`` and the agent module, the evaluator's
 way. Any failure aborts the sweep before the first route. On success the interpreter, the
-versions it found and the ``agent.env`` the routes get are written to
-``<output.root>/_runner/env_provenance.json``.
+versions it found, the ``agent.env`` the routes get and a fingerprint of the agent's code
+(:func:`agent_fingerprint`) are written to ``<output.root>/_runner/env_provenance.json``.
 
 Deliberately NOT checked: the GPU, CUDA, or anything the agent does in ``setup()``. Those need
 the simulator and the route; this is only the part that can be known for free.
@@ -19,13 +19,16 @@ the simulator and the route; this is only the part that can be known for free.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import posixpath
+import re
 import shlex
 import subprocess
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict
+from typing import TYPE_CHECKING, Any, Dict, List
 
 from .jobscript import environment_prelude
 
@@ -34,7 +37,8 @@ if TYPE_CHECKING:  # pragma: no cover
 
     from .config import Config
 
-SCHEMA = 1
+#: 2 added ``agent_code`` (:func:`agent_fingerprint`); the golden builder requires it.
+SCHEMA = 2
 
 #: (distribution name for ``importlib.metadata``, module name to import), in report order.
 PACKAGES = (("numpy", "numpy"), ("scipy", "scipy"), ("carla", "carla"), ("py_trees", "py_trees"))
@@ -43,6 +47,15 @@ PACKAGES = (("numpy", "numpy"), ("scipy", "scipy"), ("carla", "carla"), ("py_tre
 TIMEOUT_S = 600
 
 MARKER = "OODPB_ENV_PREFLIGHT_RESULT "
+
+#: Each git call of :func:`agent_fingerprint`. git on a local checkout answers in milliseconds;
+#: this only bounds a hung network filesystem.
+GIT_TIMEOUT_S = 60
+
+#: How many ``git status --porcelain`` lines :func:`agent_fingerprint` keeps as evidence.
+DIRTY_LINES = 20
+
+_ABS_PATH = re.compile(r"(?<![\w.])/[^\s'\"]+")
 
 #: Runs inside ``environment.python``. Must stay importable by any Python 3 the runner might
 #: be pointed at, so: standard library only, and no f-string features newer than 3.6.
@@ -133,6 +146,74 @@ def render(cfg: "Config") -> str:
     return "\n".join(lines) + "\n"
 
 
+def _git(cwd: str, *args: str) -> str:
+    """stdout of ``git -C cwd args``. Raises :class:`RuntimeError` with git's own complaint."""
+    # A GIT_DIR or GIT_WORK_TREE left in the runner's environment (a git hook, an IDE) would
+    # point git at some other repository than the one the agent file is in.
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")}
+    try:
+        p = subprocess.run(["git", "-C", cwd, *args], stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, env=env,
+                           timeout=GIT_TIMEOUT_S, universal_newlines=True)
+    except FileNotFoundError:
+        raise RuntimeError("git is not installed") from None
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"git {args[0]} did not answer within {GIT_TIMEOUT_S} s") from None
+    if p.returncode != 0:
+        # First line only: enough to tell "not a git repository" from "dubious ownership".
+        # Paths in it are masked -- "dubious ownership in repository at '/x/y'" names a
+        # directory, and the provenance file must not carry one.
+        lines = (p.stderr or p.stdout).strip().splitlines()
+        first = _ABS_PATH.sub("<path>", lines[0]) if lines else f"exit {p.returncode}"
+        raise RuntimeError(f"git {args[0]} failed: {first}")
+    return p.stdout
+
+
+def agent_fingerprint(entrypoint: str) -> Dict[str, Any]:
+    """What the agent's code was when the preflight ran, in terms a golden builder can check.
+
+    The agent file's own sha256 is not enough: the reference agent's entrypoint imports the
+    driving code from files next to it, and an edit there leaves the entrypoint's hash alone.
+    So this also records the commit of the git checkout the file is in and whether the
+    checkout is clean under the entrypoint's top directory (the "scope"): no modified, staged
+    or untracked file there, ignored files excepted. That is exactly the rule
+    ``tests/make_golden.py`` (``reference_agent_provenance``) applies to the reference
+    checkout, so a replicate's fingerprint can be compared with it field by field.
+
+    Taken once, here: a file edited after the preflight, mid-sweep, is not caught.
+
+    Never raises for git trouble -- an ordinary benchmark run does not need this, only golden
+    building does. If git cannot answer (not installed, not a repository, "dubious
+    ownership"), ``git_head``, ``entrypoint_rel``, ``scope``, ``scope_clean`` and
+    ``scope_dirty`` are null and ``git_error`` says why. No absolute path is recorded.
+    """
+    out: Dict[str, Any] = {"entrypoint_sha256": None, "entrypoint_rel": None, "git_head": None,
+                           "scope": None, "scope_clean": None, "scope_dirty": None,
+                           "git_error": None}
+    with open(entrypoint, "rb") as fh:
+        out["entrypoint_sha256"] = hashlib.sha256(fh.read()).hexdigest()
+    folder = os.path.dirname(os.path.abspath(entrypoint))
+    try:
+        top = _git(folder, "rev-parse", "--show-toplevel").strip()
+        # The file's directory relative to the top, as git resolved it: a symlinked directory
+        # on the way would make a path computed here disagree with git's.
+        prefix = _git(folder, "rev-parse", "--show-prefix").strip()
+        head = _git(folder, "rev-parse", "HEAD").strip()
+        rel = posixpath.join(prefix, os.path.basename(entrypoint)) if prefix \
+            else os.path.basename(entrypoint)
+        # Same rule as agent_scope() in tests/make_golden.py, which refuses any other.
+        scope = rel.split("/")[0] if "/" in rel else "."
+        dirty = _git(top, "status", "--porcelain", "--untracked-files=all", "--", scope)
+    except RuntimeError as exc:
+        out["git_error"] = str(exc)
+        return out
+    lines: List[str] = [line for line in dirty.splitlines() if line.strip()]
+    out.update(entrypoint_rel=rel, git_head=head, scope=scope, scope_clean=not lines,
+               scope_dirty=lines[:DIRTY_LINES])
+    return out
+
+
 def run(cfg: "Config", log: "logging.Logger") -> Dict[str, Any]:
     """Run the preflight, log what it found, write the provenance file and return it.
 
@@ -184,6 +265,21 @@ def run(cfg: "Config", log: "logging.Logger") -> Dict[str, Any]:
         raise EnvCheckError(f"environment preflight exited {proc.returncode} (script: {script})."
                             f" Last output:\n{tail}\n{_HINT}")
 
+    agent_code = agent_fingerprint(str(cfg.agent["entrypoint"]))
+    if agent_code["git_error"] is not None:
+        log.warning("environment preflight: could not fingerprint the agent's git checkout "
+                    "(%s). The run is unaffected, but its output cannot be used to build a "
+                    "golden bundle.", agent_code["git_error"])
+    elif agent_code["scope_clean"]:
+        log.info("environment preflight: agent %s at commit %s, clean under %s",
+                 agent_code["entrypoint_rel"], agent_code["git_head"], agent_code["scope"])
+    else:
+        log.warning("environment preflight: agent %s at commit %s, but the checkout has "
+                    "modified or untracked files under %s (listed in env_provenance.json). "
+                    "The run is unaffected, but its output cannot be used to build a golden "
+                    "bundle.", agent_code["entrypoint_rel"], agent_code["git_head"],
+                    agent_code["scope"])
+
     provenance = {
         "schema": SCHEMA,
         "checked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -195,6 +291,9 @@ def run(cfg: "Config", log: "logging.Logger") -> Dict[str, Any]:
         # As every route receives it (the runner's reserved variables are added per route and
         # are not part of it). The golden builder checks DATAGEN here.
         "agent_env": dict(cfg.agent["env"]),
+        # Which code the agent was, at this moment: see agent_fingerprint(). The golden
+        # builder requires it to match the reference checkout.
+        "agent_code": agent_code,
     }
     path = runner_dir / "env_provenance.json"
     tmp = path.with_name(path.name + ".tmp")

@@ -5,7 +5,7 @@
 > comparable. Every report this runner writes carries that stamp.
 >
 > **This is a hardware-validated local first cut, not a production-scale runner.** The
-> supervision logic is covered by 306 automated tests. On 2026-08-11/12 CARLA 0.9.15 executed
+> supervision logic is covered by 317 automated tests. On 2026-08-11/12 CARLA 0.9.15 executed
 > single routes, two 8-route/two-worker sweeps with one-GPU stacking and port isolation observed
 > live, a real Ctrl-C/reap/resume cycle, and three independent nine-route PDM-Lite golden
 > replicates. The SLURM backend is now validated on a real scheduler at two-way concurrency (one
@@ -80,15 +80,32 @@ python run_benchmark.py --config my_config.yaml
    writes `<out>/_runner/env_provenance.json`:
 
    ```json
-   {"schema": 1, "checked_at": "2026-01-01T00:00:00Z",
+   {"schema": 2, "checked_at": "2026-01-01T00:00:00Z",
     "python_executable": "/opt/envs/b2d/bin/python3", "python_version": "3.10.15",
     "packages": {"numpy": "1.24.4", "scipy": "1.10.1", "carla": "0.9.15", "py_trees": "0.8.3"},
     "agent_entrypoint": "/path/to/my_agent.py", "agent_import_ok": true,
-    "agent_env": {"MY_AGENT_FLAG": "1"}}
+    "agent_env": {"MY_AGENT_FLAG": "1"},
+    "agent_code": {"entrypoint_sha256": "<64 hex>", "entrypoint_rel": "my_team/my_agent.py",
+                   "git_head": "<full commit sha>", "scope": "my_team",
+                   "scope_clean": true, "scope_dirty": [], "git_error": null}}
    ```
 
    `agent_env` is your `agent.env` as every route receives it (the runner's reserved variables
    are added per route and are not in it).
+
+   `agent_code` fingerprints the code the agent was: the entrypoint's sha256, its path inside
+   the git repository that holds it (`entrypoint_rel`), that repository's `HEAD`, and whether
+   the entrypoint's top directory in the repository (`scope`; `.` for a file at the top) is
+   clean — `git status --porcelain --untracked-files=all -- <scope>` printing nothing, ignored
+   files excepted. When it is not, `scope_dirty` holds up to 20 of those lines. It records no
+   absolute path. The entrypoint's hash alone would not do: an agent imports its driving code
+   from other files, and the clean-scope check is what covers those. The golden builder
+   (`tests/make_golden.py`) requires every field to match its reference checkout; nothing
+   else reads it. If git cannot answer (not installed, the agent is not in a repository, or
+   git refuses it for "dubious ownership"), `git_head`, `entrypoint_rel`, `scope`,
+   `scope_clean` and `scope_dirty` are `null` and `git_error` says why; the preflight logs a
+   warning and the run goes on. The fingerprint is taken **once, at preflight time**: a file
+   edited after that, mid-sweep, is not caught.
 
    Versions come from the installed distribution's metadata when the imported module is one of
    that distribution's files, otherwise from the module's `__version__`, else `null` — so a copy
@@ -201,7 +218,7 @@ dropped:
 <out>/_runner/jobs/<scenario>/<level>/<route>_seed42.sh  # exactly what ran
 <out>/_runner/logs/<scenario>/<level>/<route>_seed42.{out,err}
 <out>/_runner/state.json                                 # attempt ledger (resume)
-<out>/_runner/env_preflight.sh, env_provenance.json      # interpreter check (Quickstart step 3)
+<out>/_runner/env_preflight.sh, env_provenance.json      # interpreter check + agent fingerprint (Quickstart step 3)
 <out>/_runner/report.json, report.md                     # final report
 ```
 
@@ -447,7 +464,7 @@ templates need PyYAML and are skipped without it):
 python -m unittest discover -s tests -t .
 ```
 
-306 tests covering the port allocator (at worker counts far above any real GPU count) and its
+317 tests covering the port allocator (at worker counts far above any real GPU count) and its
 run locks, the finalization predicate and status taxonomy, path mirroring, manifest integrity,
 the resume and budget decision, the attempt-accounting model of `DESIGN.md` §6A, the exit
 contract, the ledger,

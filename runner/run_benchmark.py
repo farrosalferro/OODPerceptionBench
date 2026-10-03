@@ -802,7 +802,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             # per route to find out. Both backends; see oodbench/envcheck.py.
             if args.skip_env_preflight:
                 msg = ("--skip-env-preflight: environment.python was NOT checked before the "
-                       "sweep, and no _runner/env_provenance.json was written by this run.")
+                       "sweep, and no _runner/env_provenance.json was written by this run, so "
+                       "tests/make_golden.py will not accept it as a replicate.")
                 log.warning("%s", msg)
                 runner.warnings.append(msg)
             else:
