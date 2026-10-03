@@ -73,8 +73,9 @@ python run_benchmark.py --config my_config.yaml
    python run_benchmark.py --config my_config.yaml --workers 4
    ```
 
-   Budget roughly **0.12 GPU-hours per route**, so ≈ 58 GPU-hours for the full 475-route set.
-   At 4-way parallelism that is about 15 hours.
+   Budget roughly **0.14 GPU-hours per route**, so ≈ 67 GPU-hours for the full 475-route set,
+   per model and seed. At 4-way parallelism that is about 17 hours. (Measured: 0.136 for one
+   inference model over one category; see [`STATUS.md`](STATUS.md) H8.)
 
 Interrupt with `Ctrl-C` at any point. Re-running the same command resumes: completed routes are
 skipped and retry budgets carry over.

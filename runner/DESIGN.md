@@ -17,10 +17,10 @@
 
 ## 0. What this component is
 
-The benchmark is 475 closed-loop CARLA routes. Evaluating one model is ~58 GPU-hours. Today
-that is only possible with a stack of cluster-specific orchestrators that hardcode absolute
-storage paths, specific hostnames, an SSH submit host, conda environment names, SLURM
-partitions, and a cap-gating protocol built out of a text file on disk. None of that can ship.
+The benchmark is 475 closed-loop CARLA routes. Evaluating one model at one seed is ~67
+GPU-hours. Today that is only possible with a stack of cluster-specific orchestrators that
+hardcode absolute storage paths, specific hostnames, an SSH submit host, conda environment
+names, SLURM partitions, and a cap-gating protocol built out of a text file on disk. None of that can ship.
 
 The runner replaces them with:
 
@@ -1449,7 +1449,7 @@ extras/missing/modified. `routes.strict_manifest: true` makes any mismatch a sta
 than any name heuristic: it catches an edited XML, which no pattern ever would.
 
 Without a manifest the runner still prints the discovered count and per-directory breakdown so
-that "70 / 162 / 243 = 475" is verifiable at a glance before ~58 GPU-hours are spent.
+that "70 / 162 / 243 = 475" is verifiable at a glance before ~67 GPU-hours are spent.
 
 ---
 
