@@ -29,7 +29,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from oodbench import (ARXIV_VERSION, BENCHMARK_RELEASE, EVALUATOR_WORLD_NOT_READY,  # noqa: E402
                       EXIT_CONFIG, EXIT_INTERRUPTED, EXIT_NO_WORKERS, __version__)
-from oodbench import backends, config as config_mod, gpus as gpus_mod, plan as plan_mod  # noqa: E402
+from oodbench import backends, config as config_mod, envcheck, gpus as gpus_mod  # noqa: E402
+from oodbench import plan as plan_mod  # noqa: E402
 from oodbench import report as report_mod, results as results_mod  # noqa: E402
 from oodbench.backends.base import Attempt, AttemptOutcome  # noqa: E402
 from oodbench.plan import Decision, RouteTask  # noqa: E402
@@ -87,6 +88,11 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
                         "counter: no result file is touched and no other budget moves, so it "
                         "buys attempts, never answers. Deliberately not --force: it destroys "
                         "nothing")
+    p.add_argument("--skip-env-preflight", action="store_true",
+                   help="do not check, before the first route, that environment.python can "
+                        "import carla, py_trees, numpy, scipy and the agent under the job's "
+                        "environment. For an interpreter that only exists on the compute "
+                        "nodes; recorded in the report as a warning")
     p.add_argument("--check-gpus", action="store_true",
                    help="print the CUDA and Vulkan device lists side by side and exit")
     p.add_argument("--verbose", "-v", action="store_true")
@@ -783,9 +789,22 @@ def main(argv: Optional[List[str]] = None) -> int:
         backend = backends.make(cfg, log)
         if not args.dry_run:
             backend.preflight()
+            # After the backend's own checks and before the first route: an interpreter that
+            # cannot import the evaluator's dependencies otherwise costs a simulator start-up
+            # per route to find out. Both backends; see oodbench/envcheck.py.
+            if args.skip_env_preflight:
+                msg = ("--skip-env-preflight: environment.python was NOT checked before the "
+                       "sweep, and no _runner/env_provenance.json was written by this run.")
+                log.warning("%s", msg)
+                runner.warnings.append(msg)
+            else:
+                envcheck.run(cfg, log)
         rep = runner.run(tasks, state, backend)
     except plan_mod.PlanError as exc:
         log.error("planning error: %s", exc)
+        return EXIT_CONFIG
+    except envcheck.EnvCheckError as exc:
+        log.error("%s", exc)
         return EXIT_CONFIG
     except Interrupted:
         interrupted = True
