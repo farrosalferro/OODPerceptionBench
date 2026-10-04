@@ -72,6 +72,10 @@ _FAULT_STATES = frozenset({
 _CANCEL_WAIT_S = 60.0
 _CANCEL_POLL_S = 0.2
 
+# How long a job may be unknown to both ``squeue`` and ``sacct`` before it settles as FAULT.
+# A module constant, not a config key: a new key would move every existing config digest.
+_ACCOUNTING_GRACE_S = 180.0
+
 
 class SlurmBackendError(Exception):
     pass
@@ -104,6 +108,7 @@ class SlurmBackend(Backend):
         self._running: set[str] = set()
         self._started: set[str] = set()
         self._paused_at: Dict[str, float] = {}
+        self._unknown_since: Dict[str, float] = {}
 
     def preflight(self) -> None:
         for tool in ("sbatch", "squeue"):
@@ -333,15 +338,21 @@ class SlurmBackend(Backend):
         except (subprocess.CalledProcessError, OSError):
             out = ""
         if out:
+            self._unknown_since.pop(job_ref, None)
             queue_state = self._base_state(out.splitlines()[0])
             # A state still visible in squeue is active scheduler ownership. PENDING,
             # COMPLETING, REQUEUED and SUSPENDED pause the evaluator clock; only RUNNING
             # advances it. Terminal accounting below remains the source of truth.
             return self._poll_active_state(attempt, job_ref, queue_state)
 
-        accounting = self._sacct_state(job_ref)
-        state, exit_code = accounting if accounting is not None else (None, None)
-        base_state = self._base_state(state or "")
+        # A failed squeue is not proof the job is gone: once a finished job is purged, a real
+        # squeue exits 1 ("Invalid job id"). So both paths ask accounting.
+        accounting, missing = self._sacct_query(job_ref)
+        if accounting is None:
+            return self._poll_without_accounting(attempt, job_ref, missing)
+        self._unknown_since.pop(job_ref, None)
+        state, exit_code = accounting
+        base_state = self._base_state(state)
         if base_state in _NONTERMINAL_STATES:
             return self._poll_active_state(attempt, job_ref, base_state)
 
@@ -354,7 +365,7 @@ class SlurmBackend(Backend):
                      if attempt.exit_code is not None else None)
         if signalled:
             attempt.outcome = AttemptOutcome.FAULT
-            attempt.detail = f"SLURM state {state or 'unknown'}; {signalled}"
+            attempt.detail = f"SLURM state {state}; {signalled}"
             self._forget(job_ref)
             return True
         if base_state in _FAULT_STATES:
@@ -362,7 +373,35 @@ class SlurmBackend(Backend):
             attempt.detail = f"SLURM state {state}"
         else:
             attempt.outcome = AttemptOutcome.EXITED
-            attempt.detail = f"SLURM state {state or 'unknown'}"
+            attempt.detail = f"SLURM state {state}"
+        self._forget(job_ref)
+        return True
+
+    def _poll_without_accounting(self, attempt: Attempt, job_ref: str, missing: str) -> bool:
+        """Neither squeue nor sacct knows the job: wait out a grace, then settle as FAULT.
+
+        An empty or failed accounting reply is absence of evidence. Settling it as a clean
+        exit charged the model's record budget for an end nobody observed. After
+        ``_ACCOUNTING_GRACE_S`` it settles on the bounded axis instead, with the route clock
+        stopped where the job was last seen, and a best-effort ``scancel`` in case it is
+        still alive somewhere.
+        """
+        now = time.time()
+        since = self._unknown_since.setdefault(job_ref, now)
+        if now - since < _ACCOUNTING_GRACE_S:
+            return False
+        job_id, cluster_args = self._job_id_and_cluster(job_ref)
+        try:
+            subprocess.call(["scancel"] + cluster_args + [job_id],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError:
+            pass
+        self.log.warning("SLURM job %s: no squeue or sacct answer for %.0fs (%s); settling it "
+                         "as a fault", job_ref, now - since, missing)
+        self._close_route_clock(attempt, job_ref, since)
+        attempt.finished_at = since
+        attempt.outcome = AttemptOutcome.FAULT
+        attempt.detail = f"accounting unavailable after {_ACCOUNTING_GRACE_S:.0f}s: {missing}"
         self._forget(job_ref)
         return True
 
@@ -429,21 +468,32 @@ class SlurmBackend(Backend):
 
     @staticmethod
     def _sacct_state(job_ref: str) -> Optional[Tuple[str, str]]:
+        return SlurmBackend._sacct_query(job_ref)[0]
+
+    @staticmethod
+    def _sacct_query(job_ref: str) -> Tuple[Optional[Tuple[str, str]], str]:
+        """Return ``((state, exit_code), "")``, or ``(None, why accounting had no answer)``."""
         job_id, cluster_args = SlurmBackend._job_id_and_cluster(job_ref)
         try:
-            out = subprocess.check_output(
+            result = subprocess.run(
                 ["sacct", "-X", "-j", job_id, "--format=State,ExitCode", "-n", "-P"]
                 + cluster_args,
-                text=True,
-                stderr=subprocess.DEVNULL).strip()
-        except (subprocess.CalledProcessError, OSError):
-            return None
+                capture_output=True, text=True)
+        except OSError as exc:
+            return None, f"sacct could not run ({exc.strerror or exc})"
+        if result.returncode != 0:
+            lines = result.stderr.strip().splitlines()
+            reason = f": {lines[0].strip()[:200]}" if lines else ""
+            return None, f"sacct failed (exit {result.returncode}){reason}"
+        out = result.stdout.strip()
         if not out:
-            return None
+            return None, "sacct returned no record"
         fields = out.splitlines()[0].strip().split("|")
         state = fields[0].strip()
+        if not state:
+            return None, "sacct returned no state"
         exit_code = fields[1].strip() if len(fields) > 1 else ""
-        return state, exit_code
+        return (state, exit_code), ""
 
     @staticmethod
     def _exit_code(value: str) -> Optional[int]:
@@ -511,6 +561,7 @@ class SlurmBackend(Backend):
             time.sleep(_CANCEL_POLL_S)
 
     def _forget(self, job_ref: str) -> None:
+        self._unknown_since.pop(job_ref, None)
         self._running.discard(job_ref)
         self._started.discard(job_ref)
         self._paused_at.pop(job_ref, None)

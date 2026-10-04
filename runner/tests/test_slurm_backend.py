@@ -485,6 +485,247 @@ class TestCancellationWaits(SlurmBackendBase):
         self.assertIs(attempt.outcome, AttemptOutcome.KILLED)
 
 
+class _Clock:
+    """A settable stand-in for ``time.time`` so a 180 s grace runs instantly."""
+
+    def __init__(self, now=1_800_000_000.0):
+        self.now = now
+
+    def __call__(self):
+        return self.now
+
+
+CRASH_SHAPED = {"_checkpoint": {"progress": [1, 1], "records": [{
+    "status": "Failed - Simulation crashed", "scores": {"score_composed": 3.0}}]}}
+
+
+class TestAccountingUnavailable(SlurmBackendBase):
+    """Neither ``squeue`` nor ``sacct`` knows the job: absence of evidence, not a clean exit.
+
+    Every answer here is captured scheduler output (``fixtures/slurm``). A real ``squeue`` exits
+    1 with "Invalid job id" once a finished job is purged, so a ``squeue`` error must still fall
+    through to ``sacct``; only when ``sacct`` also has nothing does the grace start.
+    """
+
+    def submitted(self, sacct, *, squeue=("squeue_purged",), **sections):
+        self.replay("sbatch", "sbatch_parsable")
+        self.replay("squeue", *squeue)
+        self.replay("sacct", *sacct)
+        self.replay("scancel", "scancel_ok")
+        sections.setdefault("slurm", {"submit_interval_s": 0})
+        cfg, backend, task = self.backend_and_task(**sections)
+        return cfg, backend, task, backend.submit(task, worker=0)
+
+    def test_a_job_unknown_to_squeue_and_sacct_is_kept(self):
+        """RED BEFORE THE FIX:
+
+            AssertionError: True is not false : a job with no accounting record was settled
+            as finished
+
+        Today an empty ``sacct`` reply settles as EXITED "SLURM state unknown" and charges the
+        model's record budget for an end nobody observed.
+        """
+        for squeue in ("squeue_purged", "squeue_gone_recent"):
+            with self.subTest(squeue=squeue):
+                _, backend, _, attempt = self.submitted(["sacct_never_issued"],
+                                                        squeue=(squeue,))
+                self.assertFalse(backend.poll(attempt),
+                                 "a job with no accounting record was settled as finished")
+                self.assertIsNone(attempt.outcome)
+                self.assertIsNone(attempt.finished_at)
+
+    def test_silent_accounting_faults_on_the_bounded_axis_after_the_grace(self):
+        """RED BEFORE THE FIX:
+
+            AssertionError: True is not false : the first silent poll settled the job
+
+        After the grace the job settles as FAULT, never EXITED, so a crash-shaped checkpoint
+        is charged to the bounded ``killed`` axis and not to the model's record budget. A
+        best-effort ``scancel`` goes out first in case the job is still alive somewhere.
+        """
+        clock = _Clock()
+        with unittest.mock.patch("time.time", clock):
+            cfg, backend, task, attempt = self.submitted(
+                ["sacct_never_issued"],
+                retry={"record_budget": 3, "infra_budget": 3, "tickruntime_budget": 0,
+                       "killed_budget": 2, "worker_quarantine_after": 99})
+            task.result_path.write_text(json.dumps(CRASH_SHAPED), encoding="utf-8")
+            start = clock.now
+            self.assertFalse(backend.poll(attempt), "the first silent poll settled the job")
+            clock.now = start + 179.0
+            self.assertFalse(backend.poll(attempt), "settled before the 180 s grace ran out")
+            self.assertEqual(self.calls("scancel"), [])
+            clock.now = start + 180.0
+            self.assertTrue(backend.poll(attempt))
+
+        self.assertIs(attempt.outcome, AttemptOutcome.FAULT)
+        self.assertEqual(attempt.detail,
+                         "accounting unavailable after 180s: sacct returned no record")
+        self.assertEqual(attempt.finished_at, start,
+                         "the grace itself was counted as route time")
+        self.assertEqual(self.calls("scancel"), [["141229"]])
+
+        runner = run_benchmark.Runner(
+            cfg, argparse.Namespace(limit=None, dry_run=False, force=False))
+        state = RunState(path=Path(cfg.output["root"]) / "_runner" / "state.json")
+        self.assertTrue(runner._settle(attempt, state, backend))
+        settled = state.get(task.key)
+        self.assertEqual(settled.attempts_killed, 1)
+        self.assertEqual(settled.attempts_record, 0,
+                         "missing accounting spent the model's record retry budget")
+
+    def test_a_failing_sacct_is_told_apart_from_an_empty_reply(self):
+        """RED BEFORE THE FIX:
+
+            AssertionError: <AttemptOutcome.EXITED: 'exited'> is not
+            <AttemptOutcome.FAULT: 'fault'>
+
+        An operator reading the report must know whether accounting was down or merely had
+        no record of the job.
+        """
+        clock = _Clock()
+        with unittest.mock.patch("time.time", clock):
+            _, backend, _, attempt = self.submitted(["sacct_command_error"])
+            backend.poll(attempt)
+            clock.now += 180.0
+            backend.poll(attempt)
+
+        self.assertIs(attempt.outcome, AttemptOutcome.FAULT)
+        self.assertEqual(
+            attempt.detail,
+            'accounting unavailable after 180s: sacct failed (exit 1): '
+            'sacct: error: Invalid field requested: "NoSuchField"')
+
+    def test_a_job_that_reappears_restarts_the_grace(self):
+        """RED BEFORE THE FIX:
+
+            AssertionError: True is not false : the first silent poll settled the job
+
+        A job visible again in ``squeue`` is owned by the scheduler. The next silence starts a
+        fresh grace rather than inheriting the old one.
+        """
+        clock = _Clock()
+        with unittest.mock.patch("time.time", clock):
+            _, backend, _, attempt = self.submitted(
+                ["sacct_never_issued"],
+                squeue=("squeue_purged", "squeue_running", "squeue_purged"))
+            start = clock.now
+            self.assertFalse(backend.poll(attempt), "the first silent poll settled the job")
+            clock.now = start + 170.0
+            self.assertFalse(backend.poll(attempt))  # RUNNING again
+            clock.now = start + 200.0
+            self.assertFalse(backend.poll(attempt))  # silent again: a new grace starts
+            clock.now = start + 379.0
+            self.assertFalse(backend.poll(attempt), "the old grace was carried over")
+            clock.now = start + 380.0
+            self.assertTrue(backend.poll(attempt))
+        self.assertIs(attempt.outcome, AttemptOutcome.FAULT)
+
+    def test_a_real_terminal_state_inside_the_grace_wins(self):
+        """RED BEFORE THE FIX:
+
+            AssertionError: True is not false : settled before sacct reported a state
+        """
+        clock = _Clock()
+        with unittest.mock.patch("time.time", clock):
+            _, backend, _, attempt = self.submitted(
+                ["sacct_never_issued", "sacct_never_issued", "sacct_failed_exit3"])
+            start = clock.now
+            backend.poll(attempt)
+            clock.now = start + 100.0
+            self.assertFalse(backend.poll(attempt), "settled before sacct reported a state")
+            clock.now = start + 179.0
+            self.assertTrue(backend.poll(attempt))
+
+        self.assertEqual(attempt.detail, "SLURM state FAILED")
+        self.assertIs(attempt.outcome, AttemptOutcome.EXITED)
+        self.assertEqual(attempt.exit_code, 3)
+
+    def test_kill_during_the_grace_settles_on_confirmed_cancellation(self):
+        """RED BEFORE THE FIX:
+
+            AssertionError: True is not false : the first silent poll settled the job
+        """
+        _, backend, _, attempt = self.submitted(
+            ["sacct_never_issued", "sacct_cancelled_running"])
+        self.assertFalse(backend.poll(attempt), "the first silent poll settled the job")
+
+        with unittest.mock.patch("oodbench.backends.slurm._CANCEL_POLL_S", 0):
+            backend.kill(attempt, "test cancellation")
+
+        self.assertIs(attempt.outcome, AttemptOutcome.KILLED)
+        self.assertEqual(self.calls("scancel"), [["141229"]])
+        self.assertTrue(backend.poll(attempt))
+
+    def test_kill_during_the_grace_still_refuses_to_settle_without_accounting(self):
+        """RED BEFORE THE FIX:
+
+            AssertionError: <AttemptOutcome.EXITED: 'exited'> is not None
+
+        With accounting still silent, cancellation cannot be confirmed, so ``kill`` keeps its
+        fail-closed refusal instead of letting the checkpoint be read under a live job.
+        """
+        _, backend, _, attempt = self.submitted(["sacct_never_issued"])
+        backend.poll(attempt)
+        self.assertIsNone(attempt.outcome)
+
+        with unittest.mock.patch("oodbench.backends.slurm._CANCEL_WAIT_S", 0), \
+                unittest.mock.patch("oodbench.backends.slurm._CANCEL_POLL_S", 0), \
+                self.assertRaises(SlurmBackendError):
+            backend.kill(attempt, "test cancellation")
+        self.assertIsNone(attempt.outcome)
+
+    def test_shutdown_during_the_grace_cancels_the_job(self):
+        """RED BEFORE THE FIX:
+
+            AssertionError: no logs of level WARNING or higher triggered on
+            test-slurm-backend
+
+        The first silent poll had already settled and forgotten the job, so ``shutdown``
+        never cancelled it.
+        """
+        _, backend, _, attempt = self.submitted(["sacct_never_issued"])
+        backend.poll(attempt)
+
+        with unittest.mock.patch("oodbench.backends.slurm._CANCEL_WAIT_S", 0), \
+                unittest.mock.patch("oodbench.backends.slurm._CANCEL_POLL_S", 0), \
+                self.assertLogs("test-slurm-backend", level="WARNING") as logs:
+            backend.shutdown()
+
+        self.assertEqual(self.calls("scancel"), [["141229"]],
+                         "shutdown forgot a job whose end nobody observed")
+        self.assertIn("no confirmed terminal state", "\n".join(logs.output))
+
+    def test_the_grace_adds_no_config_key(self):
+        """RED BEFORE THE FIX: AttributeError: ... has no attribute '_ACCOUNTING_GRACE_S'
+
+        The grace is a module constant. A new schema key would change the config digest of
+        every existing output root (see ``config.DIGEST_COMPAT_DEFAULTS``); this pins the
+        schema to the keys it held before the fix.
+        """
+        from oodbench.backends import slurm as slurm_mod
+        self.assertEqual(slurm_mod._ACCOUNTING_GRACE_S, 180.0)
+        self.assertEqual({section: sorted(keys) for section, keys in config_mod.SCHEMA.items()}, {
+            "agent": ["config", "entrypoint", "env", "pythonpath", "track", "working_dir"],
+            "benchmark": ["arxiv_version", "release", "repetitions", "seed"],
+            "carla": ["client_timeout_s", "root"],
+            "environment": ["activate", "ld_library_path_prepend", "python"],
+            "execution": ["allow_gpu_stacking", "backend", "poll_interval_s",
+                          "port_release_timeout_s", "post_kill_cooldown_s", "route_timeout_s",
+                          "workers"],
+            "leaderboard": ["evaluator", "root", "scenario_runner_root", "work_dir"],
+            "output": ["record_carla", "root"],
+            "ports": ["probe", "rpc_base", "stride", "tm_base"],
+            "resume": ["mode"],
+            "retry": ["infra_budget", "killed_budget", "record_budget", "tickruntime_budget",
+                      "worker_quarantine_after"],
+            "routes": ["manifest", "root", "strict_manifest"],
+            "slurm": ["account", "cpus_per_task", "exclude", "extra_directives", "gres",
+                      "max_parallel", "mem", "nodelist", "partition", "qos",
+                      "submit_interval_s", "time", "vulkan_index_scope"],
+        })
+
+
 class TestSubmissionIdentity(SlurmBackendBase):
 
     def test_parsable_federation_job_id_remains_supervised(self):
