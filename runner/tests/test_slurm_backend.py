@@ -559,8 +559,9 @@ class TestAccountingUnavailable(SlurmBackendBase):
             self.assertTrue(backend.poll(attempt))
 
         self.assertIs(attempt.outcome, AttemptOutcome.FAULT)
-        self.assertEqual(attempt.detail,
-                         "accounting unavailable after 180s: sacct returned no record")
+        # Never seen RUNNING and accounting is down: the runtime is unknown too (see F).
+        self.assertEqual(attempt.detail, "accounting unavailable after 180s: "
+                                         "sacct returned no record; runtime unknown (never observed RUNNING)")
         self.assertEqual(attempt.finished_at, start,
                          "the grace itself was counted as route time")
         self.assertEqual(self.calls("scancel"), [["141229"]])
@@ -594,7 +595,7 @@ class TestAccountingUnavailable(SlurmBackendBase):
         self.assertEqual(
             attempt.detail,
             'accounting unavailable after 180s: sacct failed (exit 1): '
-            'sacct: error: Invalid field requested: "NoSuchField"')
+            'sacct: error: Invalid field requested: "NoSuchField"; runtime unknown (never observed RUNNING)')
 
     def test_a_job_that_reappears_restarts_the_grace(self):
         """RED BEFORE THE FIX:
@@ -637,7 +638,7 @@ class TestAccountingUnavailable(SlurmBackendBase):
             clock.now = start + 179.0
             self.assertTrue(backend.poll(attempt))
 
-        self.assertEqual(attempt.detail, "SLURM state FAILED")
+        self.assertTrue(attempt.detail.startswith("SLURM state FAILED"), attempt.detail)
         self.assertIs(attempt.outcome, AttemptOutcome.EXITED)
         self.assertEqual(attempt.exit_code, 3)
 
@@ -724,6 +725,176 @@ class TestAccountingUnavailable(SlurmBackendBase):
                       "max_parallel", "mem", "nodelist", "partition", "qos",
                       "submit_interval_s", "time", "vulkan_index_scope"],
         })
+
+
+class TestRuntimeWithoutRunning(SlurmBackendBase):
+    """A job that ends before any poll sees it RUNNING: queue time is not route runtime.
+
+    ``Attempt.started_at`` is stamped before ``sbatch``, so without a RUNNING observation
+    "now - started_at" is mostly queue wait. Every scheduler answer here is captured output.
+    """
+
+    UNKNOWN = "runtime unknown (never observed RUNNING)"
+    RETRY = {"record_budget": 3, "infra_budget": 3, "tickruntime_budget": 0,
+             "killed_budget": 2, "worker_quarantine_after": 99}
+
+    def submitted(self, clock, *, squeue, sacct, times):
+        self.replay("sbatch", "sbatch_parsable")
+        self.replay("squeue", *squeue)
+        self.replay("sacct", *sacct)
+        self.replay("sacct", *times, when="Start,End,Elapsed")
+        self.replay("scancel", "scancel_ok")
+        cfg, backend, task = self.backend_and_task(slurm={"submit_interval_s": 0},
+                                                   retry=self.RETRY)
+        attempt = backend.submit(task, worker=0)
+        # Attempt's default factory bound the real time.time; restamp it on the test clock.
+        attempt.started_at = clock.now
+        return cfg, backend, task, attempt
+
+    def settled(self, cfg, attempt, backend, task):
+        runner = run_benchmark.Runner(
+            cfg, argparse.Namespace(limit=None, dry_run=False, force=False))
+        state = RunState(path=Path(cfg.output["root"]) / "_runner" / "state.json")
+        runner._settle(attempt, state, backend)
+        return state.get(task.key)
+
+    def test_an_unobserved_run_takes_its_runtime_from_accounting(self):
+        """RED BEFORE THE FIX:
+
+            AssertionError: 3600.0 != 5.0 : queue wait was persisted as route runtime
+
+        The job sat PENDING, ran 5 s between two polls, and was gone by the next one. Its
+        runtime comes from sacct ``Elapsed``, not from wall-time arithmetic across hosts.
+        """
+        clock = _Clock()
+        with unittest.mock.patch("time.time", clock):
+            cfg, backend, task, attempt = self.submitted(
+                clock, squeue=("squeue_pending", "squeue_gone_recent"),
+                sacct=("sacct_failed_exit3",), times=("sacct_times_failed",))
+            start = clock.now
+            clock.now = start + 10.0
+            self.assertFalse(backend.poll(attempt))
+            clock.now = start + 3600.0
+            self.assertTrue(backend.poll(attempt))
+
+        self.assertEqual(attempt.duration_s, 5.0, "queue wait was persisted as route runtime")
+        self.assertEqual(attempt.detail, "SLURM state FAILED")
+        self.assertEqual(attempt.finished_at, start + 3600.0)
+        settled = self.settled(cfg, attempt, backend, task)
+        self.assertEqual(settled.last_duration_s, 5.0)
+        self.assertEqual(settled.total_runtime_s, 5.0)
+
+    def test_a_job_cancelled_while_pending_records_zero_runtime(self):
+        """RED BEFORE THE FIX:
+
+            AssertionError: 600.0 != 0.0 : a job that never started was given route runtime
+
+        A real job cancelled while PENDING reports ``Start=None`` and ``Elapsed=00:00:00``.
+        """
+        clock = _Clock()
+        with unittest.mock.patch("time.time", clock):
+            cfg, backend, task, attempt = self.submitted(
+                clock, squeue=("squeue_pending", "squeue_purged"),
+                sacct=("sacct_cancelled_pending",), times=("sacct_times_cancelled_pending",))
+            start = clock.now
+            self.assertFalse(backend.poll(attempt))
+            clock.now = start + 600.0
+            self.assertTrue(backend.poll(attempt))
+
+        self.assertEqual(attempt.duration_s, 0.0,
+                         "a job that never started was given route runtime")
+        self.assertIs(attempt.outcome, AttemptOutcome.FAULT)
+        self.assertEqual(attempt.detail, f"SLURM state CANCELLED by 1000; {self.UNKNOWN}")
+        self.assertEqual(self.settled(cfg, attempt, backend, task).total_runtime_s, 0.0)
+
+    def test_unavailable_accounted_runtime_records_zero_and_says_so(self):
+        """RED BEFORE THE FIX:
+
+            AssertionError: 900.0 != 0.0 : queue wait was persisted as route runtime
+
+        The timing query fails (the captured ``sacct`` error reply), so the runtime is
+        unknown: record 0, and tag the detail so nobody reads it as a measured 0.
+        """
+        clock = _Clock()
+        with unittest.mock.patch("time.time", clock):
+            _, backend, _, attempt = self.submitted(
+                clock, squeue=("squeue_gone_recent",),
+                sacct=("sacct_completed",), times=("sacct_command_error",))
+            clock.now += 900.0
+            self.assertTrue(backend.poll(attempt))
+
+        self.assertEqual(attempt.duration_s, 0.0, "queue wait was persisted as route runtime")
+        self.assertEqual(attempt.detail, f"SLURM state COMPLETED; {self.UNKNOWN}")
+
+    def test_missing_accounting_after_the_grace_records_zero_runtime(self):
+        """RED BEFORE THE FIX (with the missing-accounting grace already in place):
+
+            AssertionError: 60.0 != 0.0 : queue wait was persisted as route runtime
+
+        Without that grace it fails one step earlier: the first silent poll settles the job.
+        Never seen RUNNING and then lost to both squeue and sacct: nothing measured the run.
+        """
+        clock = _Clock()
+        with unittest.mock.patch("time.time", clock):
+            _, backend, _, attempt = self.submitted(
+                clock, squeue=("squeue_pending", "squeue_purged"),
+                sacct=("sacct_never_issued",), times=("sacct_never_issued",))
+            start = clock.now
+            self.assertFalse(backend.poll(attempt))
+            clock.now = start + 60.0
+            self.assertFalse(backend.poll(attempt))
+            clock.now = start + 240.0
+            self.assertTrue(backend.poll(attempt))
+
+        self.assertEqual(attempt.duration_s, 0.0, "queue wait was persisted as route runtime")
+        self.assertEqual(attempt.detail, "accounting unavailable after 180s: "
+                                         f"sacct returned no record; {self.UNKNOWN}")
+
+    def test_kill_and_settlement_agree_on_the_same_timeline(self):
+        """RED BEFORE THE FIX (the never-RUNNING timeline):
+
+            AssertionError: 0.0 != 100.0 : kill and settlement disagree on the route runtime
+
+        Both paths compute the runtime one way. A job seen RUNNING 90 s before it ends counts
+        90 s either way; a job never seen RUNNING asks accounting either way.
+        """
+        timelines = {
+            "observed_running": dict(
+                polls=(("squeue_running", 10.0), ("squeue_running", 70.0)),
+                sacct_settle="sacct_completed", sacct_kill="sacct_cancelled_running",
+                times="sacct_times_failed", runtime=90.0, tag=""),
+            "never_running": dict(
+                polls=(("squeue_pending", 10.0),),
+                sacct_settle="sacct_cancelled_pending", sacct_kill="sacct_cancelled_pending",
+                times="sacct_times_cancelled_pending", runtime=0.0,
+                tag=f"; {self.UNKNOWN}"),
+        }
+        for name, t in timelines.items():
+            with self.subTest(timeline=name):
+                got = {}
+                for path in ("settle", "kill"):
+                    clock = _Clock()
+                    with unittest.mock.patch("time.time", clock), \
+                            unittest.mock.patch("oodbench.backends.slurm._CANCEL_POLL_S", 0):
+                        squeue = [answer for answer, _ in t["polls"]] + ["squeue_gone_recent"]
+                        _, backend, _, attempt = self.submitted(
+                            clock, squeue=squeue, sacct=(t["sacct_" + path],),
+                            times=(t["times"],))
+                        start = clock.now
+                        for _, at in t["polls"]:
+                            clock.now = start + at
+                            self.assertFalse(backend.poll(attempt))
+                        clock.now = start + 100.0
+                        if path == "settle":
+                            self.assertTrue(backend.poll(attempt))
+                        else:
+                            backend.kill(attempt, "test cancellation")
+                        got[path] = (attempt.duration_s, attempt.detail)
+                self.assertEqual(got["kill"][0], got["settle"][0],
+                                 "kill and settlement disagree on the route runtime")
+                self.assertEqual(got["settle"][0], t["runtime"])
+                self.assertEqual(got["kill"][1], "test cancellation" + t["tag"])
+                self.assertTrue(got["settle"][1].endswith(t["tag"]), got["settle"][1])
 
 
 class TestSubmissionIdentity(SlurmBackendBase):

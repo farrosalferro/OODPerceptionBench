@@ -76,6 +76,9 @@ _CANCEL_POLL_S = 0.2
 # A module constant, not a config key: a new key would move every existing config digest.
 _ACCOUNTING_GRACE_S = 180.0
 
+_ELAPSED_RE = re.compile(r"\A(?:(?P<days>\d+)-)?(?P<h>\d+):(?P<m>\d+):(?P<s>\d+)\Z")
+_RUNTIME_UNKNOWN = "runtime unknown (never observed RUNNING)"
+
 
 class SlurmBackendError(Exception):
     pass
@@ -357,23 +360,18 @@ class SlurmBackend(Backend):
             return self._poll_active_state(attempt, job_ref, base_state)
 
         finished_at = time.time()
-        self._close_route_clock(attempt, job_ref, finished_at)
-        attempt.finished_at = finished_at
+        runtime, unknown = self._route_runtime(attempt, job_ref, finished_at)
         if exit_code:
             attempt.exit_code = self._exit_code(exit_code)
         signalled = (reap.describe_exit_signal(attempt.exit_code)
                      if attempt.exit_code is not None else None)
         if signalled:
-            attempt.outcome = AttemptOutcome.FAULT
-            attempt.detail = f"SLURM state {state}; {signalled}"
-            self._forget(job_ref)
-            return True
-        if base_state in _FAULT_STATES:
-            attempt.outcome = AttemptOutcome.FAULT
-            attempt.detail = f"SLURM state {state}"
+            outcome, detail = AttemptOutcome.FAULT, f"SLURM state {state}; {signalled}"
+        elif base_state in _FAULT_STATES:
+            outcome, detail = AttemptOutcome.FAULT, f"SLURM state {state}"
         else:
-            attempt.outcome = AttemptOutcome.EXITED
-            attempt.detail = f"SLURM state {state}"
+            outcome, detail = AttemptOutcome.EXITED, f"SLURM state {state}"
+        self._settle_attempt(attempt, outcome, detail, finished_at, runtime, unknown)
         self._forget(job_ref)
         return True
 
@@ -398,10 +396,12 @@ class SlurmBackend(Backend):
             pass
         self.log.warning("SLURM job %s: no squeue or sacct answer for %.0fs (%s); settling it "
                          "as a fault", job_ref, now - since, missing)
-        self._close_route_clock(attempt, job_ref, since)
-        attempt.finished_at = since
-        attempt.outcome = AttemptOutcome.FAULT
-        attempt.detail = f"accounting unavailable after {_ACCOUNTING_GRACE_S:.0f}s: {missing}"
+        # Accounting is down, so a never-observed run cannot be measured either.
+        runtime = self._observed_runtime(attempt, job_ref, since)
+        self._settle_attempt(
+            attempt, AttemptOutcome.FAULT,
+            f"accounting unavailable after {_ACCOUNTING_GRACE_S:.0f}s: {missing}",
+            since, runtime if runtime is not None else 0.0, runtime is None)
         self._forget(job_ref)
         return True
 
@@ -439,18 +439,58 @@ class SlurmBackend(Backend):
             return True
         return False
 
-    def _close_route_clock(self, attempt: Attempt, job_ref: str, now: float) -> None:
-        """Exclude a final scheduler-owned paused interval from the duration audit."""
-        paused_at = self._paused_at.pop(job_ref, None)
-        if paused_at is not None:
-            attempt.started_at += max(0.0, now - paused_at)
+    def _observed_runtime(self, attempt: Attempt, job_ref: str, now: float) -> Optional[float]:
+        """RUNNING time seen by polls, excluding paused residence; None if never seen RUNNING.
 
-    def _route_runtime_at(self, attempt: Attempt, job_ref: str, now: float) -> float:
-        """Return observed RUNNING time without mutating state needed by cancellation."""
+        Reads without mutating, so ``kill`` can call it before cancellation forgets the job.
+        """
         if job_ref not in self._started:
-            return 0.0
+            return None
         running_until = self._paused_at.get(job_ref, now)
         return max(0.0, running_until - attempt.started_at)
+
+    def _route_runtime(self, attempt: Attempt, job_ref: str, now: float) -> Tuple[float, bool]:
+        """The route runtime to record, and whether it is unknown (then it is 0).
+
+        The one clock shared by settlement and ``kill``. ``Attempt.started_at`` is stamped
+        before ``sbatch``, so for a job no poll saw RUNNING, "now - started_at" is mostly queue
+        wait. Such a job takes its runtime from accounting ``Elapsed`` instead, which also
+        sidesteps clock skew between the compute node and this host.
+        """
+        observed = self._observed_runtime(attempt, job_ref, now)
+        if observed is not None:
+            return observed, False
+        accounted = self._accounted_runtime(job_ref)
+        return (accounted, False) if accounted is not None else (0.0, True)
+
+    @staticmethod
+    def _accounted_runtime(job_ref: str) -> Optional[float]:
+        """sacct ``Elapsed`` in seconds; None if the job never started or sacct cannot say."""
+        job_id, cluster_args = SlurmBackend._job_id_and_cluster(job_ref)
+        try:
+            out = subprocess.check_output(
+                ["sacct", "-X", "-j", job_id, "-n", "-P", "-o", "Start,End,Elapsed"]
+                + cluster_args,
+                text=True, stderr=subprocess.DEVNULL).strip()
+        except (subprocess.CalledProcessError, OSError):
+            return None
+        fields = out.splitlines()[0].split("|") if out else []
+        if len(fields) < 3 or fields[0].strip() in ("", "None", "Unknown"):
+            return None  # a job cancelled while PENDING reports Start=None
+        match = _ELAPSED_RE.match(fields[2].strip())
+        if match is None:
+            return None
+        return float(int(match["days"] or 0) * 86400 + int(match["h"]) * 3600
+                     + int(match["m"]) * 60 + int(match["s"]))
+
+    @staticmethod
+    def _settle_attempt(attempt: Attempt, outcome: AttemptOutcome, detail: str,
+                        finished_at: float, runtime: float, unknown: bool) -> None:
+        """Record the outcome so that ``Attempt.duration_s`` is exactly ``runtime``."""
+        attempt.outcome = outcome
+        attempt.detail = f"{detail}; {_RUNTIME_UNKNOWN}" if unknown else detail
+        attempt.finished_at = finished_at
+        attempt.started_at = finished_at - runtime
 
     @staticmethod
     def _base_state(state: str) -> str:
@@ -508,19 +548,24 @@ class SlurmBackend(Backend):
     def kill(self, attempt: Attempt, reason: str) -> None:
         job_ref = attempt.handle
         finished_at = time.time()
-        route_runtime = None
-        if isinstance(job_ref, str):
-            # Capture the route-only clock before positive-terminal cancellation calls
-            # ``_forget`` and discards the RUNNING/paused markers. The scheduler's asynchronous
-            # teardown latency is not evaluator runtime either.
-            route_runtime = self._route_runtime_at(attempt, job_ref, finished_at)
-            self._cancel_and_wait(job_ref)
+        if not isinstance(job_ref, str):
+            if attempt.outcome is None:
+                attempt.outcome = AttemptOutcome.KILLED
+                attempt.detail = reason
+                attempt.finished_at = finished_at
+            return
+        # Capture the route-only clock before positive-terminal cancellation calls ``_forget``
+        # and discards the RUNNING/paused markers. The scheduler's asynchronous teardown
+        # latency is not evaluator runtime either.
+        observed = self._observed_runtime(attempt, job_ref, finished_at)
+        self._cancel_and_wait(job_ref)
         if attempt.outcome is None:
-            attempt.outcome = AttemptOutcome.KILLED
-            attempt.detail = reason
-            attempt.finished_at = finished_at
-            if route_runtime is not None:
-                attempt.started_at = finished_at - route_runtime
+            if observed is not None:
+                runtime, unknown = observed, False
+            else:  # only now is accounting final; same rule as settlement
+                runtime, unknown = self._route_runtime(attempt, job_ref, finished_at)
+            self._settle_attempt(attempt, AttemptOutcome.KILLED, reason, finished_at,
+                                 runtime, unknown)
 
     def shutdown(self) -> None:
         if not self._submitted:
