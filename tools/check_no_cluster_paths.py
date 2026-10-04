@@ -49,11 +49,6 @@ SKIP_SUFFIX = {".png", ".jpg", ".jpeg", ".pdf", ".fbx", ".uasset", ".uexp",
 ALLOWLIST = {
     # Defines the patterns.
     "tools/check_no_cluster_paths.py",
-    # Its entire purpose is to enumerate the internal files that were excluded
-    # from the release, several of which are named after cluster nodes and
-    # scheduler files. Naming them is the audit trail; omitting them would hide
-    # what was dropped.
-    "patches/EXCLUDED.md",
 }
 
 

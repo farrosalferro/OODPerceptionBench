@@ -8,8 +8,6 @@
 
 
 
-**Artifact version: v0.9 — corresponds to arXiv v1 of the OOD-PerceptionBench paper.**
-
 Produces a `vehicle.<make>.<model>` blueprint in a CARLA 0.9.15 build: a drivable four-wheeled
 vehicle with rigged wheels, physics-constrained doors, working lights, and a correctly-classified
 bounding box.

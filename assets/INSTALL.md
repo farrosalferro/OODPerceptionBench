@@ -6,8 +6,8 @@ version.
 
 > **This pack overwrites one file in CARLA's base content**
 > (`CarlaUE4/Content/Carla/Blueprints/Walkers/WalkerFactory.{uasset,uexp}`). That is
-> unavoidable — see `WALKERFACTORY_DECISION.md`. It hard-locks the pack to 0.9.15 and it
-> is why you should install into a **copy** of CARLA reserved for this benchmark rather
+> unavoidable: walker blueprint IDs are registered in that cooked file (see [`README.md`](README.md)).
+> It hard-locks the pack to 0.9.15 and it is why you should install into a **copy** of CARLA reserved for this benchmark rather
 > than a shared one.
 
 ---

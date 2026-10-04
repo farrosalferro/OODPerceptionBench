@@ -2,8 +2,8 @@
 
 **Bundle version:** v0.9 · **Binds to:** arXiv v1
 
-**Purpose:** the six OOD props we are allowed to redistribute — how to get them, install them,
-verify them, and attribute them.
+The six OOD props we are allowed to redistribute: how to get them, install them, verify them,
+and attribute them.
 
 > ### The binaries are not in this repository
 >
@@ -28,9 +28,10 @@ verify them, and attribute them.
 | `static.prop.concreteroadbarrier` | static | geometric | widthRider | CC BY 4.0 |
 | `static.prop.roadclosedbarricade` | static | geometric | exiS7-Gs | CC BY 4.0 |
 
-Plus one modified CARLA base-content asset, `WalkerFactory` (CC BY, © the CARLA authors) — the
-four walkers cannot register without it. See
-[`WALKERFACTORY_DECISION.md`](WALKERFACTORY_DECISION.md).
+Plus one modified CARLA base-content asset, `WalkerFactory` (CC BY, © the CARLA authors). Walker
+blueprint IDs live in this cooked file, not in JSON, so the four walkers cannot register without
+it. It registers only the shipped walkers and CARLA's native ones, so a route that needs a
+non-shipped walker fails loudly instead of running without it.
 
 > **`firefighter` is NonCommercial.** The pack is therefore mixed-licence, and the NC asset is
 > isolated in its own tarball so it can be left out. Commercial users must skip
@@ -57,7 +58,6 @@ other 92 shift-level routes. The remaining 238 routes are **not runnable at v0.9
 |---|---|
 | [`INSTALL.md`](INSTALL.md) | install, verify, uninstall, rebuild — **including the `tar --keep-newer-files` trap** |
 | [`ATTRIBUTION.md`](ATTRIBUTION.md) | per-asset author, licence, source link; the required attribution strings |
-| [`WALKERFACTORY_DECISION.md`](WALKERFACTORY_DECISION.md) | why a base-content asset has to ship |
 | [`SHA256SUMS`](SHA256SUMS) | checksums of the three tarballs — verify before installing |
 | [`MANIFEST.tsv`](MANIFEST.tsv) | every shipped file: path, sha256, size, owning asset, licence |
 | [`tools/verify_pack.py`](tools/verify_pack.py) | post-install verification against a live CARLA server. **Run it.** |

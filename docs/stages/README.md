@@ -1,7 +1,5 @@
 # Stage scripts
 
-**Artifact version: v0.9 — corresponds to arXiv v1 of the OOD-PerceptionBench paper.**
-
 Standalone, headless helpers used by the checkpoints in the three import procedures
 ([static](../import_procedure_static.md) · [walker](../import_procedure_walker.md) ·
 [vehicle](../import_procedure_vehicle.md)). Each one does a single job, writes a JSON verdict, and

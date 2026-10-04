@@ -1,7 +1,5 @@
 # Import procedure — static prop
 
-**Artifact version: v0.9 — corresponds to arXiv v1 of the OOD-PerceptionBench paper.**
-
 Produces a `static.prop.<name>` blueprint in a CARLA 0.9.15 build, correctly scaled against the
 benchmark's static anchor, with working collision and a compiled material.
 

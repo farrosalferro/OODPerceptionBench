@@ -87,8 +87,7 @@ for n in $WALKERS_NC;   do stage_dir "$n" walkers-ccbync; done
 # --- WalkerFactory -----------------------------------------------------------
 # The four walkers do NOT self-register from their own Package.json. Their
 # blueprint IDs live in the cooked base-content WalkerFactory, so it must ship.
-# See ../WALKERFACTORY_DECISION.md for the full analysis and the measured
-# consequence of shipping it (and of not shipping it).
+# See ../README.md ("Two things that will bite you") for the consequence.
 WF_SRC="$CONTENT/Carla/Blueprints/Walkers"
 WF_DST="$STAGE/walkers-ccby/CarlaUE4/Content/Carla/Blueprints/Walkers"
 mkdir -p "$WF_DST"

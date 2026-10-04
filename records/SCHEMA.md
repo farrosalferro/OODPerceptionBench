@@ -84,7 +84,7 @@ hit and no published number reads their `agent_type`.)
 `sentinel` = the literal `"unknown"` written by the criterion when it could not
 identify the actor (27 rows = 9 ADMLP vehicle rows × 3 seeds). Preserved, never back-filled; those
 rows score 0 hits. Excluding it when *building* the inference map is load-bearing
-— see README §5.2.
+— see `NOTES.md` §5.2.
 
 > **`agent_type` carries one id, and it is the released one.** An earlier draft
 > of this schema shipped a redundant second column, `agent_type_renamed`, holding

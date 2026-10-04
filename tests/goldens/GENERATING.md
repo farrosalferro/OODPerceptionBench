@@ -1,7 +1,5 @@
 # Generating the golden bundle
 
-**Bundle version:** v0.9 · **Binds to:** arXiv v1
-
 Goldens are the only part of the acceptance harness that cannot be produced without a GPU and a
 running CARLA. Everything else in `tests/` runs anywhere. This file is the procedure.
 

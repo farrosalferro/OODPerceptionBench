@@ -58,7 +58,7 @@ def check(label: str, got, want, ok: bool, results: list) -> None:
 
 
 # The parquet checks below are retained but inert: the release ships a single CSV since
-# 2026-08-11 (it was lossy -- see records/README.md). They SKIP when meta declares no parquet
+# 2026-08-11 (it was lossy -- see records/NOTES.md). They SKIP when meta declares no parquet
 # and none is on disk, so this file keeps working if a typed artifact is ever reintroduced.
 # The parquet is OPTIONAL; the CSV is not.
 

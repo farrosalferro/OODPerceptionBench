@@ -1,6 +1,5 @@
 # Patch manifest
 
-**Version stamp: 0.9.0 — corresponds to arXiv v1.**
 Base: `autonomousvision/carla_garage` @ `beb3433407f42c1adced312b877a61fe04f338ba`
 (branch `leaderboard_2`, commit date 2025-12-28; pinned 2026-08-03).
 

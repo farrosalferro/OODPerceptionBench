@@ -1,7 +1,5 @@
 # Asset traps
 
-**Artifact version: v0.9 — corresponds to arXiv v1 of the OOD-PerceptionBench paper.**
-
 Read this before you start any of the three import procedures. Every item below is a real failure
 we hit and lost time to. They share one property that makes them dangerous: **almost none of them
 raise an error.** The simulator keeps running, the route reaches `Completed`, a Driving Score is

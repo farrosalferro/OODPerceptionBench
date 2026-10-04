@@ -1,7 +1,5 @@
 # Import procedure — walker (pedestrian)
 
-**Artifact version: v0.9 — corresponds to arXiv v1 of the OOD-PerceptionBench paper.**
-
 Produces a `walker.pedestrian.<name>` blueprint in a CARLA 0.9.15 build: a rigged, animated,
 correctly-sized pedestrian actor that CARLA's walker control API can drive.
 

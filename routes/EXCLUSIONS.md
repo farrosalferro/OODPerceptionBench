@@ -1,7 +1,5 @@
 # Deliberately excluded routes
 
-**Bundle version:** v0.9 · **Binds to:** arXiv v1
-
 Five base routes that exist in the underlying CARLA scenario pool are **deliberately absent
 from this benchmark**. Each one is removed from **all three levels** — `base`,
 `visual_shift` and `geometric_shift` — not just from the level where the problem appeared.

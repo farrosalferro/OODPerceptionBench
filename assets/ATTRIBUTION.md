@@ -51,7 +51,7 @@ states: *"CARLA specific code is distributed under MIT License. CARLA specific a
 distributed under CC-BY License."* This file is therefore **CC BY**, © the CARLA Simulator
 authors, modified by the OOD-PerceptionBench authors to register the walker blueprints
 above. It **overwrites** the corresponding file in your CARLA installation — see
-`INSTALL.md` and `WALKERFACTORY_DECISION.md`.
+`INSTALL.md`.
 
 ---
 
@@ -85,4 +85,4 @@ Reasons, in brief:
 - **Two** free downloads were tagged CC-BY by uploaders who did not own the underlying IP.
   They are not licensable by anyone and are being replaced.
 
-The full audit, one row per asset, is `ASSETS.tsv` in the code repository.
+The twelve are listed, with these reasons, in `NOTICE` §3 of the code repository.

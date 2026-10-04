@@ -2,23 +2,11 @@
 
 **Bundle version:** v0.9 · **Binds to:** arXiv v1
 
-## The failure this exists for
-
-A missing OOD asset does not crash anything.
-
-`try_spawn_actor('static.prop.roadclosedbarricade')` on a CARLA build without the content pack
-returns `None`. The prop is simply absent. The ego drives an empty road, the route reports
-`Completed`, the Driving Score is plausible, and nothing in the logs is red. Run the whole
-475-route set that way and you get a complete, self-consistent, entirely meaningless result
-table.
-
-Vehicles have a sharper version of it. A blueprint id that *is* registered can still resolve to
-a different actor through `attribute_filter`, so the route runs with a Tesla standing in for the
-OOD vehicle — and still completes.
-
-This directory turns both into a red exit code.
-
----
+This folder checks that your install really runs the benchmark. A missing object does not crash
+anything: on CARLA without the content pack, `try_spawn_actor('static.prop.roadclosedbarricade')`
+returns `None`, the ego drives an empty road, and the route reports `Completed` with a
+plausible score. A registered vehicle id can also resolve to a Tesla through `attribute_filter`,
+and the route still completes. These tests turn both cases into a red exit code.
 
 ## Quick start
 
@@ -37,16 +25,13 @@ python3 runner/run_benchmark.py --config /scratch/smoke.yaml --out /scratch/smok
 python3 tests/check_acceptance.py --results-root /scratch/smoke_run --json /scratch/report.json
 ```
 
-Step 2 is the cheapest test in the repo and catches the overwhelming majority of broken
-installs. Run it before spending GPU-hours, every time.
-
----
+Always run the probe (step 2) before the split. It is the cheapest test here and catches most
+broken installs.
 
 ## The smoke split
 
-Nine routes, drawn from the frozen 475. Defined by
-[`smoke/SMOKE_SPLIT.tsv`](smoke/SMOKE_SPLIT.tsv) — path plus sha256 into `routes/`, so the split
-can never disagree with the benchmark definition without saying so.
+Nine routes from the frozen 475, defined by [`smoke/SMOKE_SPLIT.tsv`](smoke/SMOKE_SPLIT.tsv)
+(path plus sha256 into `routes/`).
 
 | # | tier | category | level | prop | asset |
 |---|---|---|---|---|---|
@@ -60,33 +45,15 @@ can never disagree with the benchmark definition without saying so.
 | 8 | extended | pedestrian | geometric | `walker.pedestrian.deliveryrobot` | shipped |
 | 9 | core | vehicle | base | `vehicle.lincoln.mkz_2020` | native |
 
-`--tier core` selects the six that span three categories × three levels — the minimum the
-release plan asks for. The default, `--tier all`, adds three more so that **every one of the six
-assets shipped in v0.9 is exercised by its own route**. That matters: the pack is per-asset, so a
-split covering four of six would pass on a pack missing the other two.
-
-Two routes were chosen per base route on purpose (24795 for static, 24224 for pedestrian): the
-base and shifted variants then share an identical ego route, town and weather, so a difference is
-attributable to the prop rather than to the route.
-
-### Why no static-visual and no vehicle-shift routes
-
-Because no v0.9 user can run them. Static `visual_shift` needs `trafficmessageboard`,
-`trafficarrowboard` or `europianarrowboardtrailer`; every vehicle shift needs a `vehicle.ood.*`
-asset. All twelve are non-redistributable (see `ASSETS.tsv`) and are specified dimensionally
-instead. A smoke route that nobody can run is not a test, it is a guaranteed red.
-
-**Consequence, stated plainly:** a green run here certifies that the *shipped half* of the
-benchmark is installed correctly. It says nothing about the other twelve assets. Closing that gap
-is v1.0 work — see [Coverage gaps](#coverage-gaps-at-v09) below.
-
-### Not reportable
-
-Nine routes cannot approximate a claim computed over 55 base routes; subsampling changes the
-counts the paper's headline results *are*. **Never publish a score from this split.** Its value
-is the goldens, not its routes. Every artifact it produces carries `"reportable": false`.
-
----
+- `--tier core` runs the six routes that span three categories × three levels. The default,
+  `--tier all`, adds three more so that each of the six assets shipped in v0.9 has its own route.
+- Static routes share base route 24795 and pedestrian routes share 24224, so base and shifted
+  variants have the same ego route, town and weather.
+- There are no static `visual_shift` or vehicle-shift routes: they need the twelve
+  non-redistributable assets (see [`../NOTICE`](../NOTICE) §3). A green run certifies only the shipped half of
+  the benchmark. See [Coverage gaps](#coverage-gaps-at-v09).
+- **Not reportable. Never publish a score from this split.** Nine routes cannot stand in for the
+  full set. Every artifact it produces carries `"reportable": false`.
 
 ## The assertions
 
@@ -99,30 +66,13 @@ Checked for every route, in this order:
 | A3 | `route_completed` | status is `Completed`/`Perfect` (or matches the golden) |
 | A4 | `ds_within_tolerance` | Driving Score is within the golden's *measured* tolerance |
 
-**The ordering is the point.** A3 and A4 both pass on a broken install — that is exactly what
-makes the failure silent. Only A1 does not.
+A3 and A4 both pass on a broken install. Only A1 catches it, so **if A1 fails, stop**.
 
-### How A1 is observed
-
-Not from the route XML, and not from any log grep. The `TTRDARCriterion` holds a reference to
-the live actor the scenario spawned and writes `self._agent.type_id` into the record as
-`ttr_dar.agent_type`. That is a direct observation of the spawned actor, available in the
-standard leaderboard checkpoint with no sidecar process and no CARLA recorder parsing.
-
-Verified against the published sweep: across all **475** routes with PDM-Lite, the observed
-`agent_type` equals the route XML's blueprint id **475/475**, with zero fallbacks. The mechanism
-is sound on every route, not only these nine.
-
-The expectation is re-derived from the route XML on every run — never read from the split's own
-`prop_blueprint_id` column — so editing the split cannot lower the bar.
-
-### Absence of evidence is a failure
-
-If the record carries no `ttr_dar` block, or the criterion recorded `"unknown"`, **A1 FAILS**. It
-is never reported as skipped and never as passed. On an install where the asset is missing, "we
-could not check" is precisely what the evidence looks like.
-
----
+A1 reads `ttr_dar.agent_type`, which the `TTRDARCriterion` writes from the live spawned actor
+(`self._agent.type_id`). With PDM-Lite it matched the route XML's blueprint id on **475/475**
+routes. The expected id always comes from the route XML, never from the split's
+`prop_blueprint_id` column. If the record has no `ttr_dar` block, or the criterion recorded
+`"unknown"`, **A1 FAILS**; it is never reported as skipped or passed.
 
 ## Exit codes
 
@@ -133,43 +83,17 @@ could not check" is precisely what the evidence looks like.
 | 2 | usage / IO / bundle-integrity error — nothing was assessed |
 | 3 | **INCONCLUSIVE** — A1–A3 passed but no goldens were available, so A4 never ran |
 
-**3 is not a pass.** Script your automation on the exit code and treat anything non-zero as
-"this install is not known to be good".
-
----
+**3 is not a pass.** Treat any non-zero exit as "this install is not known to be good".
 
 ## Goldens
 
-v0.9 ships [`goldens/pdmlite_seed42_v0.9.golden.json`](goldens/pdmlite_seed42_v0.9.golden.json),
-measured on 2026-08-12 from three independent PDM-Lite output roots on CARLA 0.9.15. Every route
-had replicate scores `[100.0, 100.0, 100.0]`; the largest spread was 0.0 DS and the resulting
-tolerance is ±1.0 DS. The bundle covers `base` for all three categories, plus `visual_shift` and
-`geometric_shift` for **pedestrian** and `geometric_shift` for **static** — every level the six
-redistributable v0.9 assets permit. Static `visual_shift` and both vehicle shifts remain v1.0
-work because their twelve assets do not ship.
-
-The measured bundle ships alongside its format, generator, and procedure:
-
-- [`goldens/README.md`](goldens/README.md) — what a golden is, and is not
-- [`goldens/GENERATING.md`](goldens/GENERATING.md) — the full procedure, PDM-Lite as reference
-  agent, ≈ 1–2 GPU-hours
-- [`goldens/golden_schema.json`](goldens/golden_schema.json) — the file format
-- [`goldens/EXAMPLE.golden.json`](goldens/EXAMPLE.golden.json) — a worked example, ignored by the
-  harness by filename so it can never be mistaken for real
-- [`make_golden.py`](make_golden.py) — builds a bundle from ≥ 2 replicate runs
-
-`make_golden.py` derives the tolerance from the **measured run-to-run spread** rather than
-guessing it, keeps every replicate value in the bundle so the number can be audited, and
-**refuses to write anything** if A1–A3 fail in any replicate — a golden minted on a broken
-install pins the breakage and makes the harness certify it forever.
-
-For orientation, [`reference/pdmlite_seed42_reference.tsv`](reference/pdmlite_seed42_reference.tsv)
-carries the published seed-42 values for these nine routes (all `Completed`, all DS 100.00).
-**It is not a golden** — no cross-machine spread was ever measured for it, so it carries no
-defensible tolerance. `check_acceptance.py` does not read it; `make_golden.py` reports the delta
-against it as INFO only.
-
----
+v0.9 ships [`goldens/pdmlite_seed42_v0.9.golden.json`](goldens/pdmlite_seed42_v0.9.golden.json):
+three independent PDM-Lite runs on CARLA 0.9.15, every route `[100.0, 100.0, 100.0]`, tolerance
+±1.0 DS. It covers `base` for all three categories, `visual_shift` and `geometric_shift` for
+pedestrian, and `geometric_shift` for static. `make_golden.py` builds a bundle from ≥ 2 replicate
+runs, takes the tolerance from the measured spread, and refuses to write if A1–A3 fail in any
+replicate. Details: [`goldens/README.md`](goldens/README.md) and
+[`goldens/GENERATING.md`](goldens/GENERATING.md) (≈ 1–2 GPU-hours).
 
 ## Files
 
@@ -183,39 +107,19 @@ against it as INFO only.
 | `selftest.py` | 70 tests of the harness itself; no CARLA, no GPU, runs in CI |
 | `configs/golden_generation.yaml.template` | runner config for the golden-generation runs |
 | `goldens/` | measured v0.9 bundle, format, regeneration procedure, and ignored example |
-| `reference/` | published seed-42 observations, for orientation only |
+| `reference/` | published seed-42 values for the nine routes (all `Completed`, DS 100.00). **Not a golden**: no measured tolerance, and `check_acceptance.py` does not read it |
 
-The split's routes are **not** committed a second time. They are materialised on demand from
-`routes/`, with the sha256 checked every time, so a duplicate copy can never drift away from the
-benchmark definition.
-
-### Running the self-tests
-
-```bash
-python3 tests/selftest.py        # or: python3 -m unittest selftest -v
-```
-
-They build synthetic leaderboard checkpoints and drive the real scripts, asserting that a
-missing asset, a Tesla substitution, a dropped criterion, an unfinalised checkpoint, a
-mismatched golden and a partial golden each produce the right exit code. They are what stops the
-harness from silently ceasing to detect things.
-
----
+The split's routes are not committed twice; `materialize.py` copies them from `routes/` and
+checks the sha256 each time. Run the self-tests with `python3 tests/selftest.py` (or
+`python3 -m unittest selftest -v`).
 
 ## Coverage gaps at v0.9
 
-Honest list of what this does **not** cover, and what closes it:
-
-1. **Static `visual_shift` and all vehicle shifts** — no shippable asset exists. Closed at v1.0
-   by adding one route per replacement asset.
-2. **Vehicle blueprint tags** — only `front_vehicle_model` (`hard_break`) is exercised. The
-   `cut_in_vehicle_model`, `parked_vehicle_model` and `blueprint_name` paths are not. Closing
-   this is cheap (one base route each, ≈ 30 s of simulation) and should happen alongside (1).
-3. **Scenario families** — 2 of the 12 canonical scenarios are exercised. The split is a smoke
-   test, not coverage; `tools/check_route_coverage.py` is what asserts every scenario class
-   resolves.
-4. **Cross-machine spread** — the bundle has three independent roots on one RTX 3090 host; its
-   ±1.0 floor has not yet been confirmed by running the split on a second hardware/driver stack.
-
-None of these weaken A1 on the routes that *are* in the split, which is where the defensive value
-sits.
+1. **Static `visual_shift` and all vehicle shifts**: no shippable asset yet (v1.0 adds one route
+   per replacement asset).
+2. **Vehicle blueprint tags**: only `front_vehicle_model` (`hard_break`) is exercised, not
+   `cut_in_vehicle_model`, `parked_vehicle_model` or `blueprint_name`.
+3. **Scenario families**: 2 of the 12 canonical scenarios; `tools/check_route_coverage.py` checks
+   that every scenario class resolves.
+4. **Cross-machine spread**: the bundle comes from one RTX 3090 host; the ±1.0 floor is not yet
+   confirmed on a second hardware/driver stack.
