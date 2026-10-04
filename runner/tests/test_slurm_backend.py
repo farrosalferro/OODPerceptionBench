@@ -24,6 +24,7 @@ from oodbench.backends.base import AttemptOutcome
 from oodbench.backends.slurm import SlurmBackend, SlurmBackendError
 from oodbench.state import RunState
 
+from tests import slurm_replay
 from tests.test_integration_local import Site
 
 
@@ -61,6 +62,13 @@ class SlurmBackendBase(unittest.TestCase):
                         encoding="utf-8")
         path.chmod(path.stat().st_mode | stat.S_IXUSR)
         return path
+
+    def replay(self, name, *answers, when=None):
+        """Fake ``name`` with captured scheduler output; see ``tests.slurm_replay``."""
+        return slurm_replay.install(self.bin, name, *answers, when=when)
+
+    def calls(self, name):
+        return slurm_replay.calls(self.bin, name)
 
     def backend_and_task(self, **sections):
         execution = {"backend": "slurm"}
