@@ -1,8 +1,9 @@
 # Captured SLURM output
 
 `captured_2026-10-04.json` holds what real `sbatch`, `squeue`, `sacct` and `scancel` printed on
-a SLURM **24.11.5** cluster on **2026-10-04**. The SLURM backend tests replay these bytes through
-fake scheduler commands on `PATH`.
+a SLURM **24.11.5** cluster on **2026-10-04**, plus three cases added from one more capture on
+**2026-10-05** (marked below). The SLURM backend tests replay these bytes through fake scheduler
+commands on `PATH`.
 
 Why this exists: a parser that has only ever seen hand-typed output can pass every test and still
 never match what the real program prints. A fixture here is either captured or marked synthetic.
@@ -38,11 +39,24 @@ Job IDs and timestamps are kept as captured. Only these were replaced:
   `00:00:00`.
 - `squeue --name` matches every job of that name, even across separate runs: three held jobs
   sharing one name were all listed. `%o` prints each job's script as an **absolute** path, even
-  when `sbatch` was given a relative one, so name plus script path tells them apart. (The
-  `squeue_name_cmd_*` cases come from a third capture the same day, with held jobs that never
-  started.)
+  when `sbatch` was given a relative one. (The `squeue_name_cmd_*` cases come from a third
+  capture the same day, with held jobs that never started.)
+- Name plus script path still cannot tell a new job from an older one of the same route, since
+  a retry rewrites the same script. `%k` prints each job's `--comment` in full: two held jobs
+  sharing a name and a script, each with its own `oodbench:<32 hex>` comment, were listed with
+  those comments (`squeue_name_comment_*`, **2026-10-05**).
 - `sacct` reported `PENDING` within 20 ms of submission in all four tries. The empty
   accounting reply was seen only for an id the database never issued (exit 0, no output).
+
+- `squeue` fails for other reasons than a purged job. `squeue_unknown_cluster` (**2026-10-05**)
+  is the real reply to `-M` naming a cluster the database does not know: exit 1, with no
+  "Invalid job id". Tests use it to stand for any `squeue` failure that says nothing about the
+  job, and say so.
+
+## Reused for a different command line
+
+- `sacct_command_error` was captured for `--format=NoSuchField`. Two tests replay it as the
+  error from the backend's own `sacct` queries, and say so in their docstrings.
 
 ## What could not be captured
 

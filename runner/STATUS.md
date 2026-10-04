@@ -7,7 +7,7 @@
 
 A production runner for this benchmark includes scale and multi-GPU evidence that this release
 does not yet have. What exists now is the part that is expensive to change later — the design
-decisions in `DESIGN.md` — plus a working local implementation whose *logic* is covered by 354
+decisions in `DESIGN.md` — plus a working local implementation whose *logic* is covered by 362
 automated tests and whose *simulator interaction* was exercised against CARLA 0.9.15 on
 2026-08-11 and 2026-08-12. Single-route execution, two-worker one-GPU stacking, exact port
 isolation, real Ctrl-C/reaping/resume, failure accounting, and a nine-route PDM-Lite golden were
@@ -252,7 +252,7 @@ All of these run with no GPU, no CARLA, no network and no third-party packages (
 shipped-template tests need PyYAML and are skipped without it):
 
 ```
-python -m unittest discover -s tests -t .    ->  354 tests, OK, ~101 s
+python -m unittest discover -s tests -t .    ->  362 tests, OK, ~101 s
 ```
 
 | Area | Covered by | Notes |
@@ -353,8 +353,13 @@ observed;
 > - **Missing accounting is no longer read as a normal exit.** When a job has left the queue but
 >   `sacct` fails or returns no record, the runner waits up to 180 s for accounting to appear. If
 >   none does, it cancels the job (best effort) and settles the attempt as `FAULT` with the detail
->   `accounting unavailable after 180s: <reason>`. Like any scheduler fault, that is charged to
->   the bounded *killed* axis, not to the model's record budget.
+>   `accounting unavailable after 180s: <reason>`. As on the local backend, a `FAULT` never
+>   spends the model's record budget: with no final checkpoint it is retried on the
+>   infrastructure budget, and with a retryable final checkpoint (such as a crash status) on
+>   the bounded *killed* axis. A failing `squeue` is not taken as "left the queue": only an empty reply or "Invalid
+>   job id" (a purged job) is. If `squeue` fails for any other reason and `sacct` has no state
+>   for 180 s, nothing shows the job has ended, so the run stops with an error naming the job
+>   rather than retry the route beside it.
 > - **Queue time is no longer recorded as runtime.** Runtime counts from when the runner first
 >   sees the job `RUNNING`. A job that ends before that takes its runtime from `sacct`'s `Start`,
 >   `End` and `Elapsed`; if those are unavailable too, it records 0 s and the detail ends with
@@ -364,19 +369,23 @@ observed;
 >   synced to disk, and logs each step to `_runner/aside.jsonl`. The copy is deleted once the job
 >   is confirmed ended, and put back if the submission is refused. If `sbatch` accepts a job but
 >   prints no job id, the runner looks among your queued jobs for one with the route's job name
->   **and** its exact `.sbatch` script (a name alone can match other runs' jobs); exactly one match
->   is supervised as usual. With no match, several, or a malformed id whose `scancel` is not
->   confirmed within 60 s, the run stops with an error that names the job(s) and the set-aside
->   file, and leaves the file in place.
+>   **and** this submission's own tag, which each job carries as `--comment=oodbench:<32 hex>`
+>   (a name, or a name and script, can match an older job of the same route); exactly one match
+>   is supervised as usual. With no match, several, or a job whose `scancel` is not confirmed
+>   within 60 s, the run stops with an error that names the job(s) and the set-aside file, and
+>   leaves the file in place. If the route had no checkpoint to set aside, it leaves a small
+>   `<checkpoint>.unsettled-<ns>` file naming the job instead.
 >
-> **Recovering a set-aside checkpoint.** While any `*.aside-*` file remains under the output
-> root, a SLURM run refuses to start and lists each file with its checkpoint. For each one:
+> **Recovering a set-aside checkpoint.** While any `*.aside-*` or `*.unsettled-*` file remains
+> under the output root, a SLURM run refuses to start and lists each file with its checkpoint.
+> For each one:
 >
 > 1. Stop any job of the earlier run that is still queued or running
 >    (`squeue -u $USER -o '%i %j %o'`, then `scancel <id>`), and confirm it has ended
->    (`sacct -j <id>`).
-> 2. Either put the earlier result back (`mv <checkpoint>.aside-<ns> <checkpoint>`) or delete the
->    file so the route runs again.
+>    (`sacct -j <id>`). An `.unsettled-` file names its job.
+> 2. For an `.aside-` file, either put the earlier result back
+>    (`mv <checkpoint>.aside-<ns> <checkpoint>`) or delete the file so the route runs again.
+>    Delete an `.unsettled-` file once its job has ended.
 > 3. If the checkpoint exists again, a job wrote it after the file was set aside: keep whichever
 >    you trust.
 >

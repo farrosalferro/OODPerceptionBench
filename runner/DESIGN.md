@@ -1343,7 +1343,8 @@ deliberately not results.
 - **Not fixed here (separate decisions, out of scope):** resume identity does not hash the model
   / checkpoint / route content, so a changed agent resumes onto an old tree (finding 1); a
   `squeue` failure still reads as "job finished" (finding 3; since fixed: an `squeue` error falls
-  through to `sacct`, and a job with no accounting for 180 s settles as `FAULT`); SLURM has no
+  through to `sacct`; a job that has left the queue with no accounting for 180 s settles as
+  `FAULT`, and one that `squeue` cannot place either stops the run instead); SLURM has no
   node-local port probe (finding 4); release metadata is hard-coded (finding 8).
 - **Cost — an ambiguous record is destroyed by its own retry.** Charging ABNORMAL_END +
   `RETRY_RECORD` to the `killed` axis means the route is re-queued, and `take_checkpoint_aside`

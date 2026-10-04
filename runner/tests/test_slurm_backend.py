@@ -7,10 +7,11 @@ commands.  No scheduler or GPU is required.
 
 import argparse
 import errno
-import getpass
 import json
 import logging
 import os
+import pwd
+import re
 import shlex
 import shutil
 import stat
@@ -30,6 +31,8 @@ from oodbench.state import RunState
 from tests import slurm_replay
 from tests.test_integration_local import Site
 
+# The scheduler records jobs under the effective user, whatever LOGNAME or USER say.
+EFFECTIVE_USER = pwd.getpwuid(os.geteuid()).pw_name
 
 COMPLETED = {"_checkpoint": {"progress": [1, 1],
                               "records": [{"status": "Completed",
@@ -585,7 +588,8 @@ class TestAccountingUnavailable(SlurmBackendBase):
             <AttemptOutcome.FAULT: 'fault'>
 
         An operator reading the report must know whether accounting was down or merely had
-        no record of the job.
+        no record of the job. ``sacct_command_error`` is real ``sacct`` error text, captured
+        for a different ``--format`` than this query's.
         """
         clock = _Clock()
         with unittest.mock.patch("time.time", clock):
@@ -815,8 +819,9 @@ class TestRuntimeWithoutRunning(SlurmBackendBase):
 
             AssertionError: 900.0 != 0.0 : queue wait was persisted as route runtime
 
-        The timing query fails (the captured ``sacct`` error reply), so the runtime is
-        unknown: record 0, and tag the detail so nobody reads it as a measured 0.
+        The timing query fails, so the runtime is unknown: record 0, and tag the detail so
+        nobody reads it as a measured 0. ``sacct_command_error`` is real ``sacct`` error text,
+        captured for a different ``--format`` than this query's.
         """
         clock = _Clock()
         with unittest.mock.patch("time.time", clock):
@@ -1190,7 +1195,7 @@ class TestSubmissionIdentity(SlurmBackendBase):
         of returning LAUNCH_FAILED, restoring it beside a possible writer, and requeueing.
         """
         self.replay("sbatch", "sbatch_without_parsable")
-        self.replay("squeue", "squeue_name_cmd_zero_matches")
+        self.replay("squeue", "squeue_name_comment_zero")
         _, backend, task = self.backend_and_task(slurm={"submit_interval_s": 0})
         task.mkdirs()
         task.result_path.write_text(json.dumps(COMPLETED), encoding="utf-8")
@@ -1209,61 +1214,73 @@ class TestUnidentifiedSubmission(SlurmBackendBase):
     """sbatch accepted a job but its reply carries no job id.
 
     The reply is real: plain ``sbatch`` without ``--parsable`` prints "Submitted batch job N",
-    standing in for a site wrapper that drops the flag. The job is looked up by name *and*
-    script path among the user's own jobs: the captured name lookup lists three jobs sharing
-    one name, so a name alone could adopt another run's job.
+    standing in for a site wrapper that drops the flag. Every submission carries its own
+    ``--comment`` tag, and the job is looked up among the user's jobs by name *and* that tag.
+    The captured lookup lists two held jobs that share a name and a script but carry different
+    tags: name and script alone would let a retry adopt an older job of the same route.
     """
 
     OLD = json.dumps(COMPLETED).encode("utf-8")
-    THEIRS_A = "<jobdir>/a/route_x_seed42.sbatch"   # 141460 and 141458
-    THEIRS_B = "<jobdir>/b/route_x_seed42.sbatch"   # 141459
+    TAG_NEWER = "oodbench:9b17e4c2a05d4f3e8c6b2d1a7f904e55"   # job 141565
+    TAG_OLDER = "oodbench:3f2a9c0d6e4b4c1fa7d85e9b0c6a1f42"   # job 141564
+    TAG_OTHER = "oodbench:00000000000000000000000000000000"   # in no captured reply
+    THEIRS_B = "<jobdir>/b/route_x_seed42.sbatch"             # job 141459, by %o
 
-    def submit_unidentified(self, *, ours=None):
-        """Submit with a reply that has no id; ``ours`` names the captured script path that
-        stands for this route's job script."""
+    def submit_unidentified(self, tag):
+        """Submit with a reply that has no id; this submission's tag is ``tag``."""
         cfg, backend, task = self.backend_and_task(slurm={"submit_interval_s": 0})
         task.mkdirs()
         task.result_path.write_bytes(self.OLD)
-        wrapper = task.job_script.with_suffix(".sbatch")
         self.replay("sbatch", "sbatch_without_parsable")
-        self.replay("squeue", "squeue_name_cmd_three_matches", when="--name",
-                    replace={ours: str(wrapper)} if ours else None)
+        self.replay("squeue", "squeue_name_comment_two_tagged", when="%i|%k")
         self.replay("squeue", "squeue_gone_recent")
         self.replay("sacct", "sacct_cancelled_pending")
         self.replay("scancel", "scancel_ok")
+        # create=True only so the test could fail on its assertion before the fix existed.
+        tag_patch = unittest.mock.patch("oodbench.backends.slurm._submission_tag",
+                                        return_value=tag, create=True)
+        tag_patch.start()
+        self.addCleanup(tag_patch.stop)
         return cfg, backend, task
 
     def asides(self, task):
         return sorted(task.result_path.parent.glob(task.result_path.name + ".aside-*"))
 
-    def test_the_one_job_with_our_name_and_script_is_supervised(self):
+    def test_the_job_carrying_our_tag_is_supervised(self):
         """RED BEFORE THE FIX:
 
             SlurmBackendError: sbatch accepted a job but returned no recoverable job identity;
-            output was 'Submitted batch job 141242'. ...
+            ... There is no job of yours named oodbench-route_1_a running the script ...
         """
-        _, backend, task = self.submit_unidentified(ours=self.THEIRS_B)
+        _, backend, task = self.submit_unidentified(self.TAG_NEWER)
 
         attempt = backend.submit(task, worker=0)
 
-        self.assertEqual(attempt.handle, "141459")
+        self.assertEqual(attempt.handle, "141565")
         self.assertIsNone(attempt.outcome)
         self.assertEqual(self.calls("squeue")[0], [
-            "-h", "-u", getpass.getuser(), "--name", "oodbench-route_1_a", "-o", "%i|%o"])
+            "-h", "-u", EFFECTIVE_USER, "--name", "oodbench-route_1_a", "-o", "%i|%k"])
+        wrapper = task.job_script.with_suffix(".sbatch").read_text(encoding="utf-8")
+        self.assertIn(f"#SBATCH --comment={self.TAG_NEWER}\n", wrapper)
         [aside] = self.asides(task)
         with unittest.mock.patch("oodbench.backends.slurm._CANCEL_POLL_S", 0):
             backend.shutdown()
-        self.assertEqual(self.calls("scancel"), [["141459"]],
+        self.assertEqual(self.calls("scancel"), [["141565"]],
                          "the identified job was not cancelled at shutdown")
         self.assertFalse(aside.exists())
 
-    def test_jobs_that_share_only_the_name_are_left_alone(self):
+    def test_an_older_job_of_the_same_route_is_never_adopted(self):
         """RED BEFORE THE FIX:
 
-            AssertionError: '.aside-' not found in 'sbatch accepted a job but returned no
-            recoverable job identity; ...' : the error does not say where the old checkpoint is
+            AssertionError: SlurmBackendError not raised
+
+        The new job is not visible yet. An older job of this route has the same name and the
+        same script path (``%o``, from the capture with three held jobs), so a name-and-script
+        lookup adopted it. Its tag (``%k``) is not this submission's, so it is left alone.
         """
-        _, backend, task = self.submit_unidentified()
+        _, backend, task = self.submit_unidentified(self.TAG_OTHER)
+        self.replay("squeue", "squeue_name_cmd_three_matches", when="%i|%o",
+                    replace={self.THEIRS_B: str(task.job_script.with_suffix(".sbatch"))})
 
         with self.assertRaises(SlurmBackendError) as raised:
             backend.submit(task, worker=0)
@@ -1273,29 +1290,41 @@ class TestUnidentifiedSubmission(SlurmBackendBase):
         [aside] = self.asides(task)
         self.assertEqual(aside.read_bytes(), self.OLD)
         self.assertFalse(task.result_path.exists(), "restored beside a possible writer")
-        for needed in (str(aside), str(task.result_path), "no job", "scancel"):
+        for needed in (str(aside), str(task.result_path), self.TAG_OTHER, "scancel"):
             self.assertIn(needed, message)
         self.assertEqual(self.calls("scancel"), [], "cancelled a job that is not ours")
+        self.assertEqual(backend._submitted, [])
 
-    def test_two_jobs_with_our_script_are_left_to_the_operator(self):
+    def test_every_submission_gets_its_own_tag(self):
         """RED BEFORE THE FIX:
 
-            AssertionError: '.aside-' not found in 'sbatch accepted a job but returned no
-            recoverable job identity; ...'
+            AssertionError: 0 != 2 : a wrapper carried no submission tag
         """
-        _, backend, task = self.submit_unidentified(ours=self.THEIRS_A)
-
-        with self.assertRaises(SlurmBackendError) as raised:
+        self.replay("sbatch", "sbatch_parsable")
+        _, backend, task = self.backend_and_task(slurm={"submit_interval_s": 0})
+        wrapper = task.job_script.with_suffix(".sbatch")
+        tags = []
+        for _ in range(2):
             backend.submit(task, worker=0)
+            tags += re.findall(r"^#SBATCH --comment=(oodbench:[0-9a-f]{32})$",
+                               wrapper.read_text(encoding="utf-8"), re.M)
+        self.assertEqual(len(tags), 2, "a wrapper carried no submission tag")
+        self.assertNotEqual(tags[0], tags[1])
 
-        message = str(raised.exception)
-        self.assertIn(".aside-", message)
-        self.assertIn("141458", message)
-        self.assertIn("141460", message)
-        [aside] = self.asides(task)
-        self.assertEqual(aside.read_bytes(), self.OLD)
-        self.assertFalse(task.result_path.exists())
-        self.assertEqual(self.calls("scancel"), [])
+    def test_the_lookup_asks_for_the_effective_user_not_the_environment(self):
+        """RED BEFORE THE FIX:
+
+            AssertionError: 'someone-else' != '<effective user>'
+
+        ``getpass.getuser()`` reads ``LOGNAME``/``USER`` first. A stale or overridden variable
+        then made the lookup search another user's jobs.
+        """
+        environ = {name: "someone-else" for name in ("LOGNAME", "USER", "LNAME", "USERNAME")}
+        with unittest.mock.patch.dict(os.environ, environ):
+            _, backend, task = self.submit_unidentified(self.TAG_OTHER)
+            with self.assertRaises(SlurmBackendError):
+                backend.submit(task, worker=0)
+        self.assertEqual(self.calls("squeue")[0][2], EFFECTIVE_USER)
 
     def test_an_unconfirmed_cancel_keeps_the_old_checkpoint_aside(self):
         """RED BEFORE THE FIX:
@@ -1327,6 +1356,166 @@ class TestUnidentifiedSubmission(SlurmBackendBase):
         self.assertIn(str(aside), message)
         self.assertFalse(task.result_path.exists())
         self.assertIn("141229", backend._submitted, "shutdown can no longer cancel the job")
+
+
+class TestSqueueErrors(SlurmBackendBase):
+    """A failing ``squeue`` is told apart from a job that has left the queue.
+
+    A real ``squeue`` exits 1 with "Invalid job id specified" once a finished job is purged;
+    that means *gone*. Any other failure says nothing about the job. The error used here,
+    ``squeue_unknown_cluster``, is real ``squeue`` error text, captured for an unknown ``-M``
+    cluster rather than for this exact command line.
+    """
+
+    OLD = json.dumps(COMPLETED).encode("utf-8")
+
+    def submitted(self, sacct, *, old=True):
+        self.replay("sbatch", "sbatch_parsable")
+        self.replay("squeue", "squeue_unknown_cluster")
+        self.replay("sacct", *sacct)
+        self.replay("scancel", "scancel_ok")
+        cfg, backend, task = self.backend_and_task(slurm={"submit_interval_s": 0})
+        task.mkdirs()
+        if old:
+            task.result_path.write_bytes(self.OLD)
+        return cfg, backend, task, backend.submit(task, worker=0)
+
+    def test_an_squeue_error_with_no_accounting_never_settles(self):
+        """RED BEFORE THE FIX:
+
+            AssertionError: SlurmBackendError not raised
+
+        Both tools are silent and ``squeue`` failed: the job may still be running. Settling
+        it as a FAULT deleted the old checkpoint and let the route be retried beside it.
+        """
+        clock = _Clock()
+        with unittest.mock.patch("time.time", clock):
+            cfg, backend, task, attempt = self.submitted(["sacct_never_issued"])
+            start = clock.now
+            self.assertFalse(backend.poll(attempt))
+            clock.now = start + 179.0
+            self.assertFalse(backend.poll(attempt))
+            clock.now = start + 180.0
+            with self.assertRaises(SlurmBackendError) as raised:
+                backend.poll(attempt)
+
+        self.assertIsNone(attempt.outcome)
+        [aside] = task.result_path.parent.glob(task.result_path.name + ".aside-*")
+        self.assertEqual(aside.read_bytes(), self.OLD)
+        message = str(raised.exception)
+        for needed in ("141229", "No cluster 'nosuchcluster'", str(aside), "scancel 141229"):
+            self.assertIn(needed, message)
+        self.assertEqual(self.calls("scancel"), [])
+        self.assertIn("141229", backend._submitted, "shutdown can no longer cancel the job")
+
+        # Shutdown later confirms the cancel: the old checkpoint still stays for the operator.
+        self.replay("squeue", "squeue_purged")
+        self.replay("sacct", "sacct_cancelled_running")
+        with unittest.mock.patch("oodbench.backends.slurm._CANCEL_POLL_S", 0):
+            backend.shutdown()
+        self.assertTrue(aside.exists(), "the kept checkpoint was deleted at shutdown")
+
+    def test_an_squeue_error_defers_to_a_terminal_accounting_state(self):
+        """Green before and after: accounting's terminal state is positive evidence."""
+        _, backend, _, attempt = self.submitted(["sacct_failed_exit3"])
+        self.assertTrue(backend.poll(attempt))
+        self.assertIs(attempt.outcome, AttemptOutcome.EXITED)
+
+    def test_an_squeue_error_with_live_accounting_stays_in_flight(self):
+        """Green before and after."""
+        _, backend, _, attempt = self.submitted(["sacct_running"])
+        self.assertFalse(backend.poll(attempt))
+        self.assertIsNone(attempt.outcome)
+
+
+class TestUnsettledJobMarker(SlurmBackendBase):
+    """A job that may still write a route's checkpoint, left unsettled with no old checkpoint
+    to set aside, leaves a ``<checkpoint>.unsettled-<ns>`` file naming it. The next run refuses
+    to start until the operator has stopped the job and deleted the file."""
+
+    def markers(self, task):
+        return sorted(task.result_path.parent.glob(task.result_path.name + ".unsettled-*"))
+
+    def tools_present(self):
+        self.tool("sbatch", "raise SystemExit(0)")
+        self.tool("squeue", "raise SystemExit(0)")
+
+    def assert_next_run_refuses(self, cfg, marker):
+        self.tools_present()
+        with self.assertRaises(SlurmBackendError) as raised:
+            SlurmBackend(cfg, self.log).preflight()
+        self.assertIn("1 unsettled-job marker", str(raised.exception))
+        self.assertIn(str(marker), str(raised.exception))
+
+    def test_an_unidentified_first_attempt_leaves_a_marker(self):
+        """RED BEFORE THE FIX:
+
+            ValueError: not enough values to unpack (expected 1, got 0)
+
+        No earlier checkpoint, so no aside file: nothing stopped the next run from submitting
+        a second job beside one this run could not identify.
+        """
+        cfg, backend, task = self.backend_and_task(slurm={"submit_interval_s": 0})
+        self.replay("sbatch", "sbatch_without_parsable")
+        self.replay("squeue", "squeue_name_comment_zero")
+        with self.assertRaises(SlurmBackendError) as raised:
+            backend.submit(task, worker=0)
+
+        [marker] = self.markers(task)
+        note = json.loads(marker.read_text(encoding="utf-8"))
+        self.assertEqual(note["job_name"], "oodbench-route_1_a")
+        self.assertRegex(note["comment"], r"\Aoodbench:[0-9a-f]{32}\Z")
+        self.assertEqual(note["checkpoint"], str(task.result_path))
+        self.assertIn(str(marker), str(raised.exception))
+        self.assert_next_run_refuses(cfg, marker)
+
+    def test_an_unconfirmed_kill_leaves_a_marker(self):
+        """RED BEFORE THE FIX:
+
+            ValueError: not enough values to unpack (expected 1, got 0)
+        """
+        self.replay("sbatch", "sbatch_parsable")
+        self.replay("squeue", "squeue_running")
+        self.replay("scancel", "scancel_ok")
+        cfg, backend, task = self.backend_and_task(slurm={"submit_interval_s": 0})
+        attempt = backend.submit(task, worker=0)
+
+        with unittest.mock.patch("oodbench.backends.slurm._CANCEL_WAIT_S", 0), \
+                unittest.mock.patch("oodbench.backends.slurm._CANCEL_POLL_S", 0), \
+                self.assertRaises(SlurmBackendError) as raised:
+            backend.kill(attempt, "wall-clock timeout")
+
+        [marker] = self.markers(task)
+        self.assertEqual(json.loads(marker.read_text(encoding="utf-8"))["job"], "141229")
+        self.assertIn(str(marker), str(raised.exception))
+        self.assert_next_run_refuses(cfg, marker)
+
+    def test_an_unconfirmed_shutdown_leaves_a_marker(self):
+        """RED BEFORE THE FIX:
+
+            ValueError: not enough values to unpack (expected 1, got 0)
+        """
+        self.replay("sbatch", "sbatch_parsable")
+        self.replay("squeue", "squeue_running")
+        self.replay("scancel", "scancel_ok")
+        cfg, backend, task = self.backend_and_task(slurm={"submit_interval_s": 0})
+        backend.submit(task, worker=0)
+
+        with unittest.mock.patch("oodbench.backends.slurm._CANCEL_WAIT_S", 0), \
+                unittest.mock.patch("oodbench.backends.slurm._CANCEL_POLL_S", 0), \
+                self.assertLogs("test-slurm-backend", level="WARNING"):
+            backend.shutdown()
+
+        [marker] = self.markers(task)
+        self.assert_next_run_refuses(cfg, marker)
+
+    def test_a_marker_look_alike_does_not_refuse(self):
+        """Green before and after."""
+        cfg, backend, task = self.backend_and_task()
+        task.mkdirs()
+        task.result_path.with_name(task.result_path.name + ".unsettled-notes").write_text("x")
+        self.tools_present()
+        backend.preflight()
 
 
 class TestLeftoverAsideBlocksStart(SlurmBackendBase):
@@ -1398,7 +1587,7 @@ class TestLeftoverAsideBlocksStart(SlurmBackendBase):
         task.mkdirs()
         task.result_path.write_text(json.dumps(COMPLETED), encoding="utf-8")
         self.replay("sbatch", "sbatch_without_parsable")
-        self.replay("squeue", "squeue_name_cmd_zero_matches")
+        self.replay("squeue", "squeue_name_comment_zero")
         with self.assertRaises(SlurmBackendError):
             backend.submit(task, worker=0)
 

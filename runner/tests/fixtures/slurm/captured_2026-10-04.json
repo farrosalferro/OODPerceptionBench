@@ -451,6 +451,51 @@
       "rc": 0,
       "stdout": "",
       "stderr": ""
+    },
+    "squeue_name_comment_two_tagged": {
+      "argv": [
+        "squeue",
+        "-h",
+        "-u",
+        "user",
+        "--name",
+        "oodbench-fixture-tagged",
+        "-o",
+        "%i|%k"
+      ],
+      "rc": 0,
+      "stdout": "141565|oodbench:9b17e4c2a05d4f3e8c6b2d1a7f904e55\n141564|oodbench:3f2a9c0d6e4b4c1fa7d85e9b0c6a1f42\n",
+      "stderr": ""
+    },
+    "squeue_name_comment_zero": {
+      "argv": [
+        "squeue",
+        "-h",
+        "-u",
+        "user",
+        "--name",
+        "oodbench-fixture-none",
+        "-o",
+        "%i|%k"
+      ],
+      "rc": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    "squeue_unknown_cluster": {
+      "argv": [
+        "squeue",
+        "-h",
+        "-j",
+        "141564",
+        "-o",
+        "%T",
+        "-M",
+        "nosuchcluster"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": "squeue: error: No cluster 'nosuchcluster' known by database.\nsqueue: error: 'nosuchcluster' can't be reached now, or it is an invalid entry for --cluster.  Use 'sacctmgr list clusters' to see available clusters.\nsqueue: fatal: Could not get cluster information\n"
     }
   },
   "timelines": {
