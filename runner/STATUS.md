@@ -7,7 +7,7 @@
 
 A production runner for this benchmark includes scale and multi-GPU evidence that this release
 does not yet have. What exists now is the part that is expensive to change later — the design
-decisions in `DESIGN.md` — plus a working local implementation whose *logic* is covered by 318
+decisions in `DESIGN.md` — plus a working local implementation whose *logic* is covered by 354
 automated tests and whose *simulator interaction* was exercised against CARLA 0.9.15 on
 2026-08-11 and 2026-08-12. Single-route execution, two-worker one-GPU stacking, exact port
 isolation, real Ctrl-C/reaping/resume, failure accounting, and a nine-route PDM-Lite golden were
@@ -252,7 +252,7 @@ All of these run with no GPU, no CARLA, no network and no third-party packages (
 shipped-template tests need PyYAML and are skipped without it):
 
 ```
-python -m unittest discover -s tests -t .    ->  318 tests, OK, ~99 s
+python -m unittest discover -s tests -t .    ->  354 tests, OK, ~101 s
 ```
 
 | Area | Covered by | Notes |
@@ -310,7 +310,7 @@ observed;
 | H6 | **CLOSED — 2026-08-12** | Ctrl-C exited 3 after writing state/report; interrupted routes charged no retry axis and stayed unfinished. Resume ran exactly the unfinished routes, then a third invocation launched nothing. | None for the measured local two-worker case. |
 | H7 | **CLOSED — 2026-08-11/12** | Three real `Failed - TickRuntime` records were settled and reported complete at the configured zero retry budget. Eight deliberate setup failures each charged exactly one record attempt; rerun changed no counters and still exited 0 with all routes settled. | Hard-death/fault-pattern cases were not induced on hardware. |
 | H8 | **PARTIAL — 2026-08-13** | One inference model (TFPP) ran the full 70-route static category, seed 42, as four concurrent one-GPU jobs on an RTX 6000 Ada node: **0.136 GPU-h/route** measured. A shared workstation GPU measured 0.211 on a partial run of the same category. Eight-route constant-velocity sweeps measured 0.044–0.079. | Budget ≈0.14 GPU-h/route (≈67 GPU-h for 475 routes, per model and seed). The full 475-route run is unmeasured, and the figure is one model on one category; other models and categories may differ. |
-| H9 | **CLOSED — 2026-08-15** | The repaired SLURM backend ran a full route category (70 routes, seed 42) on a real scheduler at two concurrent jobs: every route settled with a genuine final checkpoint, concurrent jobs used distinct physical GPUs with the scheduler's CUDA allocation preserved and each job's configured Vulkan adapter selected, held disjoint RPC+TM ports, and every job was reaped with no orphan. SLURM statuses and §6A axes match the local backend for the same nine routes and seed. | Validated at two-way concurrency on one node. The full 475-route scale and larger multi-node fan-out are unmeasured, and a transient simulator freeze (the "no liveness probe" gap in §3) is only caught by `route_timeout_s` — absorbed by the infra-retry budget, but with no early detector. |
+| H9 | **CLOSED — 2026-08-15** | The repaired SLURM backend ran a full route category (70 routes, seed 42) on a real scheduler at two concurrent jobs: every route settled with a genuine final checkpoint, concurrent jobs used distinct physical GPUs with the scheduler's CUDA allocation preserved and each job's configured Vulkan adapter selected, held disjoint RPC+TM ports, and every job was reaped with no orphan. SLURM statuses and §6A axes match the local backend for the same nine routes and seed. | Validated at two-way concurrency on one node. The full 475-route scale and larger multi-node fan-out are unmeasured, and a transient simulator freeze (the "no liveness probe" gap in §3) is only caught by `route_timeout_s` — absorbed by the infra-retry budget, but with no early detector. Three rare fault paths (a job the runner cannot identify, missing accounting, queue time recorded as runtime) were fixed on 2026-10-04 against captured scheduler output; re-running on a real scheduler is pending (§2). |
 | H10 | **PARTIAL — 2026-08-11/12** | A fresh GitHub clone ran setup twice (26/26 patches, idempotent), 222 runner tests, a strict 475-route dry run, real smoke routes, and the nine-route PDM-Lite golden/acceptance flow with every path supplied by config. | The host still had the maintainers' internal mounts available; the stronger “those mounts do not exist” portability proof must be repeated externally. |
 
 > ### ✅ The SLURM backend is validated (2026-08-15).
@@ -345,28 +345,42 @@ observed;
 > long, generous `route_timeout_s` makes each freeze expensive. Size `infra_budget` and
 > `route_timeout_s` for your agent. The local backend is unaffected by any of the above.
 >
-> **Known SLURM residuals (open; a fix is planned).** Three rare paths are not yet handled
-> cleanly. None affects the local backend.
+> **SLURM fault paths fixed (2026-10-04).** Three rare paths that the 2026-08-15 backend did not
+> handle cleanly are fixed, red-first, with tests that replay output captured from a real SLURM
+> 24.11.5 scheduler. Re-running the fixed backend on a real scheduler is pending. None of this
+> touches the local backend.
 >
-> - **A job the runner cannot identify keeps running.** If `sbatch` accepts a job but prints no
->   usable job id, or prints a malformed one and the runner's `scancel` of that job is not
->   confirmed within 60 s, the run stops with an error. That job may still be running
->   unsupervised, and the route's previous checkpoint was set aside in memory and is lost. To
->   recover: find the job by name (`oodbench-<route stem>`, as in the newest `.sbatch` script the
->   run wrote) with `squeue -u $USER -n <name>`, `scancel` it, wait until it has left the queue,
->   then restore that route's checkpoint from a backup, or delete whatever the cancelled job left
->   at that path so the route runs again. Then resume.
-> - **Missing accounting can be charged to the model.** If `squeue` fails, or `sacct` returns
->   nothing (accounting lag), just as a job ends, the attempt settles as an ordinary exit with the
->   detail `SLURM state unknown`. A job killed by a signal in that window is then charged to the
->   model's record budget instead of the bounded infrastructure axis. If a route's reason reads
->   `SLURM state unknown`, check the job with `sacct -j <id>`; if it was an infrastructure
->   failure, delete that route's checkpoint and resume so it runs again.
-> - **Queue time can be recorded as runtime.** A job that finishes before the runner ever sees it
->   `RUNNING` keeps a start time taken before `sbatch`, so its recorded duration includes the
->   time it waited in the queue. This changes no settlement and no `route_timeout_s` decision;
->   only the persisted duration figures are inflated. For cost estimates, use `sacct`'s
->   `Elapsed` for the job instead.
+> - **Missing accounting is no longer read as a normal exit.** When a job has left the queue but
+>   `sacct` fails or returns no record, the runner waits up to 180 s for accounting to appear. If
+>   none does, it cancels the job (best effort) and settles the attempt as `FAULT` with the detail
+>   `accounting unavailable after 180s: <reason>`. Like any scheduler fault, that is charged to
+>   the bounded *killed* axis, not to the model's record budget.
+> - **Queue time is no longer recorded as runtime.** Runtime counts from when the runner first
+>   sees the job `RUNNING`. A job that ends before that takes its runtime from `sacct`'s `Start`,
+>   `End` and `Elapsed`; if those are unavailable too, it records 0 s and the detail ends with
+>   `runtime unknown (never observed RUNNING)`.
+> - **A route's previous checkpoint survives a job the runner cannot identify.** Before
+>   submitting, the runner copies the route's existing checkpoint to `<checkpoint>.aside-<ns>`,
+>   synced to disk, and logs each step to `_runner/aside.jsonl`. The copy is deleted once the job
+>   is confirmed ended, and put back if the submission is refused. If `sbatch` accepts a job but
+>   prints no job id, the runner looks among your queued jobs for one with the route's job name
+>   **and** its exact `.sbatch` script (a name alone can match other runs' jobs); exactly one match
+>   is supervised as usual. With no match, several, or a malformed id whose `scancel` is not
+>   confirmed within 60 s, the run stops with an error that names the job(s) and the set-aside
+>   file, and leaves the file in place.
+>
+> **Recovering a set-aside checkpoint.** While any `*.aside-*` file remains under the output
+> root, a SLURM run refuses to start and lists each file with its checkpoint. For each one:
+>
+> 1. Stop any job of the earlier run that is still queued or running
+>    (`squeue -u $USER -o '%i %j %o'`, then `scancel <id>`), and confirm it has ended
+>    (`sacct -j <id>`).
+> 2. Either put the earlier result back (`mv <checkpoint>.aside-<ns> <checkpoint>`) or delete the
+>    file so the route runs again.
+> 3. If the checkpoint exists again, a job wrote it after the file was set aside: keep whichever
+>    you trust.
+>
+> Then resume.
 
 ### Hardware-validation measurement notes
 

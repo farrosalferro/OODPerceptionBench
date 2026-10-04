@@ -5,7 +5,7 @@
 > comparable. Every report this runner writes carries that stamp.
 >
 > **This is a hardware-validated local first cut, not a production-scale runner.** The
-> supervision logic is covered by 318 automated tests. On 2026-08-11/12 CARLA 0.9.15 executed
+> supervision logic is covered by 354 automated tests. On 2026-08-11/12 CARLA 0.9.15 executed
 > single routes, two 8-route/two-worker sweeps with one-GPU stacking and port isolation observed
 > live, a real Ctrl-C/reap/resume cycle, and three independent nine-route PDM-Lite golden
 > replicates. The SLURM backend is now validated on a real scheduler at two-way concurrency (one
@@ -464,13 +464,13 @@ templates need PyYAML and are skipped without it):
 python -m unittest discover -s tests -t .
 ```
 
-318 tests covering the port allocator (at worker counts far above any real GPU count) and its
+354 tests covering the port allocator (at worker counts far above any real GPU count) and its
 run locks, the finalization predicate and status taxonomy, path mirroring, manifest integrity,
 the resume and budget decision, the attempt-accounting model of `DESIGN.md` §6A, the exit
 contract, the ledger,
 the generated job script, the shipped configuration templates, backend concurrency, and the
-SLURM backend — including the end-to-end
-tests (24 in `tests/test_integration_local.py`, plus more for infra-gate recovery and for the
+SLURM backend (its fault paths replayed from output captured on a real scheduler) — including
+the end-to-end tests (24 in `tests/test_integration_local.py`, plus more for infra-gate recovery and for the
 trap under a simulator that crashes into the shared stderr) that drive the full
 supervision loop against a stand-in evaluator, exercising resume, retry, timeout kill,
 quarantine and every exit code.
