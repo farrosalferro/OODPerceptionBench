@@ -1,387 +1,146 @@
 # OOD-PerceptionBench
 
-> # ⚠️ Pre-release — do not cite, and do not report numbers from this yet.
->
-> **The accompanying paper is not yet posted.** This repository is deliberately **untagged**:
-> there is no `v0.9.0` release and no DOI. Contents may change without notice.
->
-> Twelve of the eighteen OOD props are still being replaced for licensing reasons, and their
-> routes re-run — so any score produced from the tree as it stands **will not be comparable**
-> to the table in the paper. The local evaluation runner has now been exercised against CARLA
-> 0.9.15 on one RTX 3090, and a measured nine-route PDM-Lite acceptance golden ships. The SLURM
-> backend is now validated on a real scheduler at two-way concurrency (one full route category,
-> seed 42), where concurrent jobs ran on distinct physical GPUs (one GPU per job). That does
-> **not** validate the full 475-route scale, and local multi-GPU mapping is unproven.
->
-> A `v0.9.0` tag, a Zenodo DOI, and a citable record arrive when the paper goes to arXiv.
+**A closed-loop CARLA benchmark that tests how end-to-end driving models react to objects they
+have never seen, and separates *visual* shift (a new look) from *geometric* shift (a new shape
+or size).**
 
-**A closed-loop CARLA benchmark that separates *visual* from *geometric* out-of-distribution
-shift for end-to-end driving policies.**
+> **⚠️ Pre-release.** The paper is not posted yet, and this repository has no tag and no DOI.
+> Please do not cite it or report numbers from it yet. A `v0.9.0` tag and a Zenodo DOI will
+> follow when the paper goes to arXiv.
 
-Most robustness benchmarks for driving perturb appearance — weather, lighting, texture, noise.
-This one holds the scenario fixed and swaps the *object* the ego has to react to, along two
-independent axes:
+## Highlights
+
+- **Same scenario, different object.** Every route exists at three levels with identical
+  waypoints, weather, traffic and triggers. Only the object the ego vehicle must react to
+  changes, so any score difference comes from the object.
+- **475 routes** in three categories (pedestrian, static obstacle, vehicle), with results for
+  **17 published end-to-end models** over three seeds.
+- **Texture-robust, geometry-fragile.** A new shape costs about **2.5×** as much as a new look
+  (mean driving-score drop 12.8 vs 5.0). The geometric drop is significant for all 17 models,
+  while 9 of 17 are robust to the visual one.
 
 | Level | What changes | Example |
 |---|---|---|
-| `base` | nothing — the reference prop, a native CARLA asset | a standard adult pedestrian |
-| `visual_shift` | novel **appearance**, in-distribution **shape** | an astronaut-suited pedestrian |
-| `geometric_shift` | novel **shape / size**, whatever the appearance | a boar; a delivery robot |
+| `base` | nothing: a native CARLA object | a standard adult pedestrian |
+| `visual_shift` | new **appearance**, familiar **shape** | an astronaut-suited pedestrian |
+| `geometric_shift` | new **shape or size** | a boar; a delivery robot |
 
-Every route exists at all three levels with the same waypoints, weather, traffic and trigger
-geometry, so a score difference is attributable to the prop and nothing else. 475 routes across
-three interaction categories, evaluated on 17 published end-to-end models.
+## Contents
 
-The headline result is in the working title: **texture-robust, geometry-fragile.** Geometric
-shift costs roughly **2.5×** what visual shift costs (mean driving-score drop 12.8 vs 5.0); the
-geometric regression is statistically significant for **all 17** models, while **9 of 17** are
-statistically robust to the visual shift, and geometric loss is the deeper of the two in
-**45 of 51** (model, category) cells (paired Wilcoxon, p < 10⁻⁷). These are the 3-seed
-average-per-route figures (seeds 42/43/44).
+- [Installation](#installation)
+- [Evaluate your agent](#evaluate-your-agent)
+- [Reproduce the paper's numbers](#reproduce-the-papers-numbers)
+- [What v0.9 includes](#what-v09-includes)
+- [Protocol](#protocol)
+- [Documentation](#documentation)
+- [License and citation](#license-and-citation)
 
----
+## Installation
 
-## Version stamp
-
-> **This is v0.9.0, and it corresponds to arXiv v1 of the paper.**
->
-> v1.0 will correspond to arXiv v2. Between them, the OOD props that cannot be redistributed
-> ([`NOTICE`](NOTICE) §3) are being replaced and their routes re-run. **Scores from v0.9 and v1.0 are
-> not comparable on the affected props and must never be pooled into one table.** Every artifact
-> in this repository carries this stamp — see [`VERSION`](VERSION).
-
-| | v0.9 (this tag) | v1.0 (later) |
-|---|---|---|
-| Route definitions (475) | ✅ | ✅ (unchanged except replaced props) |
-| Baseline records, 17 models, seeds 42/43/44 | ✅ | re-run for replaced props |
-| Portable runner + SLURM example | ✅ | ✅ |
-| Import procedures (static / walker / vehicle) | ✅ | ✅ |
-| Overlay patches + `setup.sh` + CI | ✅ | ✅ |
-| Content pack | 6 of 18 OOD props | replacement props for the other 12 |
-| Acceptance harness (`tests/`) | ✅ assertions A1–A4 | ✅ A1–A4 |
-| Acceptance goldens | measured PDM-Lite bundle for the 9-route smoke split | regenerate for v1.0 |
-| Zenodo DOI | ✅ | ✅ |
-
-> **v0.9 ships `tests/goldens/pdmlite_seed42_v0.9.golden.json`.** It was measured on 2026-08-12
-> from three sequential, forced, one-worker PDM-Lite replicates with separate output roots on
-> CARLA 0.9.15. All nine routes scored 100.0 in all three replicates; maximum observed spread
-> was 0.0 DS and the policy floor gives a tolerance of **±1.0 DS**. The bundle retains every
-> replicate value and stamps the agent commit, content-pack digest, runner commit, Python, GPU,
-> and driver.
->
-> With that bundle, `tests/check_acceptance.py` runs A1–A4 and exits 0 only when all nine routes
-> pass. A1 directly caught CARLA silently substituting a Tesla when a shipped static asset was
-> removed during validation. Exit 3 remains meaningful when no compatible bundle is supplied:
-> it is **INCONCLUSIVE**, never a pass. Regeneration procedure:
-> [`tests/goldens/GENERATING.md`](tests/goldens/GENERATING.md).
->
-> `tests/goldens/EXAMPLE.golden.json` is a worked example of the file format, not a golden. It
-> carries an all-zero split hash so it can never validate, the harness skips it by filename, and
-> CI asserts both of those facts.
-
----
-
-## What this repository actually is
-
-**A thin overlay, not a fork.** It contains our code only. The simulation harness it modifies
-([`autonomousvision/carla_garage`](https://github.com/autonomousvision/carla_garage), which
-vendors Bench2Drive) is pinned by commit SHA and patched by [`setup.sh`](setup.sh).
-
-Two reasons. First, Bench2Drive's root licence is CC BY-NC-**ND** — NoDerivatives — and we
-modified its tree; shipping patches rather than a modified copy keeps us clear of that question
-entirely. Second, it makes our contribution legible: ~26 files, not 100k lines of someone
-else's code with ours buried inside.
-
-The known cost of an overlay is **patch rot** — upstream moves and a hunk stops applying. That
-is why [CI](.github/workflows/setup.yml) runs `setup.sh` against the pinned SHA on every push
-and weekly on a schedule. If that badge is red, do not trust a fresh install.
-
-### Pinned upstream
-
-| | |
-|---|---|
-| Repository | `https://github.com/autonomousvision/carla_garage.git` |
-| Branch | `leaderboard_2` |
-| Commit | `beb3433407f42c1adced312b877a61fe04f338ba` |
-| Commit date | 2025-12-28 |
-| **Pinned on** | **2026-08-03** |
-| Simulator | CARLA **0.9.15** (must match exactly — see [`assets/INSTALL.md`](assets/INSTALL.md)) |
-| Maps | CARLA **+ `AdditionalMaps_0.9.15`** — Town11/12/13 are not in the base build and **301 of 475 routes (63%)** are set in them. The golden bundle is Town02/03/04 and cannot detect the omission |
-
-Bench2Drive is vendored *inside* carla_garage upstream-side; it is not a submodule, so there is
-exactly one repository to clone. Full detail in [`patches/UPSTREAM.txt`](patches/UPSTREAM.txt).
-
-> **The pin is deliberately not upstream's current tip.** Upstream has since merged a
-> numpy ≥ 1.24 compatibility fix. Our patches apply cleanly to that newer commit too — the two
-> change sets are file-disjoint — but we pin the tree the published records were produced
-> against. (That fix touches Bench2Drive's own PDM-Lite variant under
-> `Bench2Drive/leaderboard/team_code/`, not the top-level `team_code/` PDM-Lite that generates
-> the acceptance golden.)
->
-> **Practical consequence:** at this pin, Bench2Drive still uses numpy aliases that numpy 1.24
-> removed, while upstream's `scipy==1.14.1` needs numpy ≥ 1.23.5. **Use `numpy==1.23.5`**, the
-> one release that satisfies both. On Python 3.10, install the evaluation environment with
->
-> ```bash
-> pip install -r env/requirements-pdmlite.txt
-> ```
->
-> which is upstream's `team_code/requirements.txt` at the pin with only the numpy line changed
-> (upstream pins `numpy==1.26.4` exactly, so a `-c` constraints file cannot override it).
-> On a minimal or headless Ubuntu, its `opencv-python` also needs
-> `sudo apt-get install libgl1 libglib2.0-0`; without them `import cv2` fails with
-> `libGL.so.1: cannot open shared object file`.
-> `setup.sh --verify-only` checks that the copy has not drifted. Alternatively advance the pin
-> yourself and accept that your run is no longer bit-identical to our baselines. The reasoning
-> and the verification are recorded in [`patches/UPSTREAM.txt`](patches/UPSTREAM.txt).
-
-### What CI actually checks — and what it cannot
-
-Every push runs, as hard failures: `setup.sh` against the pinned SHA and the reverse-apply proof;
-the route freeze validator (475 files, every sha256 against `MANIFEST.tsv`); the reconciliation
-proving the published records cover exactly those 475 once per model; the acceptance harness's
-own self-tests; the runner's and the release tooling's unit tests (against a stand-in evaluator,
-no CARLA); and the repository hygiene scanners. A tag build additionally runs
-[`tools/check_release_ready.py`](tools/check_release_ready.py) as a **blocking** gate — one
-outstanding item and the tag fails.
-
-Two checks are outside a hosted runner's reach, and are reported as *not attempted* rather than
-quietly omitted:
-
-- **Replaying the paper's statistics pipeline** (checks 1/3 and 3/3 of
-  [`records/verify.sh`](records/verify.sh)) needs the paper repository, private until arXiv. The
-  maintainer runs it before tagging.
-- **The acceptance assertions A1–A4** need a GPU, CARLA 0.9.15 and the installed content pack.
-  CI runs the harness's self-tests, which proves the harness still detects a missing asset — not
-  that *your* install has one.
-
----
-
-## Quick start
+This repository is a small overlay on
+[carla_garage](https://github.com/autonomousvision/carla_garage), which includes Bench2Drive.
+`setup.sh` fetches the pinned upstream commit and applies our patches.
 
 ```bash
-git clone https://github.com/farrosalferro/OODPerceptionBench.git   # default branch: master
+git clone https://github.com/farrosalferro/OODPerceptionBench.git
 cd OODPerceptionBench
-
-# 1. Fetch the pinned upstream and apply our patches. Fails loudly on any
-#    rejected hunk; safe to re-run (idempotent).
 ./setup.sh --upstream-dir ./third_party/carla_garage
+```
 
-# 2. Install CARLA 0.9.15 yourself, THEN AdditionalMaps_0.9.15 (Town11/12/13 are
-#    not in the base build and 63% of routes need them), then the content pack:
-#    see assets/INSTALL.md  <-- do not skip, see "Silent failure" below
+Then:
 
-# 3. Build the Python 3.10 environment your agent runs in: the pinned PDM-Lite one,
-#    plus your agent's own packages. See runner/README.md, Quickstart step 3.
-pip install -r env/requirements-pdmlite.txt    # inside that new environment
+1. Install **CARLA 0.9.15** and **AdditionalMaps_0.9.15**. 63% of the routes use Town11/12/13,
+   which are only in the additional maps.
+2. Install the content pack with the new objects: [`assets/INSTALL.md`](assets/INSTALL.md).
+3. Create a Python 3.10 environment for your agent:
+   `pip install -r env/requirements-pdmlite.txt`, plus your agent's own packages.
 
-# 4. Describe your machine: copy the template and replace every <placeholder>
-#    (CARLA, the patched checkout, your agent, that environment's python, an
-#    output folder). Reading YAML needs PyYAML in the python that runs the runner.
-cp config/example.yaml config/my_machine.yaml
+> **Check your install once.** If the content pack is missing, CARLA raises no error: the object
+> just does not appear, and the route still gets a normal-looking score. Run the acceptance test
+> in [`tests/`](tests/) before you trust any number.
 
-# 5. Check the config without starting CARLA, then run. Every path comes from
-#    your config file; there are no built-in defaults.
+Full walkthrough and notes: [`docs/DETAILS.md`](docs/DETAILS.md).
+
+## Evaluate your agent
+
+Agents use the standard CARLA Leaderboard 2.0 interface, the same as Bench2Drive and
+carla_garage: an `AutonomousAgent` subclass with `setup()`, `sensors()` and `run_step()`, plus a
+module-level `get_entry_point()`.
+
+```bash
+cp config/example.yaml config/my_machine.yaml   # fill in every <placeholder>
 python runner/run_benchmark.py --config config/my_machine.yaml --dry-run
 python runner/run_benchmark.py --config config/my_machine.yaml \
                                --agent  /path/to/your_agent.py \
                                --routes routes/ --out results/
 ```
 
-`setup.sh` does **not** install CARLA, create a conda environment, or download model weights.
+Tested on a single GPU and on SLURM at small scale. Several GPUs on one machine are not yet
+validated. Options and status: [`runner/README.md`](runner/README.md).
 
-To run the repository's own checks (no CARLA, no GPU), use a separate Python 3.10 environment
-with the pinned test and records-tooling dependencies:
+## Reproduce the paper's numbers
 
-```bash
-python3 -m venv .venv && . .venv/bin/activate
-pip install -r requirements-test.txt
-python3 tests/selftest.py                       # acceptance-harness self-tests
-python3 -m pytest -q runner/tests tools/tests   # runner and release-tooling tests
+No GPU or CARLA needed. [`records/`](records/) holds the per-route results of all 17 models and
+the PDM-Lite expert, for seeds 42, 43 and 44:
+
+```python
+from records.load import load_records
+df = load_records()
 ```
 
-### Silent failure — read this before you trust a number
+Column definitions and checks: [`records/README.md`](records/README.md).
 
-If the content pack is not installed correctly, `try_spawn_actor('static.prop.roadclosedsign')`
-**does not raise**. The prop is simply absent, the ego drives an empty road, and the route
-completes with a perfectly plausible driving score. Nothing in the logs says anything is wrong.
+## What v0.9 includes
 
-This is the single most dangerous failure mode in the benchmark, and it is why
-[`tests/`](tests/) exists: the acceptance test queries the live world for the spawned actor's
-`type_id` and compares it against the route XML. **Run it once after install.** A benchmark that
-silently measures nothing is worse than one that crashes.
+Twelve of the 18 new objects cannot be redistributed for licensing reasons
+([`NOTICE`](NOTICE)). So a fresh install can run 237 of the 475 routes:
 
----
+| Category | Runnable routes | Total |
+|---|---:|---:|
+| Pedestrian | 126 | 162 |
+| Static | 30 | 70 |
+| Vehicle | 81 (base level only) | 243 |
+| **Total** | **237** | **475** |
 
-## What you can actually run at v0.9 — the honest table
+v0.9 matches arXiv v1 of the paper. v1.0 will match arXiv v2 and replace the missing objects.
+**Never mix v0.9 and v1.0 scores in one table.**
 
-Twelve of the eighteen OOD props are **not redistributable** (see
-[Licensing](#licensing-and-the-twelve-missing-props)). They are not in this repository in any
-form. So a fresh install can run this much:
+| | v0.9 (this version) | v1.0 (later) |
+|---|---|---|
+| Route definitions | 475 | 475 (only replaced objects change) |
+| Baseline records | 17 models, seeds 42/43/44 | re-run for replaced objects |
+| Content pack | 6 of 18 new objects | replacements for the other 12 |
+| Acceptance goldens | measured PDM-Lite bundle for the 9-route smoke split | regenerate for v1.0 |
 
-| Category | Routes runnable | Total | Usable for the paired comparison? |
-|---|---:|---:|---|
-| **Pedestrian** | **126** | 162 | **Yes** — 2 of 3 props at each level; reduced statistical power |
-| **Static** | **30** | 70 | Partly — geometric 2 of 3, **visual 0 of 3 → no visual comparison** |
-| **Vehicle** | **81** | 243 | **No** — base level only |
-| **Total** | **237** | **475** | |
+## Protocol
 
-All **145 base-level route files** run without any content pack at all, because every reference
-prop is a native CARLA asset. (Those 145 files cover the **55 distinct base routes** — 27
-vehicle, 18 pedestrian, 10 static — at one file per reference prop.) The content pack adds the
-other 92: 18 each for `astronaut`, `firefighter`, `boar` and `deliveryrobot`, 10 each for
-`concreteroadbarrier` and `roadclosedbarricade`.
+- Use seeds **42, 43 and 44** and report the average per route.
+- Run the full route set. There is no reportable smaller split; the `smoke` split in
+  [`tests/`](tests/) only checks an install.
+- State which routes you ran. Scores over different route subsets are not comparable.
+- Five routes are left out on purpose: [`routes/EXCLUSIONS.md`](routes/EXCLUSIONS.md).
 
-Concretely, at v0.9 you can reproduce the paper's central *visual-vs-geometric* contrast on the
-pedestrian category, you can measure geometric shift but not visual shift on static, and on
-vehicle you can only establish a base-level reference. The full result table is reproducible
-without any of this — from the published records, no GPU required (Tier A below).
+The statistical tests are in [`docs/DETAILS.md`](docs/DETAILS.md#protocol--do-not-vary-these-if-you-want-comparable-numbers).
 
-### Support tiers
+## Documentation
 
-| Tier | You want to… | Supported? | Needs |
-|---|---|---|---|
-| **A** | verify the paper's numbers | **Yes** | nothing but this repo — [`records/`](records/) + [`tools/`](tools/), no GPU, no CARLA |
-| **B** | evaluate **your own** model | **Yes** | CARLA 0.9.15 + content pack + [`runner/`](runner/); route coverage per the table above |
-| **C** | re-run our 17 baselines | **Deferred** to `contrib/` | 17 third-party model environments; that is where all the licence exposure and bit-rot lives |
+| Topic | Where |
+|---|---|
+| Version stamp, pinned upstream, CI, full install notes, licensing | [`docs/DETAILS.md`](docs/DETAILS.md) |
+| Runner and configuration | [`runner/README.md`](runner/README.md) |
+| Content pack | [`assets/INSTALL.md`](assets/INSTALL.md) |
+| Routes | [`routes/README.md`](routes/README.md) |
+| Baseline records | [`records/README.md`](records/README.md) |
+| Acceptance tests | [`tests/README.md`](tests/README.md) |
+| Building replacement objects | [`docs/README.md`](docs/README.md) |
 
-Tier C is not a promise we can keep across seventeen upstream repositories. We publish the
-records instead, which is what a reader actually needs.
+## License and citation
 
----
+Our code is MIT ([`LICENSE`](LICENSE)). Five shipped objects are CC BY 4.0 and one,
+`walker.pedestrian.firefighter`, is CC BY-NC 4.0 (non-commercial). See [`NOTICE`](NOTICE).
 
-## Repository layout
+Please cite the paper and this software ([`CITATION.cff`](CITATION.cff)), and also
+**Bench2Drive**, **CARLA** and, if you use PDM-Lite or TransFuser++, **carla_garage**. Full
+entries are in [`NOTICE`](NOTICE).
 
-```
-routes/       475 canonical route XMLs + MANIFEST.tsv + EXCLUSIONS.md + validator
-records/      per-route baseline records for 17 models + PDM-Lite, seeds 42/43/44 (CSV + typed loader)
-runner/       portable serial + local multi-GPU runner, and a de-hardcoded SLURM example
-config/       machine configuration; every path a user must supply lives here
-patches/      the overlay: our changes to the pinned upstream, one patch per file
-assets/       install/verify/attribution for the 6 redistributable OOD props
-              (the cooked binaries themselves are hosted separately — see assets/README.md)
-classifier/   the three notebooks implementing the visual/geometric admissibility rule
-docs/         asset-import procedures, asset traps, and the prop-replacement rule
-tests/        acceptance harness — proves the intended blueprint actually spawned
-tools/        CI checks and repository utilities
-setup.sh      clone pinned upstream, apply patches, verify
-```
-
-Each directory has its own `README.md` stating exactly what belongs there.
-
-> **The asset binaries are not in this repository.** The six cooked content directories are
-> ~167 MB packaged, which is past what a git repository should carry, so they are hosted
-> separately and `assets/` holds the installer, the checksums, the attributions and the
-> verifier. See [`assets/README.md`](assets/README.md) for the download location.
-
----
-
-## Protocol — do not vary these if you want comparable numbers
-
-- **Three seeds: 42, 43, 44.** The baseline records and the paper's headline are the 3-seed
-  average-per-route over these seeds. Reproduce with base `seed: 42` and `repetitions: 3` (the
-  runner mints 42/43/44). One scope note: only the privileged ceiling model (PDM-Lite) is
-  seed-42-only, by design. Driving Score and the OOD-collision (OOD-hit-rate) metric are full
-  3-seed (see [`records/SCHEMA.md`](records/SCHEMA.md)).
-- **Unit of aggregation** is the **(model, category) cell** — 17 × 3 = 51 cells.
-- **Within a cell**, pairs are formed on `(scenario, route, seed)`, prop variants are averaged
-  per side, and a paired Wilcoxon signed-rank test is run on reference-vs-visual and
-  reference-vs-geometric driving score, with a 95% bootstrap CI on the median Δ.
-- **Across cells**, a paired Wilcoxon over the 51 cells with paired Cohen's `d_z`.
-- **n = 55 base routes** (27 vehicle + 18 pedestrian + 10 static).
-
-**There is no reportable reduced split, by design.** The headline claims are *counts of models
-crossing a significance threshold* over n = 55. Subsampling changes those counts, so a "mini"
-split would contradict the paper rather than approximate it. The `smoke` split that ships in
-[`tests/`](tests/) exists to prove an install is sound — and, from v1.0, to carry the golden
-expected outputs — not for its routes. **Never report a score from it**; every artifact it
-produces is stamped `"reportable": false`.
-
-Five routes are deliberately absent because one geometric prop cannot spawn on narrow
-Town12/13 streets. They are excluded across *all three levels* so that pairing stays intact.
-See [`routes/EXCLUSIONS.md`](routes/EXCLUSIONS.md) — these are not gaps to be fixed.
-
----
-
-## Bringing your own agent (Tier B)
-
-The runner drives the standard CARLA Leaderboard 2.0 agent interface, the same one Bench2Drive
-and carla_garage use. In short:
-
-1. Write a class deriving from the leaderboard `AutonomousAgent` with `setup()`, `sensors()`
-   and `run_step()`, and a module-level `get_entry_point()` returning its name.
-2. Point `--agent` at that file and set the environment-activation command in your config, so
-   the runner can launch your agent in its own environment.
-3. Run the acceptance test first (`tests/`) — it verifies your install spawns the right
-   blueprints before you spend GPU-hours on a wrong-but-plausible sweep. The shipped v0.9
-   PDM-Lite golden enables A4 for a PDM-Lite smoke run; a run from another agent is not made
-   comparable merely by sharing the route paths. If no compatible golden is available, the
-   harness must end at exit **3 (INCONCLUSIVE)**. A failure of A1 (`blueprint_spawned`) still
-   exits 1 and still means stop.
-4. Report which route subset you ran. With the v0.9 content pack that is 237 of 475, and a
-   number computed over a different subset is not comparable to ours.
-
-Full interface details and the config schema: [`runner/README.md`](runner/README.md).
-
----
-
-## Licensing, and the twelve missing props
-
-Our code is **MIT** ([`LICENSE`](LICENSE)). The assets are not uniform — read
-[`NOTICE`](NOTICE).
-
-**Six OOD props ship**, five under CC BY 4.0 and **one, `walker.pedestrian.firefighter`, under
-CC BY-NC 4.0 — NonCommercial.** The content pack is therefore mixed-licence with a
-non-commercial component. If your use is commercial you must exclude that asset and the routes
-that reference it. (Bench2Drive is itself CC BY-NC-ND, so a non-commercial term is consistent
-with this benchmark's lineage — but it has to be stated, not buried.)
-
-**Twelve OOD props do not ship.** Ten are paid marketplace assets whose licences prohibit
-standalone redistribution *and*, separately, prohibit AI use — so seller permission alone could
-not have fixed it. Two are third-party game IP that was uploaded to a free model site under a
-licence the uploader had no right to grant; nobody can redistribute those.
-
-**We deliberately do not tell you where to buy them.** Ten carry an explicit AI-use
-prohibition, and pointing users at those listings so they can run an AI benchmark would walk
-them into the same restriction that closed the path for us.
-
-### Reproducing the missing props yourself
-
-The benchmark's claims are per-*class*, not per-prop: what matters is that a prop falls in the
-visual or the geometric class, not that it is one specific mesh. So a substitute works, and we
-publish everything needed to make one:
-
-- **Dimensional specification.** The paper's appendix gives every prop's bounding box and its
-  assigned shift class.
-- **The classification rule** that decides whether a candidate lands in the visual or the
-  geometric class — a z-score test against the reference-prop cluster plus a relative-size
-  test — with the reference cluster statistics, in
-  [`docs/replacing-props.md`](docs/replacing-props.md).
-- **Import procedures.** [`docs/`](docs/) documents the full path from a raw mesh to a
-  registered CARLA blueprint — [static](docs/import_procedure_static.md),
-  [walker](docs/import_procedure_walker.md) and [vehicle](docs/import_procedure_vehicle.md) —
-  with the stage scripts in [`docs/stages/`](docs/stages/) parameterised (no hardcoded paths).
-  **The vehicle procedure ships as a DRAFT at v0.9**; static and walker are validated.
-- **The classifier itself.** [`classifier/`](classifier/) holds the three notebooks that
-  implement the admissibility rule, so a candidate can be checked mechanically rather than by
-  eye.
-- **Validation.** [`tests/`](tests/) proves your substitute actually spawns.
-
-A substituted prop makes your run **v1.0-incomparable to our v0.9 records on that prop**. Say so
-when you report.
-
----
-
-## Citing
-
-Please cite both the paper and this software — see [`CITATION.cff`](CITATION.cff). If you use
-the benchmark, please also cite **Bench2Drive** and **CARLA**; if you use the PDM-Lite reference
-agent or the TransFuser++ baseline, also cite **carla_garage**. Full entries are in
-[`NOTICE`](NOTICE).
-
-## Contributing
-
-Issues and PRs welcome, especially patch-rot reports (a red CI badge) and replacement-prop
-candidates that satisfy the dimensional rule. Whether we accept *submitted result rows* into
-[`records/`](records/) is deferred to v1.0 — until then, records are our baselines only, so that
-every number in that directory has one known provenance.
+Issues and pull requests are welcome.

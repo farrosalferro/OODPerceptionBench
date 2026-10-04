@@ -46,7 +46,7 @@ python run_benchmark.py --config my_config.yaml
    ```
 
    It brings the `carla==0.9.15` wheel, `py_trees`, and `numpy==1.23.5`, the one numpy that both
-   this Bench2Drive pin and `scipy` accept (the root README's "Pinned upstream" section says why).
+   this Bench2Drive pin and `scipy` accept (`docs/DETAILS.md`, "Pinned upstream", says why).
    Do **not** use `Bench2Drive/leaderboard/requirements.txt` or
    `Bench2Drive/scenario_runner/requirements.txt` on Python 3.10: they pin
    `opencv-python==4.2.0.32` and `numpy==1.18.4`, which have no Python 3.10 wheels. CARLA's
