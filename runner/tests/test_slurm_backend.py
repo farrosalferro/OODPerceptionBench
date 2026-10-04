@@ -1064,11 +1064,12 @@ class TestDurableAside(SlurmBackendBase):
                          sorted([self.OLD, b'{"second": true}']))
 
     def test_no_aside_file_when_there_was_no_checkpoint(self):
+        """A marker holds the route instead (``TestUnsettledJobMarker``)."""
         self.replay("sbatch", "sbatch_parsable")
         cfg, backend, task = self.backend_and_task(slurm={"submit_interval_s": 0})
         backend.submit(task, worker=0)
         self.assertEqual(self.asides(task), [])
-        self.assertEqual(self.ledger(cfg), [])
+        self.assertEqual([line["event"] for line in self.ledger(cfg)], ["marked"])
 
 
 class TestSubmissionIdentity(SlurmBackendBase):
@@ -1429,9 +1430,10 @@ class TestSqueueErrors(SlurmBackendBase):
 
 
 class TestUnsettledJobMarker(SlurmBackendBase):
-    """A job that may still write a route's checkpoint, left unsettled with no old checkpoint
-    to set aside, leaves a ``<checkpoint>.unsettled-<ns>`` file naming it. The next run refuses
-    to start until the operator has stopped the job and deleted the file."""
+    """A route with no old checkpoint to set aside is held by a ``<checkpoint>.unsettled-<ns>``
+    file from before sbatch until its job is settled. A job left unsettled keeps it, rewritten
+    to name the job; the next run refuses to start until the operator has stopped the job and
+    deleted the file."""
 
     def markers(self, task):
         return sorted(task.result_path.parent.glob(task.result_path.name + ".unsettled-*"))
@@ -1507,6 +1509,135 @@ class TestUnsettledJobMarker(SlurmBackendBase):
             backend.shutdown()
 
         [marker] = self.markers(task)
+        self.assert_next_run_refuses(cfg, marker)
+
+    def sbatch_seeing_markers(self, task, answer):
+        """An sbatch that records which marker files existed when it ran, then replays
+        ``answer`` (a captured case)."""
+        seen = self.site.root / "sbatch.saw"
+        captured = slurm_replay.case(answer)
+        pattern = task.result_path.name + ".unsettled-*"
+        self.tool("sbatch", f'''
+            import sys
+            from pathlib import Path
+            found = sorted(p.name for p in Path({str(task.result_path.parent)!r}).glob({pattern!r}))
+            Path({str(seen)!r}).write_text("\\n".join(found), encoding="utf-8")
+            sys.stdout.write({captured["stdout"]!r})
+            sys.stderr.write({captured["stderr"]!r})
+            sys.exit({captured["rc"]!r})
+        ''')
+        return seen
+
+    def test_a_first_submission_is_marked_before_sbatch(self):
+        """RED BEFORE THE FIX:
+
+            AssertionError: '' is not true : sbatch ran with nothing on disk to stop a second
+            run beside its job
+
+        With no earlier checkpoint there is nothing to set aside, so a marker stands in for
+        the aside file while the job is in flight. A run killed outright (no shutdown) then
+        still blocks the next start.
+        """
+        cfg, backend, task = self.backend_and_task(slurm={"submit_interval_s": 0})
+        seen = self.sbatch_seeing_markers(task, "sbatch_parsable")
+        attempt = backend.submit(task, worker=0)
+
+        self.assertEqual(attempt.handle, "141229")
+        self.assertTrue(seen.read_text(),
+                        "sbatch ran with nothing on disk to stop a second run beside its job")
+        [marker] = self.markers(task)
+        self.assertEqual(seen.read_text(), marker.name)
+        note = json.loads(marker.read_text(encoding="utf-8"))
+        wrapper = task.job_script.with_suffix(".sbatch").read_text(encoding="utf-8")
+        self.assertIn(f"--comment={note['comment']}", wrapper)
+        self.assertEqual(note["job_name"], "oodbench-route_1_a")
+        self.assert_next_run_refuses(cfg, marker)
+
+    def test_settling_the_job_removes_its_marker(self):
+        """RED BEFORE THE FIX:
+
+            ValueError: not enough values to unpack (expected 1, got 0)
+        """
+        for path in ("poll", "kill", "shutdown"):
+            with self.subTest(path=path):
+                self.replay("sbatch", "sbatch_parsable")
+                self.replay("squeue", "squeue_gone_recent")
+                self.replay("sacct", "sacct_completed" if path == "poll"
+                            else "sacct_cancelled_running")
+                self.replay("scancel", "scancel_ok")
+                cfg, backend, task = self.backend_and_task(slurm={"submit_interval_s": 0})
+                attempt = backend.submit(task, worker=0)
+                [marker] = self.markers(task)
+                with unittest.mock.patch("oodbench.backends.slurm._CANCEL_POLL_S", 0):
+                    if path == "poll":
+                        self.assertTrue(backend.poll(attempt))
+                    elif path == "kill":
+                        backend.kill(attempt, "test cancellation")
+                    else:
+                        backend.shutdown()
+                self.assertEqual(self.markers(task), [])
+                self.tools_present()
+                SlurmBackend(cfg, self.log).preflight()
+
+    def test_a_refused_first_submission_leaves_no_marker(self):
+        """RED BEFORE THE FIX:
+
+            AssertionError: '' is not true : the marker was not written before sbatch
+        """
+        cfg, backend, task = self.backend_and_task(slurm={"submit_interval_s": 0})
+        seen = self.sbatch_seeing_markers(task, "sbatch_invalid_partition")
+        attempt = backend.submit(task, worker=0)
+
+        self.assertIs(attempt.outcome, AttemptOutcome.LAUNCH_FAILED)
+        self.assertTrue(seen.read_text(), "the marker was not written before sbatch")
+        self.assertEqual(self.markers(task), [])
+        self.tools_present()
+        SlurmBackend(cfg, self.log).preflight()
+
+    def test_a_full_disk_while_marking_aborts_before_sbatch(self):
+        """RED BEFORE THE FIX:
+
+            AssertionError: Lists differ: [['--parsable', ...]] != [] : sbatch ran with no
+            marker on disk
+
+        The ``ENOSPC`` is synthetic (injected at ``os.write``); no scheduler output is faked.
+        """
+        self.replay("sbatch", "sbatch_parsable")
+        cfg, backend, task = self.backend_and_task(slurm={"submit_interval_s": 0})
+        with unittest.mock.patch("os.write",
+                                 side_effect=OSError(errno.ENOSPC, "No space left on device")):
+            attempt = backend.submit(task, worker=0)
+
+        self.assertEqual(self.calls("sbatch"), [], "sbatch ran with no marker on disk")
+        self.assertIs(attempt.outcome, AttemptOutcome.LAUNCH_FAILED)
+        self.assertIn("No space left on device", attempt.detail)
+        self.assertEqual(self.markers(task), [], "a partial marker was left behind")
+
+    def test_a_failed_note_update_keeps_the_first_marker(self):
+        """RED BEFORE THE FIX:
+
+            ValueError: not enough values to unpack (expected 1, got 0)
+
+        The job is unidentified and the note naming the reason cannot be written (a
+        synthetic ``ENOSPC`` on every write after submission). The marker written before
+        sbatch must still stop the next run.
+        """
+        cfg, backend, task = self.backend_and_task(slurm={"submit_interval_s": 0})
+        self.replay("sbatch", "sbatch_without_parsable")
+        self.replay("squeue", "squeue_name_comment_zero")
+        real_write = os.write
+
+        def full_after_sbatch(fd, data):
+            if self.calls("sbatch"):
+                raise OSError(errno.ENOSPC, "No space left on device")
+            return real_write(fd, data)
+
+        with unittest.mock.patch("os.write", full_after_sbatch), \
+                self.assertRaises(SlurmBackendError) as raised:
+            backend.submit(task, worker=0)
+
+        [marker] = self.markers(task)
+        self.assertIn(str(marker), str(raised.exception))
         self.assert_next_run_refuses(cfg, marker)
 
     def test_a_marker_look_alike_does_not_refuse(self):

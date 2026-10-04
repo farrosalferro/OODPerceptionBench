@@ -7,7 +7,7 @@
 
 A production runner for this benchmark includes scale and multi-GPU evidence that this release
 does not yet have. What exists now is the part that is expensive to change later — the design
-decisions in `DESIGN.md` — plus a working local implementation whose *logic* is covered by 362
+decisions in `DESIGN.md` — plus a working local implementation whose *logic* is covered by 367
 automated tests and whose *simulator interaction* was exercised against CARLA 0.9.15 on
 2026-08-11 and 2026-08-12. Single-route execution, two-worker one-GPU stacking, exact port
 isolation, real Ctrl-C/reaping/resume, failure accounting, and a nine-route PDM-Lite golden were
@@ -252,7 +252,7 @@ All of these run with no GPU, no CARLA, no network and no third-party packages (
 shipped-template tests need PyYAML and are skipped without it):
 
 ```
-python -m unittest discover -s tests -t .    ->  362 tests, OK, ~101 s
+python -m unittest discover -s tests -t .    ->  367 tests, OK, ~101 s
 ```
 
 | Area | Covered by | Notes |
@@ -366,23 +366,26 @@ observed;
 >   `runtime unknown (never observed RUNNING)`.
 > - **A route's previous checkpoint survives a job the runner cannot identify.** Before
 >   submitting, the runner copies the route's existing checkpoint to `<checkpoint>.aside-<ns>`,
->   synced to disk, and logs each step to `_runner/aside.jsonl`. The copy is deleted once the job
->   is confirmed ended, and put back if the submission is refused. If `sbatch` accepts a job but
+>   synced to disk, and logs each step to `_runner/aside.jsonl`. A route with no checkpoint gets
+>   a small `<checkpoint>.unsettled-<ns>` file naming the job's name and tag instead, so every job
+>   in flight has a file on disk that stops a second run from starting beside it, even if the
+>   runner is killed outright. The file is deleted once the job is confirmed ended; a refused
+>   submission puts the checkpoint back or deletes the marker. If it cannot be written (a full
+>   disk), the route is not submitted. If `sbatch` accepts a job but
 >   prints no job id, the runner looks among your queued jobs for one with the route's job name
 >   **and** this submission's own tag, which each job carries as `--comment=oodbench:<32 hex>`
 >   (a name, or a name and script, can match an older job of the same route); exactly one match
 >   is supervised as usual. With no match, several, or a job whose `scancel` is not confirmed
->   within 60 s, the run stops with an error that names the job(s) and the set-aside file, and
->   leaves the file in place. If the route had no checkpoint to set aside, it leaves a small
->   `<checkpoint>.unsettled-<ns>` file naming the job instead.
+>   within 60 s, the run stops with an error that names the job(s) and the file, and leaves the
+>   file in place (an `.unsettled-` file is rewritten to say why, and with the job id if known).
 >
 > **Recovering a set-aside checkpoint.** While any `*.aside-*` or `*.unsettled-*` file remains
 > under the output root, a SLURM run refuses to start and lists each file with its checkpoint.
 > For each one:
 >
 > 1. Stop any job of the earlier run that is still queued or running
->    (`squeue -u $USER -o '%i %j %o'`, then `scancel <id>`), and confirm it has ended
->    (`sacct -j <id>`). An `.unsettled-` file names its job.
+>    (`squeue -u $USER -o '%i %j %k'`, then `scancel <id>`), and confirm it has ended
+>    (`sacct -j <id>`). An `.unsettled-` file names its job by id, or by job name and comment.
 > 2. For an `.aside-` file, either put the earlier result back
 >    (`mv <checkpoint>.aside-<ns> <checkpoint>`) or delete the file so the route runs again.
 >    Delete an `.unsettled-` file once its job has ended.

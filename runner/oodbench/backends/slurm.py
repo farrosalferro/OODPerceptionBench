@@ -74,7 +74,7 @@ _FAULT_STATES = frozenset({
 })
 
 # ``<checkpoint>.aside-<unix ns>`` (SlurmBackend._write_aside) and
-# ``<checkpoint>.unsettled-<unix ns>`` (SlurmBackend._leave_unsettled).
+# ``<checkpoint>.unsettled-<unix ns>`` (SlurmBackend._write_marker).
 _LEFTOVER_RE = re.compile(r"\A(?P<checkpoint>.+)\.(?P<kind>aside|unsettled)-\d+\Z")
 _LEFTOVERS_LISTED = 20
 
@@ -121,8 +121,9 @@ class SlurmBackend(Backend):
         self._started: set[str] = set()
         self._paused_at: Dict[str, float] = {}
         self._unknown_since: Dict[str, float] = {}
-        # Every supervised job's route, and the checkpoint set aside for it (None if none).
-        self._routes: Dict[str, Tuple[RouteTask, Optional[Path]]] = {}
+        # Every supervised job's route, and the file that holds the route on disk until the
+        # job is settled: its set-aside checkpoint, or a marker when there was none.
+        self._routes: Dict[str, Tuple[RouteTask, Path]] = {}
 
     def preflight(self) -> None:
         self._refuse_leftovers()
@@ -172,7 +173,7 @@ class SlurmBackend(Backend):
             counts.append(f"{kinds.count('aside')} set-aside checkpoint(s)")
         if "unsettled" in kinds:
             counts.append(f"{kinds.count('unsettled')} unsettled-job marker(s)")
-        find_jobs = f"squeue -u {_user() or '$USER'} -o '%i %j %o'; scancel <id>"
+        find_jobs = f"squeue -u {_user() or '$USER'} -o '%i %j %k'; scancel <id>"
         raise SlurmBackendError(
             f"{' and '.join(counts)} under {root} were left by an earlier run that stopped "
             "before settling those routes:\n" + "\n".join(listed) + "\n"
@@ -181,7 +182,7 @@ class SlurmBackend(Backend):
             "checkpoint, either put the earlier result back (mv <aside> <checkpoint>) or "
             "delete the file to rerun the route. If the checkpoint exists again, a job wrote "
             "it after the file was set aside: keep whichever you trust. Delete each "
-            ".unsettled- file once the job it names has ended. "
+            ".unsettled- file once the job it names (by id, or by name and comment) has ended. "
             f"{root / '_runner' / 'aside.jsonl'} records when and why each file was left."
         )
 
@@ -308,32 +309,41 @@ class SlurmBackend(Backend):
         # otherwise loses every route at its first write.
         task.mkdirs()
 
+        wrapper = task.job_script.with_suffix(".sbatch")
+        tag = _submission_tag()
+
         # Keep the old record: sbatch refusing a submission (full queue, QOS limit) is routine,
         # and must not destroy a valid result. See backends.base.take_checkpoint_aside. It is
         # kept on disk, synced, before the original goes: held only in memory, any exception
         # or crash before sbatch's answer was understood lost the route's only record.
+        # With no old record, a marker takes its place. Either way a file on disk stops the
+        # next run from starting beside this job until it is settled (``_refuse_leftovers``),
+        # even if this process dies without reaching shutdown.
+        what = "set the old checkpoint aside"
         try:
-            aside = self._write_aside(task)
+            hold = self._write_aside(task)
+            if hold is None:
+                what = "write the unsettled-job marker"
+                hold = self._write_marker(task, "marked", "submitted", job_name=_job_name(task),
+                                          comment=tag, script=str(wrapper))
         except OSError as exc:
             attempt.outcome = AttemptOutcome.LAUNCH_FAILED
-            attempt.detail = f"could not set the old checkpoint aside: {exc}"
+            attempt.detail = f"could not {what}: {exc}"
             attempt.finished_at = time.time()
             self.log.error("%s: %s; not submitting", task.key, attempt.detail)
             return attempt
         try:
             take_checkpoint_aside(task)
         except OSError as exc:
-            self._restore_aside(task, aside)
+            self._drop_hold(task, hold)
             attempt.outcome = AttemptOutcome.LAUNCH_FAILED
             attempt.detail = f"could not remove stale checkpoint: {exc}"
             attempt.finished_at = time.time()
             return attempt
 
-        wrapper = task.job_script.with_suffix(".sbatch")
         wrapper.parent.mkdir(parents=True, exist_ok=True)
         task.stdout_path.parent.mkdir(parents=True, exist_ok=True)
         body = self._job_body(task, worker)
-        tag = _submission_tag()
         wrapper.write_text(self._sbatch_header(task, tag) + body, encoding="utf-8")
         wrapper.chmod(0o750)
 
@@ -349,7 +359,7 @@ class SlurmBackend(Backend):
             out = subprocess.check_output(["sbatch", "--parsable", str(wrapper)], text=True,
                                           stderr=subprocess.PIPE).strip()
         except (subprocess.CalledProcessError, OSError) as exc:
-            self._restore_aside(task, aside)
+            self._drop_hold(task, hold)
             attempt.outcome = AttemptOutcome.LAUNCH_FAILED
             attempt.detail = f"sbatch failed: {exc}"
             attempt.finished_at = time.time()
@@ -363,7 +373,7 @@ class SlurmBackend(Backend):
             # checkpoint or returning an outcome that the runner may requeue.
             recovered = _JOBID_PREFIX_RE.match(out)
             if recovered is None:
-                return self._identify_by_tag(attempt, task, wrapper, aside, out, tag)
+                return self._identify_by_tag(attempt, task, wrapper, hold, out, tag)
             job_ref = recovered.group(0).strip()
             attempt.handle = job_ref
             self._submitted.append(job_ref)
@@ -374,13 +384,13 @@ class SlurmBackend(Backend):
             try:
                 self._cancel_and_wait(job_ref)
             except SlurmBackendError as exc:
-                # The job may still be writing the checkpoint, so the old one stays aside.
+                # The job may still be writing the checkpoint, so the route stays held.
                 # The job stays in ``_submitted``: shutdown tries the cancel again.
-                marker = self._leave_unsettled(task, aside, "cancel unconfirmed", job=job_ref)
+                hold = self._leave_unsettled(task, hold, "cancel unconfirmed", job=job_ref)
                 raise SlurmBackendError(
-                    f"{exc}. {_reclaim_steps(task, aside, marker, f'scancel {job_ref}')}"
+                    f"{exc}. {_reclaim_steps(task, hold, f'scancel {job_ref}')}"
                 ) from exc
-            self._restore_aside(task, aside)
+            self._drop_hold(task, hold)
             attempt.outcome = AttemptOutcome.LAUNCH_FAILED
             attempt.detail = (
                 f"sbatch returned malformed parsable output {out!r}; recovered and "
@@ -391,12 +401,12 @@ class SlurmBackend(Backend):
         job_ref = m.group(0).strip()
         attempt.handle = job_ref
         self._submitted.append(job_ref)
-        self._routes[job_ref] = (task, aside)
+        self._routes[job_ref] = (task, hold)
         self.log.info("submitted %s as SLURM job %s", task.key, job_ref)
         return attempt
 
     def _identify_by_tag(self, attempt: Attempt, task: RouteTask, wrapper: Path,
-                         aside: Optional[Path], out: str, tag: str) -> Attempt:
+                         hold: Path, out: str, tag: str) -> Attempt:
         """sbatch exited zero, so a job exists, but its reply named none. Find it.
 
         Name and script are not enough: an older job of the same route (an earlier retry or
@@ -412,7 +422,7 @@ class SlurmBackend(Backend):
             job_ref = found[0]
             attempt.handle = job_ref
             self._submitted.append(job_ref)
-            self._routes[job_ref] = (task, aside)
+            self._routes[job_ref] = (task, hold)
             self.log.warning(
                 "%s: sbatch reply %r carried no job id; identified SLURM job %s by its name and "
                 "submission tag", task.key, out, job_ref,
@@ -426,14 +436,14 @@ class SlurmBackend(Backend):
         else:
             lookup = (f"Jobs {', '.join(found)} of yours are all named {name} with the tag "
                       f"{tag}, so none can be told apart")
-        marker = self._leave_unsettled(task, aside, "unidentified job", job_name=name,
-                                       comment=tag, script=str(wrapper), reply=out)
+        hold = self._leave_unsettled(task, hold, "unidentified job", job_name=name,
+                                     comment=tag, script=str(wrapper), reply=out)
         find = f"squeue -u {_user() or '$USER'} --name {name} -o '%i %k'; scancel <id>"
         raise SlurmBackendError(
             "sbatch accepted a job but returned no recoverable job identity; "
             f"output was {out!r}. {lookup}. Refusing to restore the prior checkpoint or "
             "requeue while an unidentified scheduler job may still write it. "
-            + _reclaim_steps(task, aside, marker, find)
+            + _reclaim_steps(task, hold, find)
         )
 
     # -- the set-aside checkpoint -------------------------------------------------------
@@ -452,26 +462,44 @@ class SlurmBackend(Backend):
         self._aside_ledger(task, "set_aside", aside)
         return aside
 
-    def _leave_unsettled(self, task: RouteTask, aside: Optional[Path], reason: str,
-                         **info: object) -> Optional[Path]:
-        """This run gives up on a job that may still write ``task``'s checkpoint.
-
-        Leave a file that stops the next run from starting until the operator has looked
-        (see ``_refuse_leftovers``). The set-aside checkpoint is that file when there is one.
-        Otherwise a ``<checkpoint>.unsettled-<unix ns>`` note says which job; it is returned.
-        """
-        if aside is not None:
-            self._aside_ledger(task, "kept", aside, reason=reason, **info)
-            return None
+    def _write_marker(self, task: RouteTask, event: str, reason: str, **info: object) -> Path:
+        """Write ``<checkpoint>.unsettled-<unix ns>``, a synced note on the job that may write
+        ``task``'s checkpoint. Raises OSError with no partial file left."""
         marker = task.result_path.with_name(
             f"{task.result_path.name}.unsettled-{time.time_ns()}")
         note = {"checkpoint": str(task.result_path), "reason": reason, **info}
+        _write_synced(marker, (json.dumps(note, sort_keys=True) + "\n").encode("utf-8"))
+        self._aside_ledger(task, event, marker, reason=reason, **info)
+        return marker
+
+    def _leave_unsettled(self, task: RouteTask, hold: Path, reason: str,
+                         **info: object) -> Path:
+        """This run gives up on a job that may still write ``task``'s checkpoint.
+
+        The file holding the route stays, so the next run refuses to start until the operator
+        has looked (see ``_refuse_leftovers``). A marker is rewritten to say why and which job;
+        its replacement is on disk before the first goes, so the route is never left without
+        one. Returns the file that now holds the route.
+        """
+        if _hold_kind(hold) == "aside":
+            self._aside_ledger(task, "kept", hold, reason=reason, **info)
+            return hold
         try:
-            _write_synced(marker, (json.dumps(note, sort_keys=True) + "\n").encode("utf-8"))
+            earlier = json.loads(hold.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            earlier = {}
+        known = {k: v for k, v in earlier.items() if k not in ("checkpoint", "reason")}
+        try:
+            marker = self._write_marker(task, "kept", reason, **{**known, **info})
         except OSError as exc:
-            self.log.error("%s: could not write %s: %s", task.key, marker, exc)
-            return None
-        self._aside_ledger(task, "unsettled", marker, reason=reason, **info)
+            self.log.error("%s: could not update %s (%s); it still stops the next run",
+                           task.key, hold, exc)
+            self._aside_ledger(task, "kept", hold, reason=reason, **info)
+            return hold
+        try:
+            hold.unlink()
+        except OSError as exc:  # two markers for one route still stop the next run
+            self.log.warning("%s: could not delete %s: %s", task.key, hold, exc)
         return marker
 
     def _abandon(self, job_ref: str, why: str, reason: str) -> SlurmBackendError:
@@ -483,36 +511,38 @@ class SlurmBackend(Backend):
         entry = self._routes.pop(job_ref, None)
         if entry is None:
             return SlurmBackendError(why)
-        task, aside = entry
-        marker = self._leave_unsettled(task, aside, reason, job=job_ref)
-        return SlurmBackendError(
-            f"{why}. {_reclaim_steps(task, aside, marker, f'scancel {job_ref}')}")
+        task, hold = entry
+        hold = self._leave_unsettled(task, hold, reason, job=job_ref)
+        return SlurmBackendError(f"{why}. {_reclaim_steps(task, hold, f'scancel {job_ref}')}")
 
-    def _restore_aside(self, task: RouteTask, aside: Optional[Path]) -> None:
-        """Put the set-aside checkpoint back in place; the rename also removes the file."""
-        if aside is None:
+    def _drop_hold(self, task: RouteTask, hold: Path) -> None:
+        """No job was left running: put the set-aside checkpoint back, or delete the marker."""
+        try:
+            if _hold_kind(hold) == "aside":
+                os.replace(hold, task.result_path)  # the rename also removes the file
+            else:
+                hold.unlink()
+            _fsync_dir(hold.parent)
+        except OSError as exc:  # the file survives; startup refuses until reclaimed
+            self.log.error("%s: could not %s %s: %s", task.key,
+                           "restore" if _hold_kind(hold) == "aside" else "delete", hold, exc)
+            return
+        self._aside_ledger(task, "restored" if _hold_kind(hold) == "aside" else "discarded",
+                           hold)
+
+    def _release(self, job_ref: str) -> None:
+        """The job is over: the file that held its route is no longer needed."""
+        task, hold = self._routes.pop(job_ref, (None, None))
+        if hold is None:
             return
         try:
-            os.replace(aside, task.result_path)
-            _fsync_dir(aside.parent)
-        except OSError as exc:  # the aside file survives; startup refuses until reclaimed
-            self.log.error("%s: could not restore %s: %s", task.key, aside, exc)
-            return
-        self._aside_ledger(task, "restored", aside)
-
-    def _discard_aside(self, job_ref: str) -> None:
-        """The job is over: the checkpoint it replaced is no longer needed."""
-        task, aside = self._routes.pop(job_ref, (None, None))
-        if aside is None:
-            return
-        try:
-            aside.unlink()
+            hold.unlink()
         except FileNotFoundError:
             pass
         except OSError as exc:
-            self.log.warning("%s: could not delete %s: %s", task.key, aside, exc)
+            self.log.warning("%s: could not delete %s: %s", task.key, hold, exc)
             return
-        self._aside_ledger(task, "discarded", aside, job=job_ref)
+        self._aside_ledger(task, "discarded", hold, job=job_ref)
 
     def _aside_ledger(self, task: RouteTask, event: str, aside: Path, **extra) -> None:
         """Append one synced line to ``_runner/aside.jsonl``: what happened to which file."""
@@ -845,7 +875,7 @@ class SlurmBackend(Backend):
             time.sleep(_CANCEL_POLL_S)
 
     def _forget(self, job_ref: str) -> None:
-        self._discard_aside(job_ref)
+        self._release(job_ref)
         self._unknown_since.pop(job_ref, None)
         self._running.discard(job_ref)
         self._started.discard(job_ref)
@@ -897,18 +927,20 @@ def _own_jobs(name: str, tag: str) -> Tuple[Optional[List[str]], str]:
     return found, ""
 
 
-def _reclaim_steps(task: RouteTask, aside: Optional[Path], marker: Optional[Path],
-                   stop_job: str) -> str:
+def _reclaim_steps(task: RouteTask, hold: Path, stop_job: str) -> str:
     """How an operator gets a route back after the runner refused to touch it."""
-    if aside is None:
-        steps = (f"There was no previous checkpoint at {task.result_path}. Stop the job "
-                 f"({stop_job}) and confirm it has ended (sacct -j <id>) before rerunning")
-        if marker is None:
-            return steps + "."
-        return steps + f"; then delete {marker}, which keeps the next run from starting."
-    return (f"The previous checkpoint was set aside to {aside} and was not restored. To "
+    if _hold_kind(hold) == "unsettled":
+        return (f"There was no previous checkpoint at {task.result_path}. Stop the job "
+                f"({stop_job}), confirm it has ended (sacct -j <id>), then delete {hold}, "
+                "which keeps the next run from starting.")
+    return (f"The previous checkpoint was set aside to {hold} and was not restored. To "
             f"recover: stop the job ({stop_job}), confirm it has ended (sacct -j <id>), then "
-            f"move {aside} back to {task.result_path}.")
+            f"move {hold} back to {task.result_path}.")
+
+
+def _hold_kind(path: Path) -> str:
+    """``"aside"`` or ``"unsettled"``: which kind of file holds a route on disk."""
+    return _LEFTOVER_RE.match(path.name).group("kind")
 
 
 def _write_synced(path: Path, blob: bytes) -> None:
