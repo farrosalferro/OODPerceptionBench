@@ -40,6 +40,7 @@ collide.
 
 from __future__ import annotations
 
+import getpass
 import json
 import os
 import re
@@ -136,7 +137,7 @@ class SlurmBackend(Backend):
     # -- submit -------------------------------------------------------------------------
     def _sbatch_header(self, task: RouteTask) -> str:
         s = self.cfg.slurm
-        job_name = f"oodbench-{task.stem}"[:60]
+        job_name = _job_name(task)
 
         def directive(flag: str, value: object) -> str:
             return f"#SBATCH {flag}={shlex.quote(str(value))}"
@@ -308,12 +309,7 @@ class SlurmBackend(Backend):
             # checkpoint or returning an outcome that the runner may requeue.
             recovered = _JOBID_PREFIX_RE.match(out)
             if recovered is None:
-                raise SlurmBackendError(
-                    "sbatch accepted a job but returned no recoverable job identity; "
-                    f"output was {out!r}. Refusing to restore the prior checkpoint or requeue "
-                    "while an unidentified scheduler job may still write it; operator "
-                    "intervention is required"
-                )
+                return self._identify_by_name(attempt, task, wrapper, aside, out)
             job_ref = recovered.group(0).strip()
             attempt.handle = job_ref
             self._submitted.append(job_ref)
@@ -321,7 +317,16 @@ class SlurmBackend(Backend):
                 "%s: sbatch accepted SLURM job %s with malformed parsable output %r; "
                 "cancelling it before retry is allowed", task.key, job_ref, out,
             )
-            self._cancel_and_wait(job_ref)
+            try:
+                self._cancel_and_wait(job_ref)
+            except SlurmBackendError as exc:
+                # The job may still be writing the checkpoint, so the old one stays aside.
+                # The job stays in ``_submitted``: shutdown tries the cancel again.
+                if aside is not None:
+                    self._aside_ledger(task, "kept", aside, job=job_ref)
+                raise SlurmBackendError(
+                    f"{exc}. {_reclaim_steps(task, aside, f'scancel {job_ref}')}"
+                ) from exc
             self._restore_aside(task, aside)
             attempt.outcome = AttemptOutcome.LAUNCH_FAILED
             attempt.detail = (
@@ -337,6 +342,47 @@ class SlurmBackend(Backend):
             self._aside[job_ref] = (task, aside)
         self.log.info("submitted %s as SLURM job %s", task.key, job_ref)
         return attempt
+
+    def _identify_by_name(self, attempt: Attempt, task: RouteTask, wrapper: Path,
+                          aside: Optional[Path], out: str) -> Attempt:
+        """sbatch exited zero, so a job exists, but its reply named none. Find it.
+
+        A job name alone is not enough: the same route stem recurs across seeds, levels and
+        separate runs, and ``squeue --name`` lists every one of the user's jobs with that name.
+        So the job must also run this submission's own script (``%o`` is always absolute).
+        Exactly one match is supervised as usual. Otherwise nothing is cancelled or restored:
+        an unknown job may still write the checkpoint, and the operator is told how to recover.
+        """
+        name = _job_name(task)
+        found, failure = _own_jobs(name, wrapper)
+        if found is not None and len(found) == 1:
+            job_ref = found[0]
+            attempt.handle = job_ref
+            self._submitted.append(job_ref)
+            if aside is not None:
+                self._aside[job_ref] = (task, aside)
+            self.log.warning(
+                "%s: sbatch reply %r carried no job id; identified SLURM job %s by its name and "
+                "script", task.key, out, job_ref,
+            )
+            return attempt
+
+        if found is None:
+            lookup = f"Looking it up by name {name} and script {wrapper} failed: {failure}"
+        elif not found:
+            lookup = f"There is no job of yours named {name} running the script {wrapper}"
+        else:
+            lookup = (f"Jobs {', '.join(found)} of yours are all named {name} and run the "
+                      f"script {wrapper}, so none can be told apart")
+        if aside is not None:
+            self._aside_ledger(task, "kept", aside, reason="unidentified job")
+        find = f"squeue -u {_user() or '$USER'} --name {name} -o '%i %o'; scancel <id>"
+        raise SlurmBackendError(
+            "sbatch accepted a job but returned no recoverable job identity; "
+            f"output was {out!r}. {lookup}. Refusing to restore the prior checkpoint or "
+            "requeue while an unidentified scheduler job may still write it. "
+            + _reclaim_steps(task, aside, find)
+        )
 
     # -- the set-aside checkpoint -------------------------------------------------------
     def _write_aside(self, task: RouteTask) -> Optional[Path]:
@@ -702,6 +748,52 @@ class SlurmBackend(Backend):
             self._submitted.remove(job_ref)
         except ValueError:
             pass
+
+
+def _job_name(task: RouteTask) -> str:
+    return f"oodbench-{task.stem}"[:60]
+
+
+def _user() -> Optional[str]:
+    try:
+        return getpass.getuser()
+    except (OSError, KeyError):  # no login name and no passwd entry, as in some containers
+        return None
+
+
+def _own_jobs(name: str, wrapper: Path) -> Tuple[Optional[List[str]], str]:
+    """IDs of the user's queued jobs named ``name`` that run ``wrapper``.
+
+    Returns ``(None, reason)`` when the lookup itself failed.
+    """
+    user = _user()
+    if user is None:
+        return None, "the current user name is unknown"
+    try:
+        done = subprocess.run(["squeue", "-h", "-u", user, "--name", name, "-o", "%i|%o"],
+                              capture_output=True, text=True)
+    except OSError as exc:
+        return None, f"squeue could not run ({exc})"
+    if done.returncode != 0:
+        first = (done.stderr.strip().splitlines() or [""])[0][:200]
+        return None, f"squeue failed (exit {done.returncode}): {first}"
+    target = os.path.realpath(wrapper)
+    found = []
+    for line in done.stdout.splitlines():
+        job_id, sep, script = line.strip().partition("|")
+        if sep and job_id.isdigit() and os.path.realpath(script) == target:
+            found.append(job_id)
+    return found, ""
+
+
+def _reclaim_steps(task: RouteTask, aside: Optional[Path], stop_job: str) -> str:
+    """How an operator gets a route back after the runner refused to touch it."""
+    if aside is None:
+        return (f"There was no previous checkpoint at {task.result_path}. Stop the job first "
+                f"({stop_job}) and confirm it has ended before rerunning.")
+    return (f"The previous checkpoint was set aside to {aside} and was not restored. To "
+            f"recover: stop the job ({stop_job}), confirm it has ended (sacct -j <id>), then "
+            f"move {aside} back to {task.result_path}.")
 
 
 def _fsync_dir(directory: Path) -> None:

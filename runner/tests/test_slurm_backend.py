@@ -7,6 +7,7 @@ commands.  No scheduler or GPU is required.
 
 import argparse
 import errno
+import getpass
 import json
 import logging
 import os
@@ -64,9 +65,9 @@ class SlurmBackendBase(unittest.TestCase):
         path.chmod(path.stat().st_mode | stat.S_IXUSR)
         return path
 
-    def replay(self, name, *answers, when=None):
+    def replay(self, name, *answers, when=None, replace=None):
         """Fake ``name`` with captured scheduler output; see ``tests.slurm_replay``."""
-        return slurm_replay.install(self.bin, name, *answers, when=when)
+        return slurm_replay.install(self.bin, name, *answers, when=when, replace=replace)
 
     def calls(self, name):
         return slurm_replay.calls(self.bin, name)
@@ -1187,7 +1188,8 @@ class TestSubmissionIdentity(SlurmBackendBase):
         be cancelled safely. Fail the sweep closed and keep the prior checkpoint aside instead
         of returning LAUNCH_FAILED, restoring it beside a possible writer, and requeueing.
         """
-        self.tool("sbatch", 'print("accepted but identity unavailable")')
+        self.replay("sbatch", "sbatch_without_parsable")
+        self.replay("squeue", "squeue_name_cmd_zero_matches")
         _, backend, task = self.backend_and_task(slurm={"submit_interval_s": 0})
         task.mkdirs()
         task.result_path.write_text(json.dumps(COMPLETED), encoding="utf-8")
@@ -1197,6 +1199,133 @@ class TestSubmissionIdentity(SlurmBackendBase):
 
         self.assertFalse(task.result_path.exists(),
                          "checkpoint was restored while an unidentified job may write it")
+        # The old checkpoint is not lost: it stays on disk, untouched, for the operator.
+        [aside] = task.result_path.parent.glob(task.result_path.name + ".aside-*")
+        self.assertEqual(json.loads(aside.read_text()), COMPLETED)
+
+
+class TestUnidentifiedSubmission(SlurmBackendBase):
+    """sbatch accepted a job but its reply carries no job id.
+
+    The reply is real: plain ``sbatch`` without ``--parsable`` prints "Submitted batch job N",
+    standing in for a site wrapper that drops the flag. The job is looked up by name *and*
+    script path among the user's own jobs: the captured name lookup lists three jobs sharing
+    one name, so a name alone could adopt another run's job.
+    """
+
+    OLD = json.dumps(COMPLETED).encode("utf-8")
+    THEIRS_A = "<jobdir>/a/route_x_seed42.sbatch"   # 141460 and 141458
+    THEIRS_B = "<jobdir>/b/route_x_seed42.sbatch"   # 141459
+
+    def submit_unidentified(self, *, ours=None):
+        """Submit with a reply that has no id; ``ours`` names the captured script path that
+        stands for this route's job script."""
+        cfg, backend, task = self.backend_and_task(slurm={"submit_interval_s": 0})
+        task.mkdirs()
+        task.result_path.write_bytes(self.OLD)
+        wrapper = task.job_script.with_suffix(".sbatch")
+        self.replay("sbatch", "sbatch_without_parsable")
+        self.replay("squeue", "squeue_name_cmd_three_matches", when="--name",
+                    replace={ours: str(wrapper)} if ours else None)
+        self.replay("squeue", "squeue_gone_recent")
+        self.replay("sacct", "sacct_cancelled_pending")
+        self.replay("scancel", "scancel_ok")
+        return cfg, backend, task
+
+    def asides(self, task):
+        return sorted(task.result_path.parent.glob(task.result_path.name + ".aside-*"))
+
+    def test_the_one_job_with_our_name_and_script_is_supervised(self):
+        """RED BEFORE THE FIX:
+
+            SlurmBackendError: sbatch accepted a job but returned no recoverable job identity;
+            output was 'Submitted batch job 141242'. ...
+        """
+        _, backend, task = self.submit_unidentified(ours=self.THEIRS_B)
+
+        attempt = backend.submit(task, worker=0)
+
+        self.assertEqual(attempt.handle, "141459")
+        self.assertIsNone(attempt.outcome)
+        self.assertEqual(self.calls("squeue")[0], [
+            "-h", "-u", getpass.getuser(), "--name", "oodbench-route_1_a", "-o", "%i|%o"])
+        [aside] = self.asides(task)
+        with unittest.mock.patch("oodbench.backends.slurm._CANCEL_POLL_S", 0):
+            backend.shutdown()
+        self.assertEqual(self.calls("scancel"), [["141459"]],
+                         "the identified job was not cancelled at shutdown")
+        self.assertFalse(aside.exists())
+
+    def test_jobs_that_share_only_the_name_are_left_alone(self):
+        """RED BEFORE THE FIX:
+
+            AssertionError: '.aside-' not found in 'sbatch accepted a job but returned no
+            recoverable job identity; ...' : the error does not say where the old checkpoint is
+        """
+        _, backend, task = self.submit_unidentified()
+
+        with self.assertRaises(SlurmBackendError) as raised:
+            backend.submit(task, worker=0)
+
+        message = str(raised.exception)
+        self.assertIn(".aside-", message, "the error does not say where the old checkpoint is")
+        [aside] = self.asides(task)
+        self.assertEqual(aside.read_bytes(), self.OLD)
+        self.assertFalse(task.result_path.exists(), "restored beside a possible writer")
+        for needed in (str(aside), str(task.result_path), "no job", "scancel"):
+            self.assertIn(needed, message)
+        self.assertEqual(self.calls("scancel"), [], "cancelled a job that is not ours")
+
+    def test_two_jobs_with_our_script_are_left_to_the_operator(self):
+        """RED BEFORE THE FIX:
+
+            AssertionError: '.aside-' not found in 'sbatch accepted a job but returned no
+            recoverable job identity; ...'
+        """
+        _, backend, task = self.submit_unidentified(ours=self.THEIRS_A)
+
+        with self.assertRaises(SlurmBackendError) as raised:
+            backend.submit(task, worker=0)
+
+        message = str(raised.exception)
+        self.assertIn(".aside-", message)
+        self.assertIn("141458", message)
+        self.assertIn("141460", message)
+        [aside] = self.asides(task)
+        self.assertEqual(aside.read_bytes(), self.OLD)
+        self.assertFalse(task.result_path.exists())
+        self.assertEqual(self.calls("scancel"), [])
+
+    def test_an_unconfirmed_cancel_keeps_the_old_checkpoint_aside(self):
+        """RED BEFORE THE FIX:
+
+            AssertionError: '.aside-' not found in 'SLURM job 141229 has no confirmed terminal
+            state 0s after scancel; ...'
+
+        The reply ``141229 trailing noise`` is **synthetic** (no captured reply has an id
+        followed by noise). Its id is recovered, but the job never confirms an end, so the old
+        checkpoint must stay aside: restoring it could race the job's own writes.
+        """
+        cfg, backend, task = self.backend_and_task(slurm={"submit_interval_s": 0})
+        task.mkdirs()
+        task.result_path.write_bytes(self.OLD)
+        self.replay("sbatch", {"rc": 0, "stdout": "141229 trailing noise\n", "stderr": ""})
+        self.replay("squeue", "squeue_running")
+        self.replay("scancel", "scancel_ok")
+
+        with unittest.mock.patch("oodbench.backends.slurm._CANCEL_WAIT_S", 0), \
+                unittest.mock.patch("oodbench.backends.slurm._CANCEL_POLL_S", 0), \
+                self.assertRaises(SlurmBackendError) as raised:
+            backend.submit(task, worker=0)
+
+        message = str(raised.exception)
+        self.assertIn(".aside-", message)
+        [aside] = self.asides(task)
+        self.assertEqual(aside.read_bytes(), self.OLD)
+        self.assertIn("not restored", message)
+        self.assertIn(str(aside), message)
+        self.assertFalse(task.result_path.exists())
+        self.assertIn("141229", backend._submitted, "shutdown can no longer cancel the job")
 
 
 class TestSchedulerSlotsAreNotMachines(SlurmBackendBase):

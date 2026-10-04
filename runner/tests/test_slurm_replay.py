@@ -62,6 +62,15 @@ class TestReplayFidelity(unittest.TestCase):
         self.assertEqual(got.returncode, 97)
         self.assertIn(b"no sequence matches", got.stderr)
 
+    def test_replace_restores_a_scrubbed_path_and_nothing_else(self):
+        tool = slurm_replay.install(self.bin, "squeue", "squeue_name_cmd_three_matches",
+                                    replace={"<jobdir>/b/route_x_seed42.sbatch": "/r/x.sbatch"})
+        self.assertEqual(_run(tool).stdout,
+                         b"141460|<jobdir>/a/route_x_seed42.sbatch\n141459|/r/x.sbatch\n"
+                         b"141458|<jobdir>/a/route_x_seed42.sbatch\n")
+        with self.assertRaises(ValueError):
+            slurm_replay.install(self.bin, "squeue", "squeue_pending", replace={"<jobdir>/": "/"})
+
     def test_an_explicit_answer_must_be_complete(self):
         with self.assertRaises(ValueError):
             slurm_replay.install(self.bin, "sbatch", {"rc": 0, "stdout": "1\n"})

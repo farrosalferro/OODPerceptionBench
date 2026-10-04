@@ -36,6 +36,11 @@ Job IDs and timestamps are kept as captured. Only these were replaced:
   (`TIMEOUT`, `CANCELLED by ...`).
 - A job cancelled while `PENDING` reports `Start` as **`None`** (not `Unknown`) and `Elapsed` as
   `00:00:00`.
+- `squeue --name` matches every job of that name, even across separate runs: three held jobs
+  sharing one name were all listed. `%o` prints each job's script as an **absolute** path, even
+  when `sbatch` was given a relative one, so name plus script path tells them apart. (The
+  `squeue_name_cmd_*` cases come from a third capture the same day, with held jobs that never
+  started.)
 - `sacct` reported `PENDING` within 20 ms of submission in all four tries. The empty
   accounting reply was seen only for an id the database never issued (exit 0, no output).
 

@@ -15,6 +15,9 @@ Answers are consumed in order, and the last one repeats once the sequence is exh
 that substring (for example ``when="Start,End,Elapsed"``). A call that matches no ``when``
 falls back to the sequence installed without one. Every call's argv is recorded for
 :func:`calls`.
+
+Captured paths were scrubbed to ``<jobdir>/...``. ``replace={"<jobdir>/a/x.sbatch": real}``
+puts a test's own path back where a scrubbed one stood; nothing else in the answer changes.
 """
 
 from __future__ import annotations
@@ -86,7 +89,7 @@ def timeline(name: str, tool: str) -> List[Dict[str, object]]:
     return load()["timelines"][name][tool]
 
 
-def _resolve(answer: Answer) -> Dict[str, object]:
+def _resolve(answer: Answer, replace: Dict[str, str]) -> Dict[str, object]:
     if isinstance(answer, str):
         found = case(answer)
     else:
@@ -94,11 +97,16 @@ def _resolve(answer: Answer) -> Dict[str, object]:
     missing = {"rc", "stdout", "stderr"} - set(found)
     if missing:
         raise ValueError(f"replay answer {answer!r} lacks {sorted(missing)}")
-    return {"rc": int(found["rc"]), "stdout": str(found["stdout"]),
-            "stderr": str(found["stderr"])}
+    stdout, stderr = str(found["stdout"]), str(found["stderr"])
+    for old, new in replace.items():
+        if old not in stdout + stderr:
+            raise ValueError(f"replay answer {answer!r} does not contain {old!r}")
+        stdout, stderr = stdout.replace(old, new), stderr.replace(old, new)
+    return {"rc": int(found["rc"]), "stdout": stdout, "stderr": stderr}
 
 
-def install(bin_dir: Path, name: str, *answers: Answer, when: Optional[str] = None) -> Path:
+def install(bin_dir: Path, name: str, *answers: Answer, when: Optional[str] = None,
+            replace: Optional[Dict[str, str]] = None) -> Path:
     """Install (or extend) the fake ``name`` in ``bin_dir``; see the module docstring."""
     if not answers:
         raise ValueError("install() needs at least one answer")
@@ -106,7 +114,7 @@ def install(bin_dir: Path, name: str, *answers: Answer, when: Optional[str] = No
     plan_path = bin_dir / f"{name}.replay.json"
     plan = json.loads(plan_path.read_text(encoding="utf-8")) if plan_path.exists() else []
     plan = [seq for seq in plan if seq["when"] != when]
-    plan.append({"when": when, "answers": [_resolve(a) for a in answers]})
+    plan.append({"when": when, "answers": [_resolve(a, replace or {}) for a in answers]})
     # Specific matches first, so a later catch-all never shadows them.
     plan.sort(key=lambda seq: seq["when"] is None)
     plan_path.write_text(json.dumps(plan), encoding="utf-8")

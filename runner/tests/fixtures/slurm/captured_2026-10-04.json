@@ -421,6 +421,36 @@
       "rc": 0,
       "stdout": "",
       "stderr": ""
+    },
+    "squeue_name_cmd_three_matches": {
+      "argv": [
+        "squeue",
+        "-h",
+        "-u",
+        "user",
+        "--name",
+        "oodbench-fixture-shared",
+        "-o",
+        "%i|%o"
+      ],
+      "rc": 0,
+      "stdout": "141460|<jobdir>/a/route_x_seed42.sbatch\n141459|<jobdir>/b/route_x_seed42.sbatch\n141458|<jobdir>/a/route_x_seed42.sbatch\n",
+      "stderr": ""
+    },
+    "squeue_name_cmd_zero_matches": {
+      "argv": [
+        "squeue",
+        "-h",
+        "-u",
+        "user",
+        "--name",
+        "oodbench-fixture-none",
+        "-o",
+        "%i|%o"
+      ],
+      "rc": 0,
+      "stdout": "",
+      "stderr": ""
     }
   },
   "timelines": {
