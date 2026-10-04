@@ -6,6 +6,7 @@ commands.  No scheduler or GPU is required.
 """
 
 import argparse
+import errno
 import json
 import logging
 import os
@@ -895,6 +896,172 @@ class TestRuntimeWithoutRunning(SlurmBackendBase):
                 self.assertEqual(got["settle"][0], t["runtime"])
                 self.assertEqual(got["kill"][1], "test cancellation" + t["tag"])
                 self.assertTrue(got["settle"][1].endswith(t["tag"]), got["settle"][1])
+
+
+class TestDurableAside(SlurmBackendBase):
+    """The checkpoint a retry replaces is kept on disk, not only in process memory.
+
+    Until sbatch's answer is understood, the old checkpoint is the route's only record. Held in
+    memory, it died with any exception or crash between set-aside and restore.
+    """
+
+    OLD = json.dumps(COMPLETED).encode("utf-8")
+
+    def asides(self, task):
+        return sorted(task.result_path.parent.glob(task.result_path.name + ".aside-*"))
+
+    def ledger(self, cfg):
+        path = Path(cfg.output["root"]) / "_runner" / "aside.jsonl"
+        if not path.exists():
+            return []
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+    def sbatch_seeing(self, task, answer):
+        """An sbatch that records which aside files existed when it ran, then replays
+        ``answer`` (a captured case)."""
+        seen = self.site.root / "sbatch.saw"
+        captured = slurm_replay.case(answer)
+        pattern = task.result_path.name + ".aside-*"
+        self.tool("sbatch", f'''
+            import sys
+            from pathlib import Path
+            found = sorted(p.name for p in Path({str(task.result_path.parent)!r}).glob({pattern!r}))
+            Path({str(seen)!r}).write_text("\\n".join(found), encoding="utf-8")
+            sys.stdout.write({captured["stdout"]!r})
+            sys.stderr.write({captured["stderr"]!r})
+            sys.exit({captured["rc"]!r})
+        ''')
+        return seen
+
+    def test_the_old_checkpoint_is_on_disk_and_synced_before_sbatch(self):
+        """RED BEFORE THE FIX:
+
+            AssertionError: '' is not true : sbatch ran while the old checkpoint existed only
+            in memory
+        """
+        cfg, backend, task = self.backend_and_task(slurm={"submit_interval_s": 0})
+        task.mkdirs()
+        task.result_path.write_bytes(self.OLD)
+        seen = self.sbatch_seeing(task, "sbatch_parsable")
+
+        synced = []
+        real_fsync = os.fsync
+
+        def recording_fsync(fd):
+            synced.append(os.fstat(fd).st_ino)
+            return real_fsync(fd)
+
+        with unittest.mock.patch("os.fsync", recording_fsync):
+            attempt = backend.submit(task, worker=0)
+
+        self.assertEqual(attempt.handle, "141229")
+        self.assertTrue(seen.read_text(),
+                        "sbatch ran while the old checkpoint existed only in memory")
+        [aside] = self.asides(task)
+        self.assertEqual(seen.read_text(), aside.name)
+        self.assertEqual(aside.read_bytes(), self.OLD)
+        self.assertFalse(task.result_path.exists(), "the attempt does not start clean")
+        self.assertIn(aside.stat().st_ino, synced, "the aside file was not fsynced")
+        self.assertIn(aside.parent.stat().st_ino, synced, "its directory was not fsynced")
+        [line] = self.ledger(cfg)
+        self.assertEqual((line["event"], line["key"], line["path"]),
+                         ("set_aside", task.key, str(aside)))
+
+    def test_a_full_disk_while_setting_aside_aborts_before_sbatch(self):
+        """RED BEFORE THE FIX:
+
+            AssertionError: Lists differ: [['--parsable', ...]] != [] : sbatch ran although the
+            old checkpoint could not be kept
+
+        The ``ENOSPC`` is synthetic (injected at ``os.write``); no scheduler output is faked.
+        """
+        self.replay("sbatch", "sbatch_parsable")
+        cfg, backend, task = self.backend_and_task(slurm={"submit_interval_s": 0})
+        task.mkdirs()
+        task.result_path.write_bytes(self.OLD)
+
+        with unittest.mock.patch("os.write",
+                                 side_effect=OSError(errno.ENOSPC, "No space left on device")):
+            attempt = backend.submit(task, worker=0)
+
+        self.assertEqual(self.calls("sbatch"), [],
+                         "sbatch ran although the old checkpoint could not be kept")
+        self.assertIs(attempt.outcome, AttemptOutcome.LAUNCH_FAILED)
+        self.assertIn("No space left on device", attempt.detail)
+        self.assertEqual(task.result_path.read_bytes(), self.OLD)
+        self.assertEqual(self.asides(task), [], "a partial aside file was left behind")
+
+    def test_a_refused_submission_restores_from_the_file_and_deletes_it(self):
+        """RED BEFORE THE FIX:
+
+            AssertionError: '' is not true : the restore could not have come from disk
+        """
+        cfg, backend, task = self.backend_and_task(slurm={"submit_interval_s": 0})
+        task.mkdirs()
+        task.result_path.write_bytes(self.OLD)
+        seen = self.sbatch_seeing(task, "sbatch_invalid_partition")
+
+        attempt = backend.submit(task, worker=0)
+
+        self.assertIs(attempt.outcome, AttemptOutcome.LAUNCH_FAILED)
+        self.assertTrue(seen.read_text(), "the restore could not have come from disk")
+        self.assertEqual(task.result_path.read_bytes(), self.OLD)
+        self.assertEqual(self.asides(task), [])
+        self.assertEqual([line["event"] for line in self.ledger(cfg)],
+                         ["set_aside", "restored"])
+
+    def test_settlement_deletes_the_aside_file(self):
+        """RED BEFORE THE FIX:
+
+            ValueError: not enough values to unpack (expected 1, got 0)
+        """
+        for path in ("poll", "kill"):
+            with self.subTest(path=path):
+                self.replay("sbatch", "sbatch_parsable")
+                self.replay("squeue", "squeue_gone_recent")
+                self.replay("sacct", "sacct_completed" if path == "poll"
+                            else "sacct_cancelled_running")
+                self.replay("scancel", "scancel_ok")
+                cfg, backend, task = self.backend_and_task(slurm={"submit_interval_s": 0})
+                task.mkdirs()
+                task.result_path.write_bytes(self.OLD)
+
+                attempt = backend.submit(task, worker=0)
+                [aside] = self.asides(task)
+                if path == "poll":
+                    self.assertTrue(backend.poll(attempt))
+                else:
+                    with unittest.mock.patch("oodbench.backends.slurm._CANCEL_POLL_S", 0):
+                        backend.kill(attempt, "test cancellation")
+
+                self.assertFalse(aside.exists(), "the aside file outlived the settled attempt")
+                self.assertEqual([line["event"] for line in self.ledger(cfg)][-2:],
+                                 ["set_aside", "discarded"])
+
+    def test_two_retries_of_one_route_get_separate_files(self):
+        """RED BEFORE THE FIX:
+
+            AssertionError: 0 != 2 : a second retry overwrote the first aside file
+        """
+        self.replay("sbatch", "sbatch_parsable")
+        _, backend, task = self.backend_and_task(slurm={"submit_interval_s": 0})
+        task.mkdirs()
+        task.result_path.write_bytes(self.OLD)
+        backend.submit(task, worker=0)
+        task.result_path.write_bytes(b'{"second": true}')
+        backend.submit(task, worker=0)
+
+        asides = self.asides(task)
+        self.assertEqual(len(asides), 2, "a second retry overwrote the first aside file")
+        self.assertEqual(sorted(a.read_bytes() for a in asides),
+                         sorted([self.OLD, b'{"second": true}']))
+
+    def test_no_aside_file_when_there_was_no_checkpoint(self):
+        self.replay("sbatch", "sbatch_parsable")
+        cfg, backend, task = self.backend_and_task(slurm={"submit_interval_s": 0})
+        backend.submit(task, worker=0)
+        self.assertEqual(self.asides(task), [])
+        self.assertEqual(self.ledger(cfg), [])
 
 
 class TestSubmissionIdentity(SlurmBackendBase):

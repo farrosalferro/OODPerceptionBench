@@ -40,17 +40,19 @@ collide.
 
 from __future__ import annotations
 
+import json
+import os
 import re
 import shlex
 import subprocess
 import time
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from .. import jobscript, ports as ports_mod, reap
 from ..config import Config
 from ..plan import RouteTask
-from .base import (Attempt, AttemptOutcome, Backend, restore_checkpoint,
-                   take_checkpoint_aside)
+from .base import Attempt, AttemptOutcome, Backend, take_checkpoint_aside
 
 _JOBID_RE = re.compile(
     r"\s*(?P<job>\d+)(?:;(?P<cluster>[A-Za-z0-9_.-]+))?\s*\Z"
@@ -112,6 +114,7 @@ class SlurmBackend(Backend):
         self._started: set[str] = set()
         self._paused_at: Dict[str, float] = {}
         self._unknown_since: Dict[str, float] = {}
+        self._aside: Dict[str, Tuple[RouteTask, Path]] = {}
 
     def preflight(self) -> None:
         for tool in ("sbatch", "squeue"):
@@ -251,11 +254,22 @@ class SlurmBackend(Backend):
         # otherwise loses every route at its first write.
         task.mkdirs()
 
-        # Keep the old record in hand: sbatch refusing a submission (full queue, QOS limit) is
-        # routine, and must not destroy a valid result. See backends.base.take_checkpoint_aside.
+        # Keep the old record: sbatch refusing a submission (full queue, QOS limit) is routine,
+        # and must not destroy a valid result. See backends.base.take_checkpoint_aside. It is
+        # kept on disk, synced, before the original goes: held only in memory, any exception
+        # or crash before sbatch's answer was understood lost the route's only record.
         try:
-            stale = take_checkpoint_aside(task)
+            aside = self._write_aside(task)
         except OSError as exc:
+            attempt.outcome = AttemptOutcome.LAUNCH_FAILED
+            attempt.detail = f"could not set the old checkpoint aside: {exc}"
+            attempt.finished_at = time.time()
+            self.log.error("%s: %s; not submitting", task.key, attempt.detail)
+            return attempt
+        try:
+            take_checkpoint_aside(task)
+        except OSError as exc:
+            self._restore_aside(task, aside)
             attempt.outcome = AttemptOutcome.LAUNCH_FAILED
             attempt.detail = f"could not remove stale checkpoint: {exc}"
             attempt.finished_at = time.time()
@@ -280,7 +294,7 @@ class SlurmBackend(Backend):
             out = subprocess.check_output(["sbatch", "--parsable", str(wrapper)], text=True,
                                           stderr=subprocess.PIPE).strip()
         except (subprocess.CalledProcessError, OSError) as exc:
-            restore_checkpoint(task, stale)
+            self._restore_aside(task, aside)
             attempt.outcome = AttemptOutcome.LAUNCH_FAILED
             attempt.detail = f"sbatch failed: {exc}"
             attempt.finished_at = time.time()
@@ -308,7 +322,7 @@ class SlurmBackend(Backend):
                 "cancelling it before retry is allowed", task.key, job_ref, out,
             )
             self._cancel_and_wait(job_ref)
-            restore_checkpoint(task, stale)
+            self._restore_aside(task, aside)
             attempt.outcome = AttemptOutcome.LAUNCH_FAILED
             attempt.detail = (
                 f"sbatch returned malformed parsable output {out!r}; recovered and "
@@ -319,8 +333,81 @@ class SlurmBackend(Backend):
         job_ref = m.group(0).strip()
         attempt.handle = job_ref
         self._submitted.append(job_ref)
+        if aside is not None:
+            self._aside[job_ref] = (task, aside)
         self.log.info("submitted %s as SLURM job %s", task.key, job_ref)
         return attempt
+
+    # -- the set-aside checkpoint -------------------------------------------------------
+    def _write_aside(self, task: RouteTask) -> Optional[Path]:
+        """Copy the current checkpoint to ``<checkpoint>.aside-<unix ns>``, synced to disk.
+
+        Returns None when there is no checkpoint. Raises OSError (a full disk, say) with no
+        partial file left and the original untouched, so the caller can abort before sbatch.
+        """
+        try:
+            blob = task.result_path.read_bytes()
+        except FileNotFoundError:
+            return None
+        aside = task.result_path.with_name(f"{task.result_path.name}.aside-{time.time_ns()}")
+        fd = os.open(aside, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+        try:
+            view = memoryview(blob)
+            while view:
+                view = view[os.write(fd, view):]
+            os.fsync(fd)
+        except BaseException:
+            os.close(fd)
+            try:
+                aside.unlink()
+            except OSError:  # never mask the write error that brought us here
+                pass
+            raise
+        os.close(fd)
+        _fsync_dir(aside.parent)
+        self._aside_ledger(task, "set_aside", aside)
+        return aside
+
+    def _restore_aside(self, task: RouteTask, aside: Optional[Path]) -> None:
+        """Put the set-aside checkpoint back in place; the rename also removes the file."""
+        if aside is None:
+            return
+        try:
+            os.replace(aside, task.result_path)
+            _fsync_dir(aside.parent)
+        except OSError as exc:  # the aside file survives; startup refuses until reclaimed
+            self.log.error("%s: could not restore %s: %s", task.key, aside, exc)
+            return
+        self._aside_ledger(task, "restored", aside)
+
+    def _discard_aside(self, job_ref: str) -> None:
+        """The job is over: the checkpoint it replaced is no longer needed."""
+        entry = self._aside.pop(job_ref, None)
+        if entry is None:
+            return
+        task, aside = entry
+        try:
+            aside.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            self.log.warning("%s: could not delete %s: %s", task.key, aside, exc)
+            return
+        self._aside_ledger(task, "discarded", aside, job=job_ref)
+
+    def _aside_ledger(self, task: RouteTask, event: str, aside: Path, **extra) -> None:
+        """Append one synced line to ``_runner/aside.jsonl``: what happened to which file."""
+        path = Path(self.cfg.output["root"]) / "_runner" / "aside.jsonl"
+        line = {"time": time.time(), "event": event, "key": task.key, "path": str(aside)}
+        line.update(extra)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(line, sort_keys=True) + "\n")
+                f.flush()
+                os.fsync(f.fileno())
+        except OSError as exc:  # the aside file itself is the record; the ledger explains it
+            self.log.warning("could not append to %s: %s", path, exc)
 
     # -- poll ---------------------------------------------------------------------------
     def poll(self, attempt: Attempt) -> bool:
@@ -606,6 +693,7 @@ class SlurmBackend(Backend):
             time.sleep(_CANCEL_POLL_S)
 
     def _forget(self, job_ref: str) -> None:
+        self._discard_aside(job_ref)
         self._unknown_since.pop(job_ref, None)
         self._running.discard(job_ref)
         self._started.discard(job_ref)
@@ -614,3 +702,12 @@ class SlurmBackend(Backend):
             self._submitted.remove(job_ref)
         except ValueError:
             pass
+
+
+def _fsync_dir(directory: Path) -> None:
+    """Make a create, rename or delete in ``directory`` durable."""
+    fd = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
