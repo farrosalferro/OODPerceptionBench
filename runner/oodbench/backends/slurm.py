@@ -72,6 +72,10 @@ _FAULT_STATES = frozenset({
     "REVOKED", "TIMEOUT",
 })
 
+# ``<checkpoint>.aside-<unix ns>``: see SlurmBackend._write_aside.
+_ASIDE_RE = re.compile(r"\A(?P<checkpoint>.+)\.aside-\d+\Z")
+_ASIDE_LISTED = 20
+
 _CANCEL_WAIT_S = 60.0
 _CANCEL_POLL_S = 0.2
 
@@ -118,6 +122,7 @@ class SlurmBackend(Backend):
         self._aside: Dict[str, Tuple[RouteTask, Path]] = {}
 
     def preflight(self) -> None:
+        self._refuse_leftover_asides()
         for tool in ("sbatch", "squeue"):
             if subprocess.call(["bash", "-lc", f"command -v {tool} >/dev/null"]) != 0:
                 raise SlurmBackendError(
@@ -132,6 +137,39 @@ class SlurmBackend(Backend):
             "the SLURM backend is validated at two-way concurrency on one node, not at the full "
             "475-route scale or larger multi-node fan-out. Submit a single route first and read "
             "the generated job script before launching a large sweep."
+        )
+
+    def _refuse_leftover_asides(self) -> None:
+        """Refuse to start while an earlier run left a set-aside checkpoint on disk.
+
+        Such a file means that run stopped without settling the route (a crash, or a job it
+        could not identify or confirm cancelled). This run would plan the route from whatever
+        now sits at the checkpoint path, and could later overwrite the only good record.
+        Nothing is moved automatically: whether a job still writes that path is the operator's
+        call.
+        """
+        root = Path(self.cfg.output["root"])
+        found = sorted(path for path in root.rglob("*.aside-*")
+                       if _ASIDE_RE.match(path.name) and path.is_file())
+        if not found:
+            return
+        listed = []
+        for aside in found[:_ASIDE_LISTED]:
+            checkpoint = aside.with_name(_ASIDE_RE.match(aside.name).group("checkpoint"))
+            listed.append(f"  {aside} -> {checkpoint}")
+        if len(found) > _ASIDE_LISTED:
+            listed.append(f"  ... and {len(found) - _ASIDE_LISTED} more "
+                          f"(find {root} -name '*.aside-*')")
+        find_jobs = f"squeue -u {_user() or '$USER'} -o '%i %j %o'; scancel <id>"
+        raise SlurmBackendError(
+            f"{len(found)} set-aside checkpoint(s) under {root} were left by an earlier run "
+            "that stopped before settling those routes:\n" + "\n".join(listed) + "\n"
+            "Refusing to start until each is put back or deleted. First stop any job of the "
+            f"earlier run that is still queued or running ({find_jobs}). Then, for each file, "
+            "either put the earlier result back (mv <aside> <checkpoint>) or delete the file "
+            "to rerun the route. If the checkpoint exists again, a job wrote it after the file "
+            "was set aside: keep whichever you trust. "
+            f"{root / '_runner' / 'aside.jsonl'} records when and why each file was set aside."
         )
 
     # -- submit -------------------------------------------------------------------------

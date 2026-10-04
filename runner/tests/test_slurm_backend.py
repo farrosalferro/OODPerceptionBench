@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import shlex
+import shutil
 import stat
 import sys
 import textwrap
@@ -1326,6 +1327,106 @@ class TestUnidentifiedSubmission(SlurmBackendBase):
         self.assertIn(str(aside), message)
         self.assertFalse(task.result_path.exists())
         self.assertIn("141229", backend._submitted, "shutdown can no longer cancel the job")
+
+
+class TestLeftoverAsideBlocksStart(SlurmBackendBase):
+    """A set-aside checkpoint left on disk means an earlier run stopped without settling a
+    route. Starting anyway would plan that route from whatever is (or is not) at its checkpoint
+    path and could later overwrite the only good record, so the backend refuses until the
+    operator has put each file back or deleted it."""
+
+    def leave_aside(self, cfg, task, payload=b'{"old": true}'):
+        task.mkdirs()
+        aside = task.result_path.with_name(task.result_path.name + ".aside-1791096796277153971")
+        aside.write_bytes(payload)
+        return aside
+
+    def tools_present(self):
+        self.tool("sbatch", "raise SystemExit(0)")
+        self.tool("squeue", "raise SystemExit(0)")
+
+    def test_a_leftover_aside_file_refuses_the_start(self):
+        """RED BEFORE THE FIX:
+
+            AssertionError: SlurmBackendError not raised
+        """
+        cfg, backend, task = self.backend_and_task()
+        aside = self.leave_aside(cfg, task)
+        self.tools_present()
+
+        with self.assertRaises(SlurmBackendError) as raised:
+            backend.preflight()
+
+        message = str(raised.exception)
+        self.assertIn(f"{aside} -> {task.result_path}\n", message)
+        for needed in ("scancel", "mv <aside> <checkpoint>", "aside.jsonl"):
+            self.assertIn(needed, message)
+        self.assertEqual(aside.read_bytes(), b'{"old": true}', "the refusal touched the file")
+        self.assertEqual(self.calls("sbatch"), [])
+
+    def test_every_leftover_file_is_listed(self):
+        """RED BEFORE THE FIX:
+
+            AssertionError: SlurmBackendError not raised
+        """
+        self.site.add_route("static/s1/base/route_2_b.xml")
+        cfg, backend, _ = self.backend_and_task()
+        tasks = plan_mod.build_tasks(
+            plan_mod.discover(Path(cfg.routes["root"])),
+            Path(cfg.routes["root"]), Path(cfg.output["root"]), base_seed=cfg.seed,
+            repetitions=1)
+        asides = [self.leave_aside(cfg, task) for task in tasks]
+        self.assertEqual(len(asides), 2)
+        self.tools_present()
+
+        with self.assertRaises(SlurmBackendError) as raised:
+            backend.preflight()
+
+        self.assertIn("2 set-aside", str(raised.exception))
+        for aside in asides:
+            self.assertIn(str(aside), str(raised.exception))
+
+    def test_a_refused_submission_blocks_the_next_run(self):
+        """RED BEFORE THE FIX:
+
+            AssertionError: SlurmBackendError not raised
+
+        The first run is T6's: sbatch's reply carries no id and no job matches, so the old
+        checkpoint stays aside. A second backend over the same output root must not start.
+        """
+        cfg, backend, task = self.backend_and_task(slurm={"submit_interval_s": 0})
+        task.mkdirs()
+        task.result_path.write_text(json.dumps(COMPLETED), encoding="utf-8")
+        self.replay("sbatch", "sbatch_without_parsable")
+        self.replay("squeue", "squeue_name_cmd_zero_matches")
+        with self.assertRaises(SlurmBackendError):
+            backend.submit(task, worker=0)
+
+        with self.assertRaisesRegex(SlurmBackendError, r"1 set-aside"):
+            SlurmBackend(cfg, self.log).preflight()
+
+    def test_a_clean_output_root_still_starts(self):
+        """Green before and after: the ledger ``_runner/aside.jsonl`` and look-alike names are
+        not set-aside checkpoints."""
+        cfg, backend, task = self.backend_and_task()
+        task.mkdirs()
+        task.result_path.write_text(json.dumps(COMPLETED), encoding="utf-8")
+        ledger = Path(cfg.output["root"]) / "_runner" / "aside.jsonl"
+        ledger.parent.mkdir(parents=True, exist_ok=True)
+        ledger.write_text("{}\n", encoding="utf-8")
+        task.result_path.with_name(task.result_path.name + ".aside-notes").write_text("x")
+        self.tools_present()
+
+        backend.preflight()
+
+    def test_an_output_root_that_does_not_exist_yet_starts(self):
+        """Green before and after: a first run has no output root to scan."""
+        cfg, backend, _ = self.backend_and_task()
+        shutil.rmtree(cfg.output["root"], ignore_errors=True)
+        self.assertFalse(Path(cfg.output["root"]).exists())
+        self.tools_present()
+
+        backend.preflight()
 
 
 class TestSchedulerSlotsAreNotMachines(SlurmBackendBase):
