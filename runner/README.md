@@ -1,17 +1,5 @@
 # OOD-PerceptionBench runner
 
-> **Benchmark release v0.9** — these numbers bind to **arXiv v1** of the paper. A v1.0 release
-> (replacement assets + re-run) binds to arXiv v2, and scores from the two are **not**
-> comparable. Every report this runner writes carries that stamp.
->
-> **This is a hardware-validated local first cut, not a production-scale runner.** The
-> supervision logic is covered by 377 automated tests. On 2026-08-11/12 CARLA 0.9.15 executed
-> single routes, two 8-route/two-worker sweeps with one-GPU stacking and port isolation observed
-> live, a real Ctrl-C/reap/resume cycle, and three independent nine-route PDM-Lite golden
-> replicates. The SLURM backend is now validated on a real scheduler at two-way concurrency (one
-> full route category, seed 42), one GPU per job. **The full 475-route set has never been run, and
-> local multi-GPU mapping is unproven** — read `STATUS.md` §2 before trusting it with GPU-hours.
-
 Evaluate a CARLA Leaderboard 2.0 agent on the OOD-PerceptionBench route set, on one machine or
 on a SLURM cluster, from a single configuration file.
 
@@ -19,108 +7,67 @@ on a SLURM cluster, from a single configuration file.
 python run_benchmark.py --config my_config.yaml
 ```
 
+> **Release v0.9, which matches arXiv v1 of the paper.** Scores from v0.9 and v1.0 are not
+> comparable, and every report this runner writes says which release it targeted.
+>
+> **What has been tested on real hardware:** single routes and two-worker sweeps on one GPU,
+> interrupt and resume, and the nine-route acceptance run, all with CARLA 0.9.15. The SLURM
+> backend has run one full route category on one node, with up to six jobs at once. **The full
+> 475-route set has never been run, and placing workers on several GPUs of one machine is not
+> yet tested.** [`STATUS.md`](STATUS.md) has the details.
+
 ---
 
 ## Quickstart
 
-1. **Install CARLA 0.9.15** and prepare the Bench2Drive leaderboard + scenario_runner checkout
-   (`setup.sh` in the repo root does this against the pinned SHAs).
+1. **Install CARLA 0.9.15** and the Bench2Drive leaderboard and scenario_runner checkout.
+   `setup.sh` in the repository root does this at the pinned commits.
 
-2. **Learn your GPU mapping.** CUDA and Vulkan index devices independently, and CARLA renders
-   with Vulkan:
+2. **Find your GPU mapping.** CUDA and Vulkan number GPUs independently, and CARLA renders with
+   Vulkan:
 
    ```bash
    python run_benchmark.py --check-gpus
    ```
 
-   Record the pairs in the config. On a single-GPU machine both are `0` and you can move on.
+   Copy the pairs into the config. On a one-GPU machine both are `0`. Software rasterizers such
+   as `llvmpipe` are listed but never offered as a pair.
 
-3. **Build the Python environment the evaluator runs in.** A CARLA-only environment is **not**
-   enough — the evaluator imports `scenario_runner`, which needs `py_trees` and friends, and the
-   failure is `ModuleNotFoundError` *inside the route*, reported as an infrastructure failure
-   rather than as a missing dependency. Use Python 3.10 and start from the environment the
-   published PDM-Lite numbers were reproduced with, then add your agent's own packages:
+3. **Build the Python environment the evaluator runs in.** Use Python 3.10 and the environment
+   the published PDM-Lite numbers were reproduced with, plus your agent's own packages:
 
    ```bash
    pip install -r env/requirements-pdmlite.txt    # from the repository root
    ```
 
-   It brings the `carla==0.9.15` wheel, `py_trees`, and `numpy==1.23.5`, the one numpy that both
-   this Bench2Drive pin and `scipy` accept (`docs/DETAILS.md`, "Pinned upstream", says why).
-   Do **not** use `Bench2Drive/leaderboard/requirements.txt` or
-   `Bench2Drive/scenario_runner/requirements.txt` on Python 3.10: they pin
-   `opencv-python==4.2.0.32` and `numpy==1.18.4`, which have no Python 3.10 wheels. CARLA's
-   `agents` package, which PDM-Lite imports, is not in the wheel either; the runner puts
-   `<carla.root>/PythonAPI/carla`, where it lives, on the route's `PYTHONPATH` for you.
+   It brings the `carla==0.9.15` wheel, `py_trees`, and `numpy==1.23.5`, the one numpy that
+   both this Bench2Drive pin and `scipy` accept. A CARLA-only environment is **not** enough: the
+   evaluator imports `scenario_runner`, which needs `py_trees`. Do not use the Bench2Drive
+   `requirements.txt` files on Python 3.10; their `opencv-python` and `numpy` pins have no
+   Python 3.10 wheels. On a minimal Ubuntu, `opencv-python` also needs
+   `sudo apt-get install libgl1 libglib2.0-0`.
 
-   On a minimal or headless Ubuntu, `opencv-python` also needs two system libraries. Without them
-   `import cv2` fails with `libGL.so.1: cannot open shared object file`:
+   **Give `environment.python` as an absolute path.** The default, `python3`, is whatever
+   `PATH` holds after `environment.activate` runs, which need not be the environment you built.
 
-   ```bash
-   sudo apt-get install libgl1 libglib2.0-0
-   ```
+   Before every real (non-`--dry-run`) sweep, the runner runs `environment.python` once, with
+   the same activation, `agent.env` and `PYTHONPATH` a route gets, and imports `carla`,
+   `py_trees`, `numpy`, `scipy` and your agent module. If an import fails it exits 2 before any
+   simulator starts. If all succeed, it writes `<out>/_runner/env_provenance.json`, recording the
+   interpreter, the package versions, your `agent.env`, and a fingerprint of your agent's code
+   (the entrypoint's sha256, the git commit, and whether the agent's directory is clean). The
+   fingerprint is taken once, at that point; a file edited mid-sweep is not caught.
+   `--skip-env-preflight` skips the check, for an interpreter that exists only on compute
+   nodes, and the report records that it was skipped.
 
-   Sanity-check it in one line before going further — this is much cheaper than finding out
-   nineteen minutes into a route:
+4. **Copy and edit a config.** `configs/example.yaml` documents every field. Paths, hosts,
+   queues and environments have no defaults; a missing required field is an error that names
+   it.
 
-   ```bash
-   <your-python> -c "import carla, py_trees, numpy, scipy, cv2; print('ok')"
-   ```
-
-   **Give `environment.python` as an absolute path** to that interpreter. The default,
-   `python3`, is whatever `PATH` holds after `environment.activate` runs, which need not be the
-   environment you just built, and need not be the same one on every host.
-
-   The runner repeats this check for you before every real (non-`--dry-run`) sweep, on either
-   backend, before any simulator is launched. It runs `environment.python` once, on the host the
-   runner runs on, under the job's own `environment.activate`, `agent.env`, `PYTHONPATH` and
-   `agent.working_dir`, and imports `carla`, `py_trees`, `numpy`, `scipy` and your agent module
-   the way the evaluator does. It logs the resolved `sys.executable` and the versions; if any
-   import fails it stops with exit 2 and the traceback, having attempted no route. On success it
-   writes `<out>/_runner/env_provenance.json`:
-
-   ```json
-   {"schema": 2, "checked_at": "2026-01-01T00:00:00Z",
-    "python_executable": "/opt/envs/b2d/bin/python3", "python_version": "3.10.15",
-    "packages": {"numpy": "1.24.4", "scipy": "1.10.1", "carla": "0.9.15", "py_trees": "0.8.3"},
-    "agent_entrypoint": "/path/to/my_agent.py", "agent_import_ok": true,
-    "agent_env": {"MY_AGENT_FLAG": "1"},
-    "agent_code": {"entrypoint_sha256": "<64 hex>", "entrypoint_rel": "my_team/my_agent.py",
-                   "git_head": "<full commit sha>", "scope": "my_team",
-                   "scope_clean": true, "scope_dirty": [], "git_error": null}}
-   ```
-
-   `agent_env` is your `agent.env` as every route receives it (the runner's reserved variables
-   are added per route and are not in it).
-
-   `agent_code` fingerprints the code the agent was: the entrypoint's sha256, its path inside
-   the git repository that holds it (`entrypoint_rel`), that repository's `HEAD`, and whether
-   the entrypoint's top directory in the repository (`scope`; `.` for a file at the top) is
-   clean — `git status --porcelain --untracked-files=all -- <scope>` printing nothing, ignored
-   files excepted. When it is not, `scope_dirty` holds up to 20 of those lines. It records no
-   absolute path. The entrypoint's hash alone would not do: an agent imports its driving code
-   from other files, and the clean-scope check is what covers those. The golden builder
-   (`tests/make_golden.py`) requires every field to match its reference checkout; nothing
-   else reads it. If git cannot answer (not installed, the agent is not in a repository, or
-   git refuses it for "dubious ownership"), `git_head`, `entrypoint_rel`, `scope`,
-   `scope_clean` and `scope_dirty` are `null` and `git_error` says why; the preflight logs a
-   warning and the run goes on. The fingerprint is taken **once, at preflight time**: a file
-   edited after that, mid-sweep, is not caught.
-
-   Versions come from the installed distribution's metadata when the imported module is one of
-   that distribution's files, otherwise from the module's `__version__`, else `null` — so a copy
-   that shadows the installed one (a CARLA egg on `PYTHONPATH` in front of a pip-installed wheel)
-   is never reported under the wheel's version. `--skip-env-preflight` bypasses the check — for an interpreter
-   that exists only on the compute nodes, say — and is recorded in the report as a warning.
-
-4. **Copy and edit a config.** `configs/example.yaml` documents every field.
-   There are no defaults for paths, hosts, queues or environments — a missing required field is
-   an error that names the field, not a fallback to somebody else's filesystem.
-
-5. **Prove the plumbing before spending GPU-hours.** The shipped reference agent
+5. **Test the setup before spending GPU-hours.** The reference agent
    (`reference_agent/constant_velocity_agent.py`) drives forward at a constant speed. It scores
-   badly on purpose; its job is to show that CARLA starts on the right GPU, the route loads, the
-   agent interface binds, criteria attach, and a finalized checkpoint lands in the right place.
+   badly on purpose; it shows that CARLA starts on the right GPU, the route loads, the agent
+   interface works and a finished result lands in the right place.
 
    ```bash
    python run_benchmark.py --config configs/reference_agent.yaml --limit 1 --dry-run
@@ -133,84 +80,62 @@ python run_benchmark.py --config my_config.yaml
    python run_benchmark.py --config my_config.yaml --workers 4
    ```
 
-   Budget roughly **0.14 GPU-hours per route**, so ≈ 67 GPU-hours for the full 475-route set,
-   per model and seed. At 4-way parallelism that is about 17 hours. (Measured: 0.136 for one
-   inference model over one category; see [`STATUS.md`](STATUS.md) H8.)
+   Budget about **0.14 GPU-hours per route**: about 67 GPU-hours for all 475 routes, per model
+   and seed, or about 17 hours with 4 workers. This was measured with one model on one route
+   category (`STATUS.md`, H8).
 
-Interrupt with `Ctrl-C` at any point. Re-running the same command resumes: completed routes are
+Press `Ctrl-C` at any time. Running the same command again resumes: finished routes are
 skipped and retry budgets carry over.
 
 ---
 
 ## Bringing your own agent
 
-The runner adds **no API of its own**: it drives the pinned Bench2Drive evaluator, which
-drives your agent. Anything that already runs under Bench2Drive works with no code changes.
+The runner adds no API of its own. It runs the pinned Bench2Drive evaluator, which runs your
+agent, so an agent that already runs under Bench2Drive works unchanged.
 
-> **If you are porting a *stock* Leaderboard 2.0 agent, one signature has to change.** This
-> README claimed the stock interface worked unchanged until 2026-08-11, and it was wrong — the
-> first hardware validation caught it. The pinned Bench2Drive evaluator diverges from stock:
->
-> ```python
-> # self.agent_instance.setup(args.agent_config)          # stock, commented out upstream
-> self.agent_instance.setup(args.agent_config, save_name)  # what actually runs
-> ```
->
-> A stock `setup(self, path_to_conf_file)` therefore raises
-> `TypeError: setup() takes 2 positional arguments but 3 were given` **before the simulation
-> starts**, and the route settles as `Failed - Agent couldn't be set up`. Because that is a
-> legitimate status, the sweep exits 0 and reports the route complete — so this fails *quietly*
-> unless you read the status. Accept the extra argument with a default:
->
-> ```python
-> def setup(self, path_to_conf_file, save_name=None):
-> ```
->
-> That keeps the agent valid under both callers. Every agent in this ecosystem does the same;
-> carla_garage's own `team_code` agents declare
-> `setup(self, path_to_conf_file, route_index=None, traffic_manager=None)`. The shipped
-> reference agent is the worked example.
+**A stock Leaderboard 2.0 agent needs one change.** The pinned evaluator calls
+`setup(path_to_conf_file, save_name)` with two arguments. A stock `setup(self, path_to_conf_file)`
+raises `TypeError` before the simulation starts, and the route settles as
+`Failed - Agent couldn't be set up`. That is a valid route status, so the sweep exits 0 and the
+mistake is easy to miss. Accept the extra argument with a default, as the reference agent does:
+
+```python
+def setup(self, path_to_conf_file, save_name=None):
+```
 
 Model-specific setup goes in the config, never in the runner:
 
 ```yaml
 agent:
   entrypoint: /path/to/my_agent.py
-  config: "/path/to/model_config.py+/path/to/checkpoint.pth"   # opaque; your agent parses it
+  config: "/path/to/model_config.py+/path/to/checkpoint.pth"   # passed through to your agent
   track: SENSORS
   pythonpath:
-    - /path/to/my_model_repo          # prepended ahead of scenario_runner/leaderboard
+    - /path/to/my_model_repo          # placed ahead of scenario_runner/leaderboard
   env:
-    PLANNER_TYPE: traj                # written verbatim into the per-route script
+    PLANNER_TYPE: traj                # exported in every route's job script
 environment:
+  python: /path/to/conda/envs/my_env/bin/python3
   activate:
     - source /path/to/conda/etc/profile.d/conda.sh
     - conda activate my_env
 ```
 
-`agent.pythonpath` and `agent.env` are the whole mechanism. Surveying the internal
-orchestrators, every model-specific difference reduced to those two — including the model whose
-bundled `leaderboard/` must precede the shared one so an import resolves correctly. The runner
-therefore contains zero model-specific code.
+`agent.env` may not set a variable the runner owns, such as `PORT`, `TM_PORT`, `SEED`,
+`CUDA_VISIBLE_DEVICES` or `CARLA_ROOT`. Each has its own config field, and the runner refuses
+the name at startup and names that field. `PYTHONPATH` and `LD_LIBRARY_PATH` are allowed: the
+runner adds to them rather than replacing them.
 
-`agent.env` may not name a variable the runner owns — `PORT`, `TM_PORT`, `SEED`,
-`PYTHONHASHSEED`, `CUDA_VISIBLE_DEVICES`, `GPU_RANK`, `CARLA_ROOT`, `CHECKPOINT_ENDPOINT` and
-the rest of the runner's exports. Each of those has its own config field, and a value in
-`agent.env` would be fighting the runner for control of worker isolation or the protocol seed,
-silently. The runner rejects those names at startup and tells you which field to use instead.
-`PYTHONPATH` and `LD_LIBRARY_PATH` are *not* reserved — the runner appends to both, so an entry
-there composes rather than replaces.
-
-Every attempt writes its exact command line to
-`<out>/_runner/jobs/<scenario>/<level>/<route>_seed42.sh`. When something misbehaves, read that
-file — it is the ground truth for what ran.
+Every attempt writes its exact command to
+`<out>/_runner/jobs/<scenario>/<level>/<route>_seed42.sh`. When something goes wrong, read
+that file first.
 
 ---
 
 ## Output layout
 
-Result paths **mirror** the route tree, so the `{scenario}/{level}/` component can never be
-dropped:
+Result paths mirror the route tree:
 
 ```
 <out>/<scenario>/<level>/results/<route>_seed42.json     # leaderboard checkpoint
@@ -218,7 +143,7 @@ dropped:
 <out>/_runner/jobs/<scenario>/<level>/<route>_seed42.sh  # exactly what ran
 <out>/_runner/logs/<scenario>/<level>/<route>_seed42.{out,err}
 <out>/_runner/state.json                                 # attempt ledger (resume)
-<out>/_runner/env_preflight.sh, env_provenance.json      # interpreter check + agent fingerprint (Quickstart step 3)
+<out>/_runner/env_preflight.sh, env_provenance.json      # interpreter check (Quickstart step 3)
 <out>/_runner/report.json, report.md                     # final report
 ```
 
@@ -229,196 +154,87 @@ dropped:
 | Code | Meaning |
 |---:|---|
 | 0 | every planned route has a **settled** result |
-| 1 | partial sweep — at least one planned route has no settled result |
-| 2 | configuration / preflight error |
-| 3 | interrupted by signal |
-| 4 | all workers quarantined / no usable GPU |
-| 5 | fatal agent misconfiguration (sensor configuration rejected) |
+| 1 | partial sweep: at least one planned route has no settled result |
+| 2 | configuration or preflight error |
+| 3 | interrupted by a signal |
+| 4 | all workers quarantined, or no usable GPU |
+| 5 | the agent's sensor configuration was rejected |
 
-**A model failing routes is not a runner failure.** A model that scores
-`Failed - TickRuntime` on all 475 routes has produced a valid benchmark result and that run
-exits 0. Exit 1 means we do not *know* the answer for some route — either nothing was written,
-or the record on disk was preserved from an earlier attempt and this run never refreshed it.
-Script your automation on the exit code — a partial sweep can never exit 0.
+**A model failing routes is not a runner failure.** A model that scores `Failed - TickRuntime`
+on every route has a valid result, and the run exits 0. Exit 0 does not mean every route is
+`Completed`; it means every route has an answer. Exit 1 means some route has none. Use the exit
+code in scripts: a partial sweep never exits 0.
 
-### Simulator start-up and evaluator exit 75
-
-The patched evaluator waits a fixed 60 s after starting CARLA, then probes the world
-(`get_world().get_settings()` with a 10 s timeout, every 10 s) until it answers, logging
-`world ready after N s` (N counted from launch) to the route's `.out` log. A world that has not
-answered `OODPB_WORLD_READY_S` seconds after launch makes the evaluator exit with status
-**75**. That is the *evaluator's* status, not one of the runner's exit codes above: the runner
-settles it as an infrastructure failure — `infra_budget` is charged, the worker's quarantine
-streak advances, and nothing on disk is read as that attempt's result.
-
-The deadline only works below `execution.route_timeout_s`. The route's wall clock starts at
-launch (under SLURM, when the job starts running), so simulator start-up is spent from the same
-budget as the route itself; a deadline at or above the route timeout never fires, and the
-attempt is killed as a timeout instead, which leaves the quarantine streak alone. Each route
-job therefore exports a default of two thirds of `execution.route_timeout_s`, at most 1800 s
-(1200 s for a 1800 s route timeout). To use another value, set it in `agent.env` (for example
-`OODPB_WORLD_READY_S: "2400"`) or export it in `environment.activate`; your value wins over the
-default, and like any other edit to those sections it changes the config digest. A value that is
-only set in the shell you start the runner from is ignored, so it cannot change a run unrecorded.
+**Simulator start-up.** The patched evaluator waits 60 s after starting CARLA, then asks the
+world for its settings every 10 s and logs `world ready after N s`. If the world has not
+answered within `OODPB_WORLD_READY_S` seconds, the evaluator exits with status **75**, which
+the runner counts as an infrastructure failure. The default is two thirds of
+`execution.route_timeout_s`, at most 1800 s. To change it, set it in `agent.env` or export it in
+`environment.activate`. It must stay below the route timeout, because start-up time counts
+against the route's clock.
 
 ---
 
-## Configuration reference
+## Configuration notes
 
-`configs/example.yaml` is the annotated reference. YAML needs PyYAML; TOML (Python ≥ 3.11) and
-JSON need nothing beyond the standard library. The format is chosen by file extension.
+`configs/example.yaml` is the full reference. YAML needs PyYAML; JSON, and TOML on Python 3.11
+and later, need only the standard library.
 
-The fields worth understanding before a long run:
+**`gpus`: two numbers per GPU.** `cuda` pins the agent (`CUDA_VISIBLE_DEVICES`); `vulkan` pins
+the CARLA server (`-graphicsadapter`). Both must be unique. If `vulkan` is missing it is
+assumed equal to `cuda`, with a warning. Under SLURM, `slurm.vulkan_index_scope: allocation`
+allows every one-GPU job to use Vulkan adapter 0. Use it only after checking, inside a job,
+that the GPU's UUID or PCI address matches on the CUDA and Vulkan sides.
 
-### `gpus` — two indices, not one
+**`ports`: fixed per worker, and checked.** Worker *i* gets `rpc_base + i*stride` and
+`tm_base + i*stride`; CARLA uses three ports from its RPC port, so `stride` must be at least 4.
+At startup the local backend locks every port in its block (one file per port under `/tmp`, or
+`OODPB_PORT_LOCK_DIR`). A port locked by another oodbench run is refused at once. It then checks
+that no port is in use, waiting up to `execution.port_release_timeout_s` (90 s) for a busy one to
+free up before it refuses to run. It never moves to other ports by itself. The locks only
+protect runs that share the lock directory, so containers on one host should mount a shared one.
 
-```yaml
-gpus:
-  - {cuda: 0, vulkan: 0}
-  - {cuda: 1, vulkan: 1}
-```
-
-`cuda` pins the **agent** via `CUDA_VISIBLE_DEVICES` locally and is the scheduler-global lookup
-key under SLURM. `vulkan` pins the **CARLA server** via `-graphicsadapter`. Omitting `vulkan`
-assumes it equals `cuda` and prints a warning. Use stable UUID or PCI identity to confirm.
-
-CUDA indices and host-scoped Vulkan indices must be unique. A qualified one-GPU SLURM cgroup may
-instead enumerate each allocated physical GPU as job-local Vulkan adapter 0; use
-`slurm.vulkan_index_scope: allocation` only after matching in-job CUDA/NVML and Vulkan UUID or
-PCI identity. This is distinct from GPU stacking.
-
-### `ports` — deterministic, and probed
-
-Worker *i* gets `rpc_base + i*stride` and `tm_base + i*stride`. A CARLA instance occupies three
-consecutive ports from its RPC port (RPC, streaming, secondary), so `stride` must be ≥ 4.
-
-The whole block is probed at startup and the runner **refuses to run** if any of it is busy. It
-will not relocate itself: silently shifting is how two concurrent runs end up sharing a
-simulator. If the block is taken, free it or move `rpc_base`/`tm_base`.
-
-Before probing, the local backend also takes a lock on every port of its block — one file per
-port, `/tmp/oodbench-port-<port>.lock` — and holds it until the run ends. A second oodbench run
-on the same machine whose block shares *any* port with it is refused at once with
-"held by another oodbench run", instead of starting and then killing the first run's
-simulators as orphans (each run reaps its own block on the way out). The locks are taken even
-with `probe: false`, are shared by all users, and vanish with the process if a run crashes; the
-empty files stay and are harmless. Set `OODPB_PORT_LOCK_DIR` to use another directory; every
-run that should see the others must use the same one. If that directory cannot be used, the run
-logs a warning (also in the report) and continues without the locks.
-
-The locks only coordinate oodbench runs that share the lock directory — the same machine and
-the same `/tmp`, so two containers with private `/tmp`s do not see each other. A CARLA started
-by hand on the block takes no lock; the startup probe still catches it.
-
-### `resume.mode`
+**`resume.mode`.**
 
 | Mode | Behaviour |
 |---|---|
-| `skip_terminal` (default) | skip a route only when its record is a legitimate outcome |
-| `skip_any_final` | skip any finalized record, including one left by a crash |
-| `none` | re-run everything (requires `--force`) |
+| `skip_terminal` (default) | skip a route only when its result is a final, legitimate outcome |
+| `skip_any_final` | skip any finished result, including a crash; matches the old internal `--skip_if_final` |
+| `none` | re-run everything (needs `--force`) |
 
-`skip_any_final` reproduces the internal orchestrator's `--skip_if_final` exactly. It carries a
-real hazard: interrupt a sweep while a route holds a `Failed - Agent crashed` checkpoint, resume,
-and that route is accepted forever without ever being retried — even though the same run *would*
-have retried it had it not been interrupted. `skip_terminal` makes within-run and across-run
-retry semantics agree.
+`skip_any_final` has one hazard: a route interrupted while it held a `Failed - Agent crashed`
+result is never retried after a resume, although the same run would have retried it.
 
-### `retry` — four separate budgets
+**`retry`: four budgets.** Each counts attempts of one kind:
 
-- `record_budget` — attempts that **ended on their own** having written a *retryable* record.
-- `infra_budget` — **consecutive** attempts that wrote no record at all (timeout, segfault,
-  non-zero exit), and attempts that never launched. Consecutive because what it bounds is a
-  machine that is broken *now*: any attempt that produces a record of its own clears the count,
-  so hiccups scattered hours apart across a long sweep cannot add up to a gate on a route that
-  has been running fine. The lifetime total is reported separately (`attempts.infra_total`) and
-  gates nothing. **Read every budget as "N attempts on this axis, then accept or give up", not
-  "N retries."** `record_budget: 3` gives three record-producing attempts; `infra_budget: 3`
-  gives three attempts that wrote nothing. The one place they differ is at zero, and only
-  because this is the sole budget consulted *before* an attempt runs: `infra_budget: 0` still
-  means one try, since the gate needs a counter that was actually charged. Say `1` if that is
-  what you mean.
-- `tickruntime_budget` — its own axis, default **0**, matching the reference sweeps:
-  `Failed - TickRuntime` means the agent is slower than CARLA's tick budget, which is a
-  model-side property that retrying does not fix.
-- `killed_budget` — attempts the runner **killed** (wall clock, fault, quarantine) while a
-  crash-shaped record was on disk. That record is ambiguous by construction: it is what a dying
-  simulator writes, and also what a route that finished and hung in teardown leaves behind. It
-  gets its own bounded axis so a kill can neither spend the model's record retries nor leave the
-  route unable to ever settle.
+- `record_budget`: attempts that ended normally and wrote a retryable result.
+- `infra_budget`: **consecutive** attempts that wrote nothing (timeout, crash, failed launch).
+  A healthy attempt resets the count.
+- `tickruntime_budget`: default 0. `Failed - TickRuntime` means the agent is slower than
+  CARLA's tick budget, and retrying does not fix that.
+- `killed_budget`: attempts the runner killed while a crash-shaped result was on disk. That
+  result might be the model's or an artefact of the kill, so it gets its own bounded budget.
 
-They are separate so that a bad GPU cannot consume a route's *record* retries and leave behind a
-result-shaped artifact that was actually produced by infrastructure. Which budget an attempt
-charges is decided by **how the attempt ended**, never by what happens to be on disk — the full
-table is normative in `DESIGN.md` §6A.
+A broken GPU therefore cannot use up a route's model retries. Exhausting `infra_budget` leaves
+the route **unsettled**: the run exits 1, and later runs keep it that way. After fixing the
+machine, re-run with `--retry-infra-exhausted`. That resets the infrastructure count of exactly
+those routes and changes nothing else. It applies to the whole ledger, ignoring `--limit` and
+`--routes`, and combined with `--dry-run` it shows what would run without saving anything. Do
+not add it to scripts unconditionally: a route that always hangs would then be retried for ever.
+The exact rules are in `DESIGN.md` §6A, and a test checks the code against them.
 
-`worker_quarantine_after` consecutive infra failures on one worker slot pull that slot from the
-pool. Two causes produce this: a wedged GPU, or a port block that stays occupied (including
-`TIME_WAIT`). A `TIMEOUT` does not count toward the streak. A final record resets it, except a
-crash-type record left by an attempt that ended abnormally, which leaves the streak unchanged
-(`DESIGN.md` §6A.5). Only local backends have stable slots; SLURM workers are never quarantined.
+After `worker_quarantine_after` consecutive infrastructure failures, a local worker slot is
+taken out of the pool. The usual causes are a stuck GPU or a port that stays busy. Timeouts do
+not count towards this.
 
-`infra_budget` is the one budget that never settles a route: exhausting it means *we do not know
-this route's answer*, so the run exits 1 rather than presenting whatever is on disk as a result.
-That verdict is persisted, so it survives into later runs — deliberately, but not for ever.
-Repair the machine and re-run with **`--retry-infra-exhausted`**:
+**`routes.manifest`.** Point it at `routes/MANIFEST.tsv`. The runner then checks every route
+file's sha256, so an edited route is detected. `strict_manifest: true` makes a mismatch a
+startup error.
 
-```bash
-python run_benchmark.py --config my_config.yaml --retry-infra-exhausted
-```
-
-It clears the infrastructure counter of exactly the routes that hit the gate, and nothing else:
-every result file, every settlement bit and every other budget is untouched, and the lifetime
-infra count still records what happened. It buys attempts, never answers — which is why, unlike
-`--resume-mode none`, it does not need `--force`. Using it is recorded in the report.
-
-Two things worth knowing before you reach for it. It is applied to the **whole ledger** before
-planning, so `--limit` and a narrowed `--routes` do not scope it. And it is safe to preview:
-`--dry-run` writes nothing at all — it never saves the ledger, and it starts and stops no
-process — so combining the two shows you
-which routes this would unlock and what would then run, without spending the recovery you asked
-it to describe.
-
-### Resuming a tree written by an older runner
-
-Three different questions get three different answers, and the runner tells you about each:
-
-| what changed | how you find out |
-|---|---|
-| a setting you chose | `config_digest` differs → *"produced by a DIFFERENT configuration"* |
-| the runner build | `runner.version` is stamped into every report |
-| the **rules** — which budget a cell charges, whether it settles | `accounting_epoch` in the ledger → a warning naming both epochs |
-
-The third exists because the second and third are easy to conflate. Adding a config key at its
-default does **not** move the digest (a key nobody set is not a setting they changed), but the
-`DESIGN.md` §6A model changed alongside one such key — before epoch 2, every final retryable
-record charged the `record` axis, including attempts that ended abnormally, which now charge the
-separate bounded `killed` axis. Resuming across that boundary is fine and the counters carry over
-untouched; routes still in flight may simply settle after a different number of attempts. You are
-told so you can decide whether that matters, not because anything is wrong.
-
-### Complete vs. settled
-
-A route counts as complete only when its result file is final **and** the ledger says this run
-settled it. The two come apart in one direction that matters: a launch that fails preserves the
-record it was about to replace (it must never be destroyed), but preserving a record is not
-answering the route. Such a route is reported under *"no settled result"* with
-`unsettled_reason: unrefreshed_record` and the run exits 1.
-
-`unsettled_reason` separates three different problems that share one headline number, and it is
-decided ledger-first: `not_reached` (the planning loop never got to this route — it stops at a
-fatal agent abort), then `unrefreshed_record` (a record is on disk from an earlier attempt and
-the retries this run planned never ran), then `no_record` (nothing final was ever written).
-
-A model failing routes is still not a runner failure: `Failed - TickRuntime` on all 475 routes,
-or a retryable record whose retry budget is spent, are settled results and exit 0.
-
-### `routes.manifest` — recommended
-
-Point it at the frozen `routes/MANIFEST.tsv`. The runner then checks the discovered route set
-against it by path **and sha256**. This catches an *edited* route XML, which no directory-name
-heuristic would — and an edited route silently changes the benchmark definition.
-`strict_manifest: true` makes any mismatch a startup error.
+**Resuming after a config change.** A report warns *"produced by a DIFFERENT configuration"*
+when a setting changed since the output root was written. Adding a key at its default value
+does not trigger it (`DESIGN.md` §6A.11). The report also records the runner version, and the
+ledger records which version of the retry rules it was written under.
 
 ---
 
@@ -436,50 +252,52 @@ slurm:
   vulkan_index_scope: host  # host | allocation
 ```
 
-One job per route, same config object, same planning/resume/retry/reporting logic. Concurrency
-is `slurm.max_parallel` — **not** `execution.workers`, which sizes the local pool and is ignored
-here — and it is gated on **our own submitted job IDs**, not on a `squeue` name grep.
-Submission is rate-limited.
+One job per route, with the same planning, resume, retry and report logic as the local backend.
+The number of jobs in flight is `slurm.max_parallel`; `execution.workers` is ignored. The
+runner counts only the jobs it submitted itself, and spaces submissions by
+`slurm.submit_interval_s`.
 
-`host` scope retains globally unique Vulkan adapters. `allocation` scope supports sites whose
-one-GPU device cgroups remap each allocated NVIDIA GPU to job-local Vulkan adapter 0. It permits
-repeated Vulkan indices across distinct scheduler-global IDs and rejects jobs that expose more
-than one CUDA GPU. Establish that site contract by stable UUID or PCI evidence before using it.
+- `slurm.extra_directives` entries are copied into the job script as they are, so each must be
+  a complete `#SBATCH ...` line. `sbatch` stops reading directives at the first other line, and
+  bash then runs that line as a command.
+- There is no early check that CARLA is still alive. A simulator that freezes mid-route is
+  caught only by `execution.route_timeout_s` and retried under `infra_budget`, so size both for
+  your agent.
+- Submit one route and read the generated job script before starting a large sweep.
 
-**The SLURM backend is validated on a real scheduler** at two-way concurrency (one full route
-category, seed 42; `STATUS.md` H9). It is not yet measured at the full 475-route scale or larger
-multi-node fan-out, and it has no early liveness probe — a CARLA server that transiently freezes
-mid-route is caught only by `execution.route_timeout_s`, absorbed by `retry.infra_budget` and
-settled on a later attempt, so size both for your agent. Submit a single route and read the
-generated `.sbatch` before launching a large sweep.
+**Set-aside checkpoints.** Before it submits a job, the runner copies the route's existing
+checkpoint to `<checkpoint>.aside-<ns>`. If the route has none, it writes a small
+`<checkpoint>.unsettled-<ns>` file instead. Either file is removed once the job has ended. If
+the runner cannot tell which job is the route's, or cannot confirm a cancelled job has ended,
+it stops and leaves the file in place. While any such file exists, a SLURM run refuses to
+start and lists them. For each one:
+
+1. Stop any job of the earlier run that is still queued or running
+   (`squeue -u $USER -o '%i %j %k'`, then `scancel <id>`), and confirm with `sacct -j <id>` that
+   it has ended. An `.unsettled-` file names its job.
+2. For an `.aside-` file, either restore it (`mv <checkpoint>.aside-<ns> <checkpoint>`) or
+   delete it so the route runs again. Delete an `.unsettled-` file once its job has ended.
+3. If the checkpoint exists again, a job wrote it after the copy was made; keep whichever you
+   trust.
+
+Then resume.
 
 ---
 
 ## Running the tests
 
-No GPU, no CARLA, no network, no third-party packages (the four tests that load the shipped YAML
-templates need PyYAML and are skipped without it):
+No GPU, CARLA or network is needed. Only the four tests that load the shipped YAML templates
+need PyYAML, and they are skipped without it.
 
 ```bash
 python -m unittest discover -s tests -t .
 ```
 
-377 tests covering the port allocator (at worker counts far above any real GPU count) and its
-run locks, the finalization predicate and status taxonomy, path mirroring, manifest integrity,
-the resume and budget decision, the attempt-accounting model of `DESIGN.md` §6A, the exit
-contract, the ledger,
-the generated job script, the shipped configuration templates, backend concurrency, and the
-SLURM backend (its fault paths replayed from output captured on a real scheduler) — including
-the end-to-end tests (24 in `tests/test_integration_local.py`, plus more for infra-gate recovery and for the
-trap under a simulator that crashes into the shared stderr) that drive the full
-supervision loop against a stand-in evaluator, exercising resume, retry, timeout kill,
-quarantine and every exit code.
-
-One of them parses the normative table in `DESIGN.md` §6A.5 and drives the settle path for all
-24 of its cells, so the document and the code cannot drift apart silently — that is a defect
-this component has already had twice.
-
-What they do **not** cover is anything that requires a running simulator. See `STATUS.md`.
+There are 377 tests. They cover the port allocator and port locks, result parsing, resume and
+the retry budgets, the exit codes, the job script, the shipped configs, and both backends. The
+SLURM tests replay output captured from a real scheduler. The end-to-end tests run the whole
+loop against a stand-in evaluator. Anything that needs a real simulator is covered only by the
+hardware runs in `STATUS.md`.
 
 ---
 
@@ -487,27 +305,29 @@ What they do **not** cover is anything that requires a running simulator. See `S
 
 | Symptom | Likely cause |
 |---|---|
-| exit 2, "reserved port(s) ... are held by another oodbench run on this machine" | another sweep holds a lock on part of this block (its lock file is named in the message). Find it with `fuser -v <lockfile>` or `lsof <lockfile>` (as root if another user started it). Let it finish, stop it, or move `ports.rpc_base` / `ports.tm_base` so the two blocks do not overlap. Nothing on the ports was touched. |
-| exit 2, "reserved port(s) already in use" | another run, or a leftover simulator, still holding the block after the startup wait (`execution.port_release_timeout_s`, 90 s by default). Free the ports or move `ports.rpc_base`. The runner will not relocate silently. |
-| exit 5 immediately | the agent's `sensors()` was rejected for the configured `track`. Fix the sensor set; it would fail identically on all 475 routes. |
-| exit 2, "environment preflight: ... cannot import ..." | `environment.python` lacks a dependency, or is not the interpreter you think (see the logged `sys.executable`). Fix it, using an absolute path; see Quickstart step 3. |
-| exit 2, "leaderboard.work_dir=... has no leaderboard/data/weather.xml" | `work_dir` is one level too high. It must be the Bench2Drive checkout itself (the directory holding `leaderboard/` and `scenario_runner/`), not the repository that contains it. |
-| Route `.out` log ends in "world NOT ready after N s" | CARLA started but its world never answered (evaluator exit 75, charged to `infra_budget`). A wedged GPU or a very slow map load; probe the GPU, or raise `OODPB_WORLD_READY_S`. |
-| Every route `Failed - Agent couldn't be set up` | import error or missing checkpoint. Read `<out>/_runner/logs/.../*.err`. |
-| Many `Failed - TickRuntime` | the agent is slower than CARLA's tick budget. Model-side; retrying does not fix it. |
-| Throughput far below `workers × 1 route` | the `vulkan` indices are probably wrong and every simulator is on one GPU. Run `--check-gpus`. |
-| A worker gets quarantined | that GPU is likely wedged. Probe it before reusing it. |
-| exit 2, "agent.env may not set variable(s) the runner owns" | your model config sets one of the runner's own variables. Use the config field the error names. |
-| exit 2, "gpus[i].vulkan=N is already claimed" | two entries share a host-scoped Vulkan adapter. Fix the mapping, or use SLURM allocation scope only after stable in-job UUID/PCI validation. |
-| SLURM: fewer jobs in flight than expected | concurrency is `slurm.max_parallel`; `execution.workers` does nothing under this backend. |
-| Report says routes were skipped with "budget already spent" | a previous run exhausted their *record* retries. The record on disk is the answer; investigate the logs before deciding it is wrong. |
-| Report says the **infrastructure** retry budget is gone | the machine, not the model. Fix it, then re-run with `--retry-infra-exhausted` — no result file is touched and no other budget moves. |
-| Resuming an output root warns "produced by a DIFFERENT configuration" | some setting really did change. Adding a key that holds its default does *not* trigger this (see `DESIGN.md` §6A.11); a changed agent or CARLA build should use a fresh output root. |
+| exit 2, "held by another oodbench run on this machine" | another sweep holds part of this port block; the message names its lock file (`fuser -v <lockfile>` finds the process). Wait for it, stop it, or move `ports.rpc_base` / `ports.tm_base`. |
+| exit 2, "reserved port(s) already in use" | another run or a leftover CARLA still holds the block after the 90 s wait. Free the ports or move `ports.rpc_base`. |
+| exit 2, "environment preflight: ... cannot import ..." | `environment.python` lacks a package or is not the interpreter you think (the log shows `sys.executable`). Use an absolute path; see Quickstart step 3. |
+| exit 2, "leaderboard.work_dir=... has no leaderboard/data/weather.xml" | `work_dir` must be the Bench2Drive checkout itself, the directory holding `leaderboard/` and `scenario_runner/`. |
+| exit 2, "agent.env may not set variable(s) the runner owns" | use the config field the error names. |
+| exit 2, "gpus[i].vulkan=N is already claimed" | two entries share a Vulkan adapter. Fix the mapping. |
+| exit 5 immediately | the agent's `sensors()` was rejected for the configured `track`. It would fail the same way on every route. |
+| route `.out` log ends in "world NOT ready after N s" | CARLA started but its world never answered (evaluator exit 75). A stuck GPU or a very slow map load; check the GPU or raise `OODPB_WORLD_READY_S`. |
+| "Exiting abnormally (error code: 143)" after a finished result | normal: the runner stopped CARLA with SIGTERM once the route was done. |
+| every route `Failed - Agent couldn't be set up` | an import error, a missing checkpoint, or a stock one-argument `setup()`. Read `<out>/_runner/logs/.../*.err`. |
+| many `Failed - TickRuntime` | the agent is slower than CARLA's tick budget. This is a model result, not a fault. |
+| throughput far below `workers × 1 route` | the `vulkan` numbers are probably wrong and every CARLA is on one GPU. Run `--check-gpus`. |
+| a worker is quarantined | probably a stuck GPU, or a port that stayed busy. Check the GPU before reusing it. |
+| SLURM: fewer jobs than expected | concurrency is `slurm.max_parallel`, not `execution.workers`. |
+| SLURM: run refuses to start, listing `.aside-` or `.unsettled-` files | an earlier run stopped with a job it could not account for; see "Set-aside checkpoints". |
+| report: routes skipped with "budget already spent" | an earlier run used up their model retries. The result on disk is the answer; read the logs before deciding it is wrong. |
+| report: the infrastructure budget is spent | the machine, not the model. Fix it, then re-run with `--retry-infra-exhausted`. |
+| warning: "produced by a DIFFERENT configuration" | a setting changed. A changed agent or CARLA build should use a fresh output root. |
 
 ---
 
 ## Documents
 
-- `DESIGN.md` — the locked decisions, with rationale. Read before changing anything structural.
-- `STATUS.md` — what is done, what is untested, and what must be validated on hardware.
-- `../docs/HARDWARE_VALIDATION_ISSUES.md` — measured defects and decisions; no silent repairs.
+- [`DESIGN.md`](DESIGN.md): the design decisions and their reasons. Read it before changing
+  anything structural.
+- [`STATUS.md`](STATUS.md): what has been tested on hardware, and what is still open.

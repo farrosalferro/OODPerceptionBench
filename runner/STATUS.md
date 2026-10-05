@@ -1,595 +1,204 @@
-# Runner status — local backend hardware-validated first cut
+# Runner status
 
-> **Artifact version:** runner v0.9.0.dev0, for **OOD-PerceptionBench release v0.9**, which
-> binds to **arXiv v1**.
+> **Runner v0.9.0.dev0, for OOD-PerceptionBench release v0.9 (arXiv v1).**
 >
 > **Read this before trusting the runner with GPU-hours.**
 
-A production runner for this benchmark includes scale and multi-GPU evidence that this release
-does not yet have. What exists now is the part that is expensive to change later — the design
-decisions in `DESIGN.md` — plus a working local implementation whose *logic* is covered by 377
-automated tests and whose *simulator interaction* was exercised against CARLA 0.9.15 on
-2026-08-11 and 2026-08-12. Single-route execution, two-worker one-GPU stacking, exact port
-isolation, real Ctrl-C/reaping/resume, failure accounting, and a nine-route PDM-Lite golden were
-observed. The table in §2 states the remaining limits; notably multi-GPU placement and the full
-475-route scale are not validated. The SLURM backend, previously broken, is now validated at
-two-way concurrency on a single node (§2, H9).
+The runner's logic (resume, retry accounting, worker isolation, exit codes, seed handling) is
+covered by 377 automated tests that run against a stand-in evaluator. Its behaviour with a real
+CARLA 0.9.15 was tested on the dates in §2: single routes, two workers sharing one GPU, port
+isolation, interrupt and resume, real failure accounting, the nine-route acceptance run, and the
+SLURM backend on one node.
 
-Nothing below should be read as "tested" unless it says so explicitly.
-
-### Seven defects found and fixed on review
-
-*(Twenty-three in total, once the four later review rounds below are counted. The numbering
-runs straight through: 1–7 here, 8–11 from the cross-review, 12–17 from the verification pass,
-18–19 from the round that verified **that**, and 20–23 from the different-family cross-review of
-**that**. Every round found real defects in the one before it, without exception; the honest
-reading of the sequence is that the count is a lower bound, not a total.)*
-
-Every one was found by **reading** the code — two on a first correctness pass, five more in an
-independent cross-review of that pass. Each was reproduced with a failing probe before being
-fixed, and each is now locked down by a regression test that fails against the pre-fix code.
-
-None of them violates the exit contract, which is why nothing else in the suite noticed them,
-and none of them changes how a route is *scored* — so none can move a published number. What
-they change is whether a route gets its fair attempt, and whether two workers can quietly end
-up sharing something they must not share.
-
-**Result accounting** — all fail in the same direction: *something that is not a benchmark
-result gets accounted as one*.
-
-1. **A launch that never happened destroyed the record it was going to replace.** Both backends
-   deleted the checkpoint *before* confirming the launch. A route holding a retryable record
-   (`Failed - Agent crashed`, budget remaining) is planned as RUN, so it arrives at `submit()`
-   with a real result on disk; a busy port — or on SLURM a refused `sbatch`, which is routine —
-   then wiped it. Now taken aside and restored on every failure path.
-2. **Ctrl-C spent the interrupted route's infrastructure retry budget.** With the shipped
-   `infra_budget: 3`, three interrupted sweeps permanently marked an in-flight route
-   `skip_exhausted` — "this route has NOT produced a benchmark result" — for a route that never
-   actually failed. Interrupts now charge nothing and do not count toward worker quarantine.
-3. **A failed launch charged the *record* budget instead of the infra budget.** The fix for (1)
-   restores the pre-existing record, so the accounting step was then reading an *earlier*
-   attempt's output as if this attempt had produced it. Infrastructure faults spent the model's
-   retries, the quarantine detector never fired (a "record" reset the consecutive-failure
-   counter), and once the record budget ran out the route was marked finished with the stale
-   record frozen in as its answer — having never actually been retried. A failed launch is now
-   infrastructure unconditionally, and exhausting the infra budget this way says so in the
-   report rather than exiting quietly.
-4. **The interrupt fix was only half done.** It covered the *no record* path, but killing the
-   worker's process group takes CARLA down with it and the evaluator's crash handler writes a
-   final `Failed - Simulation crashed` record on the way out — so the commonest shape of an
-   interrupted route is a route *with* a retryable record, which was still charged. A few
-   Ctrl-Cs could spend a route's real retries and then freeze that interrupt artefact in as the
-   benchmark result. Interrupts now charge no budget of any kind; an *accepted* record is still
-   accepted, because that route genuinely finished.
-
-**Isolation and determinism** — all silent by construction: nothing errors when they go wrong.
-
-5. **`agent.env` was emitted *after* the runner's own exports**, so a model config containing
-   `PORT`, `TM_PORT`, `SEED` or `CUDA_VISIBLE_DEVICES` won. That is simultaneously an isolation
-   hole (two workers on one simulator) and a determinism hole (a per-model seed, while the
-   result filename still claims `_seed42`). Reserved names are now rejected at config load with
-   the field to use instead, *and* the runner's exports are emitted last — two defences, because
-   either alone is one refactor away from being lost.
-6. **SLURM: `slurm.max_parallel` gated nothing**, because the supervision loop read
-   `execution.workers` regardless of backend; and an out-of-range slot was wrapped with
-   `pairs[worker % len(pairs)]`, which hands two *concurrently running* jobs the same RPC and
-   traffic-manager ports. Backends now declare their own `concurrency`, the loop reads only
-   that, and an out-of-range slot is refused rather than wrapped.
-7. **`gpus:` validation deduped only the CUDA index, not the Vulkan adapter.** Two entries could
-   therefore share `-graphicsadapter`, putting both CARLA servers on one physical GPU while
-   their agents ran on different ones — the exact failure the two-index design exists to
-   prevent. Both indices are now unique-checked.
-
-That defects of this kind survived in code this heavily commented is the argument *for* hardware
-validation, not against it. Items 5–7 in particular are the shape of bug that a real sweep
-surfaces as "throughput is oddly bad" long before anyone suspects correctness.
-
-### Four more, from a second (different-family) cross-review
-
-A later cross-review by two models from other labs returned BLOCKING on nine findings; four of
-them landed in the retry-accounting and settle path that items 1–4 above had already been
-repaired once. They were four symptoms of one missing definition, so they were fixed as one
-model rather than four patches — `DESIGN.md` §6A is that model, and it is normative.
-
-8. **A timeout or fault kill charged the *record* budget** (the same defect as item 4, on the
-   path items 2–4 did not cover: `local.py` reaches TIMEOUT/FAULT through the same `killpg` as
-   Ctrl-C, but with the interrupt flag clear). A kill-manufactured `Simulation crashed` could
-   spend the model's retries, reset the quarantine detector, and freeze in as the result.
-9. **`decide()` ignored the infra budget whenever a final retryable record existed**, so such a
-   route retried past its infrastructure limit for ever.
-10. **An infra-exhausted failed launch still exited 0.** Item 3's repair correctly stopped the
-    failed launch from destroying or settling the preserved record — but the *report* derived
-    completeness from `rec.final` read off disk, and a preserved record is final. Completeness
-    is now `final AND settled`.
-11. **A documented report-time seed re-check did not exist.** Now implemented, over the result
-    *tree* rather than over the planned paths (which carry the seed by construction and are
-    already checked at plan time), as a warning naming the stray files.
-
-Adversarial review of the fix itself then changed it in four further places, each recorded in
-§6A.6: an abnormal end holding a crash-shaped record gets a **bounded** ambiguity budget rather
-than the never-settling infra one (charging infra there would have made six *published* v0.9
-result rows unreproducible at exit 1); the same for an unrecognised status; `NEVER_STARTED`
-outranks the teardown flag in a strict precedence order; and the report's status breakdown was
-split so a route can never be counted as both a result and a gap.
-
-### Six more, from an independent verification pass over that repair
-
-The repair above was then verified by a pass that had not written it, and returned six defects.
-Two are the same *class* as item 11 — a rule stated in one artifact and not implemented in the
-other — so the response includes one structural change and not only six fixes.
-
-12. **The `FAULT` demotion ignored the child's exit status.** The demotion exists because the
-    CARLA server shares the attempt's stderr, so a UE4 crash during *shutdown* must not condemn
-    an evaluator that finished on its own. Written with no test on `rc`, it also swallowed the
-    evaluator itself dying (SIGSEGV / SIGABRT / OOM) with a record already on disk, handing that
-    ambiguous record to the model's own record budget — item 8 again, by a third door. The
-    demotion now requires `rc == 0`. A non-zero exit *alone* is still a clean exit, because the
-    vendored evaluator exits `-1` from its own crash paths.
-13. **The code and the model table disagreed on the ambiguous cell.** The model as pinned sent
-    `ABNORMAL_END × RETRY_RECORD` to the never-settling `infra` budget; the code charges the
-    bounded `killed` axis. The code stands (it is what the table's own dead-end invariant
-    requires, and `infra` there would make six published rows unreproducible), and `DESIGN.md`
-    was moved to it — **and the 24-cell table is now parsed out of `DESIGN.md` by the test
-    suite, which drives the settle path for every cell.** Doc/code drift in this table is a test
-    failure from here on, in either direction.
-14. **The fix for item 10 created a permanent, unrecoverable exit 1.** A route holding a genuine
-    model record whose *infra* budget was spent by failed launches could never settle — on that
-    run or any resume, because budgets are persisted — which violates the model's own invariant
-    that no cell holding a final record may be a dead end. Closed without re-opening item 10
-    (an unrun route still never reports complete): `attempts_infra` now counts *consecutive*
-    failures, so scattered hiccups cannot gate a healthy route mid-run; and the gate has a
-    lossless, first-class release, `--retry-infra-exhausted`, which every message that reports
-    the gate names. `DESIGN.md` §6A.5 now carries the termination argument, with a bound.
-15. **`decide(..., killed_budget=0)` was an unsafe default a caller could reach by forgetting a
-    keyword** — it settled the route on a record the kill may have manufactured. Neither
-    direction of a default is safe there, so the parameter is now required.
-16. **Adding `retry.killed_budget` changed the config digest of every pre-existing config**,
-    which made every existing output root announce "produced by a DIFFERENT configuration ...
-    use a fresh output root" — advice that throws away 475 routes of finished work over a key
-    nobody set. A key holding its pinned introduction value is now excluded from the digest;
-    setting it to anything else still moves the digest.
-17. **`unsettled_reason` collapsed two of its three values.** `rec.final` was tested before
-    "was this route ever reached", so `not_reached` was unreachable for any route with a record
-    on disk — precisely the routes it is for. Now decided ledger-first.
-
-Each of the six has a regression test in `tests/test_verification_findings.py`, and **each of
-those tests was run against the pre-fix tree and observed to fail first**; the recorded failure
-is quoted in the test's own docstring. That is called out because four guards shipped in the
-previous round were never seen red, and a test that has only ever been green does not
-distinguish "the code is right" from "the test and the code were written by the same hand".
-
-### Two more, from a third round over that verification
-
-The verification pass was itself verified, by three independent agents. Two of them re-derived
-the same two defects from different directions and then failed to refute them. Both are the
-familiar shape: a rule stated correctly and implemented over the wrong quantity.
-
-18. **The hard-death gate hung on a stderr substring, and two of the substrings were wrong.**
-    Item 12 gated the *demotion* on `rc == 0`, which is right — but the demotion is only ever
-    reached inside `if fault:`, and `fault` came from matching literal text against a stream.
-    `"Aborted (core dumped)"` was written with a single space and **had never matched anything**,
-    because a shell pads the signal name into a fixed column; SIGKILL's message is the bare word
-    `Killed`, which was in no pattern at all. So an evaluator that died of SIGABRT or was taken
-    by the OOM killer reached `if not fault:` and was recorded as *the process decided to stop* —
-    its crash-shaped record charged to the model's own record budget and settled as the model's
-    verdict, at exit 0, with no warning. Item 8 for the fourth time. Two operationally identical
-    events were accounted opposite ways purely on which signal it was; under
-    `configs/reference_agent.yaml`, which ships `record_budget: 1`, the wrong branch settles on
-    the **first** attempt with no retry at all. Death by signal is now read from the exit status,
-    where it needs no text and no locale — `rc < 0`, or the shell's `128+N` bounded above by
-    `NSIG` so that the evaluator's own `sys.exit(-1)` → 255 stays a self-terminated verdict.
-    The dead patterns were repaired too, because they are still consulted while an attempt is
-    *running*, where there is no exit status yet.
-19. **`retry.infra_budget: 0` was a total dead end** — the very thing item 14 was written to
-    remove, re-created by an off-by-one rather than by a rule. The infra gate is the only one
-    evaluated *before* the axis it bounds has been charged, so `0 >= 0` fired on a virgin ledger
-    and every route was skipped before anything ran: exit 1, zero executions, on a completely
-    healthy machine. Nothing could release it — `--retry-infra-exhausted` clears a counter that
-    was never charged, and deleting the ledger does not help because the gate never consulted it.
-    The value is legal, `tickruntime_budget` ships at `0` so it reads as the idiomatic "no
-    retries", and the shipped config already carries a non-default `infra_budget: 1`. Both gates
-    now use the guarded idiom the killed gate one screen above already used.
-
-Two smaller ones from the same round: `--dry-run --retry-infra-exhausted` spent the recovery it
-was asked to preview (the clear is now rolled back before the ledger is written), and the
-exit-contract tests only ever ran on the diagonal where `final` and `settled` agree, so the
-off-diagonal — a record preserved by a failed launch, which is the case the whole distinction
-exists for — is now asserted directly.
-
-### Four more, from the different-family cross-review of round three
-
-Round three was reviewed by two models from other labs (`gpt-5.6-luna` @ xhigh via codex,
-`cursor-grok-4.5-high` via cursor); cursor returned **BLOCKING**. Record:
-the maintainers' review record (kept internal). All four findings were escalated to the user rather than
-fixed by the agent that found them, and the user ruled on each.
-
-20. **The demotion's discriminator was a proxy, and round three made the proxy bite.** Item 12's
-    `rc == 0` stands for *"our process did not die hard"*, but the vendored evaluator's own crash
-    path is `sys.exit(-1)` → status **255**, a self-terminated verdict. Item 18 then made the
-    padded `Aborted` pattern match — correctly — which moved `Failed - Simulation crashed` and
-    `Failed - Agent couldn't be set up` (the status family of **four of the six published v0.9
-    rows**) from the model's record budget onto the ambiguity axis. The discriminator is now
-    `signalled is None`, the exact test item 18 had just created. This **inverts** a round-two
-    regression test; the inversion and its argument are written into that test rather than
-    applied quietly.
-21. **The accounting model is now versioned in the ledger** and a resume across epochs warns.
-    Raised independently by both reviewers *and* by round three's own auditor. The config digest
-    deliberately does not cover it — a key nobody set is not a setting they changed — but the
-    §6A model changed alongside that key, and nothing compared it, so an old output root
-    resumed under new rules in silence.
-22. **`--dry-run` now writes nothing at all.** It was never inert: planning materialises a task
-    entry per route, moves settlement bits, and the digest is replaced on load. The sharp
-    consequence, which is codex's and not obvious: previewing under a changed config *erased*
-    the "produced by a DIFFERENT configuration" warning the real run would have shown.
-23. **The `128 + N` signal inference is documented as an assumption**, not closed — it is safe
-    for the pinned evaluator (only `-1` and `0`) but not for any evaluator you configure. The
-    clean fix is a `trap` in the generated job script and waits for hardware.
-
-**What this round is actually evidence of.** Four rounds of same-family review preceded it, each
-believing itself thorough; two different-family reviewers found four more in one pass, one of
-them a regression the previous round had just introduced. That is the argument for the
-cross-review gate being mandatory rather than advisory, and it is why the record of *this*
-review exists before any of it is committed.
-
-**None of this is hardware validation and none of it upgrades anything below.** These are logic
-tests against a stand-in evaluator. In particular, "an attempt killed by the wall clock while
-holding a final record" — the case the whole `killed` axis exists for — has never been observed
-against real CARLA by this runner. It is reasoned from the evaluator's source, which is why the
-accounting for it is bounded in both directions instead of confident in either. Item 18 sharpens
-that caveat rather than lifting it: no evaluator has ever segfaulted, aborted or been OOM-killed
-under this runner, the exit statuses it reasons about are read from `leaderboard_evaluator.py`
-and from a shell's documented conventions rather than measured against CARLA, and the stderr
-patterns it no longer relies on are precisely the ones that turned out to be wrong for three
-rounds without anyone noticing. **The lesson items 18 and 20 actually teach is that logic tests
-over a stand-in cannot tell you what a real process writes to a real stream — and that fixing
-that blindly moves a population you did not intend to move.**
+**Not yet tested:** the full 475-route set, workers spread over several GPUs of one machine, and
+SLURM across several nodes. Nothing below should be read as tested unless it says so.
 
 ---
 
-## 1. What is implemented and covered by automated tests
-
-All of these run with no GPU, no CARLA, no network and no third-party packages (the four
-shipped-template tests need PyYAML and are skipped without it):
+## 1. Automated tests
 
 ```
-python -m unittest discover -s tests -t .    ->  377 tests, OK, ~102 s
+python -m unittest discover -s tests -t .    ->  377 tests
 ```
 
-| Area | Covered by | Notes |
-|---|---|---|
-| Port allocator | `test_ports.py` | Determinism; no duplicate port at 1/2/5/8/16/33/**64** workers; RPC windows never touch at the minimum legal stride; RPC/TM block overlap rejected in both directions; >65535 and privileged bases rejected; probe reports a bound port busy and an unbound one free. Satisfies the "N > physical GPU count" criterion *for the allocator*, which is hardware-independent by construction. |
-| **Port run locks** | `test_port_locks.py` (15 tests) | A second backend on the same block is refused at once, without probing, waiting or reaping, and never marks the block its own; a block sharing a single port is refused too; once the holder shuts down the block can be taken again; the holder releases its locks only after reaping; a refused or failed preflight leaves no lock after `shutdown()`; an unusable lock directory is a warning (in the log and in the report, end to end through `main()`) and the run proceeds; locks are taken with `ports.probe` disabled; a read-only lock file someone else created still locks and is not modified; a created file is 0644 under umask 077; lock descriptors are not inheritable; a planted symlink is not followed; a planted FIFO is refused like an unusable lock file instead of hanging the run, and the locks already taken are dropped. The suite points `OODPB_PORT_LOCK_DIR` at a private per-process directory (`tests/__init__.py`), so it never writes to `/tmp` itself and two suites on one machine never refuse each other. |
-| Finalization predicate | `test_results.py` | Missing / malformed / in-progress / `[0,0]`-progress / empty-records checkpoints all correctly not-final. |
-| Status taxonomy | `test_results.py` | Every status observed in ~4,000 real seed-42 records is known; disposition sets are disjoint; the retry set matches the internal orchestrator exactly; `sensors were invalid` is fatal; unknown statuses are flagged rather than absorbed. |
-| Resume predicate | `test_results.py`, `test_plan.py` | `skip_terminal` vs `skip_any_final` vs `none`; a crashed route is re-run under the default and skipped under the legacy mode; unfinalized is never skipped. |
-| Path mirroring | `test_plan.py` | The `{scenario}/{level}/` component survives whether `--routes` points at the tree root or a category; keys, job scripts and log paths are unique across the tree; the seed is in the filename. |
-| Manifest integrity | `test_plan.py` | An **edited** route XML is detected by sha256; missing and extra routes detected. |
-| Budget accounting | `test_plan.py` | Persisted budgets are honoured across restarts; the infra and record budgets cannot block each other. |
-| Exit contract | `test_report_and_state.py` | Exhaustive over the flag combinations: **no path with an incomplete route yields 0**; model-side failures exit 0; interrupt is never 0. |
-| **Result preservation and budget attribution** | `test_result_preservation.py` (14 tests) | A launch that fails on a busy port leaves an existing record byte-identical; a launch that succeeds still starts from a clean slate; a failed launch spends the **infra** budget and never the record budget, never adopts a stale accepted record, never freezes a preserved record as "the result", and still counts toward quarantine; repeated interrupts never exhaust the infra budget, never charge the record or tickruntime budget, never quarantine a healthy worker, and leave the route planned as RUN; a route that genuinely completed before the interrupt is still accepted; genuine infra failures and genuine retryable records are both still charged. |
-| **Attempt accounting (`DESIGN.md` §6A)** | `test_settlement_model.py` (13 tests) | One test per finding: a wall-clock kill holding a `Simulation crashed` record charges neither the record budget nor the quarantine reset and does not settle; `decide()` refuses to re-run past the infra budget when a final retryable record exists; an infra-exhausted failed launch is reported incomplete at a non-zero exit with the record still byte-identical on disk; a result file carrying a foreign `_seedN` is named in a warning and never counted. Plus the guards on the fix itself: a killed route holding a crash record still settles in *finite* attempts; `NEVER_STARTED` outranks the teardown flag and never reads the restored record (neither an `ACCEPT` nor a `FATAL`); a kill cannot fabricate `ACCEPT` or `TickRuntime`, so those still settle; a degenerate `TickRuntime` row re-planned without a ledger is still complete at exit 0; a fault pattern in the *shared* stderr does not condemn a process that exited on its own with a final record; the status breakdown and the totals cannot contradict each other. |
-| **Verification-pass defects** | `test_verification_findings.py` (24 tests) | One test per defect, each first observed failing against the pre-fix tree: a fault pattern with a **non-zero** exit is still a fault (and a clean exit still demotes, and a non-zero exit alone still does not); the 24-cell normative table in `DESIGN.md` §6A.5 is parsed and every cell driven through `_settle`, checking the budget charged **and** the settlement bit in both directions; a route holding a genuine record whose infra budget is spent is reported unsettled at a non-zero exit and is then recoverable losslessly, in bounded attempts, end to end through `main()`; scattered infra failures no longer accumulate into a gate, while an ambiguous kill still clears nothing; `decide()` refuses to run without `killed_budget`; a key holding its introduction default does not move the config digest while any real change still does; `unsettled_reason` distinguishes all three of its cases. Plus the trap, re-checked on the new path — at unit level (a degenerate `TickRuntime` row and a bare-`Failed` row both still settle at exit 0 when the attempt ends abnormally) and end to end through `main()`, against a stand-in evaluator that segfaults into the stderr it shares with the runner: a three-route `TickRuntime` sweep still exits 0 with no retries, and a **self-terminated** crash record (exit 255 — the evaluator's own `sys.exit(-1)`) is charged to the MODEL's record budget rather than to the ambiguity axis, because a process that terminated itself did not die hard. Of those last two, only the `TickRuntime` sweep is a guard. **This row asserted the opposite until the 2026-08-09 review:** round four inverted that test (the demotion keys on `signalled is None`, not `rc == 0`), the inversion was written into the test's own docstring, and it was never propagated here — doc/code drift of exactly the kind §6A exists to end. |
-| **Hard death and the infra-zero dead end** | `test_hard_death_and_infra_zero.py` (28 tests) | Round three, one test per hunk, all red first: an evaluator killed by SIGABRT or by the OOM killer — neither of which any stderr pattern matches — is a fault and not a clean exit, so its record goes to the bounded ambiguity axis and not the model's; a signalled job script (negative `rc`) likewise; `sys.exit(-1)` → 255 is still a self-terminated verdict; the shell's column-padded `Aborted` line matches a pattern that had never matched anything, while a bare `Killed` deliberately still does not; `retry.infra_budget: 0` runs the route instead of gating every one of them before a single attempt, and one real infra failure at that budget still gates and is still releasable; `--dry-run --retry-infra-exhausted` no longer spends the recovery it was asked to preview. Guards: the shared-stderr demotion still applies to a clean exit, the gate is unchanged for every positive budget × spend, and a degenerate `TickRuntime` row whose process is **signalled** still exits 0. Round four adds: `--dry-run` leaves an existing ledger byte-identical, creates none on a fresh tree, and does not swallow the changed-configuration warning; a ledger written under an earlier accounting epoch warns on resume while an ordinary resume stays quiet. |
-| Ledger | `test_report_and_state.py` | Atomic write leaves no `.tmp`; a corrupt ledger is preserved, not silently reset to zero budgets; unknown fields from a future version are ignored. |
-| Config validation | `test_config_and_jobscript.py` | Every required field is genuinely required and named in the error; unknown sections and mistyped keys are errors, not silent defaults; `workers > gpus` needs explicit opt-in; **both** the CUDA index and the Vulkan adapter are unique-checked, including when one side was defaulted; `agent.env` is rejected for every runner-owned name with the field to use instead, while composable ones (`PYTHONPATH`, `LD_LIBRARY_PATH`) stay allowed; digest is stable and sensitive. |
-| **Shipped configuration templates** | `test_shipped_configs.py` (4 tests) | `config/example.yaml` (the file the root README's Quick start copies), `configs/example.yaml`, `configs/reference_agent.yaml` and the golden-generation template each fill their `<placeholders>` with paths in a temporary install and then load and validate as `run_benchmark.py` would; a placeholder the test cannot fill is a failure. Added after a clean-install test on Ubuntu 22.04 found `config/example.yaml` still in an early draft's flat layout, which the runner refused with "unknown config section(s)". Needs PyYAML; skipped without it. |
-| Job script | `test_config_and_jobscript.py` | Both CUDA **and** the Vulkan adapter are pinned; allocated ports are used verbatim; `--resume` is never passed; nothing is detached; the seed is independent of worker and port; `agent.pythonpath` wins the ordering; every runner-owned export is emitted **after** `agent.env`, and a reserved name smuggled past config validation still loses to the runner; `environment.activate` still precedes `agent.env`; `bash -n` clean, including paths containing spaces. |
-| **Backend concurrency** | `test_backend_concurrency.py` (14 tests) | The loop opens exactly the *backend's* slots, never `execution.workers`, in both directions (over- and under-parallelising); SLURM concurrency is `slurm.max_parallel` with one reserved port pair per slot, all disjoint; an out-of-range slot is refused without disturbing an existing record; `max_parallel < 1` is a config error; setting `execution.workers` under SLURM warns that it is ignored. No scheduler is contacted. |
-| **Supervision loop, end to end** | `test_integration_local.py` (24 tests) | Driven against a stand-in evaluator: full sweep exits 0; a re-run skips completed routes without re-executing them; a simulated interruption re-runs exactly the missing routes; the seed reaches the child identically across 3 workers; workers get disjoint, non-overlapping ports; a route that never writes a record exhausts the **infra** budget without touching the record budget and exits 1; an unfinalized checkpoint counts as infra; a retryable record is retried then accepted as the result; TickRuntime is not retried by default; a flaky route recovers; a hanging route is killed by the wall clock; `sensors were invalid` aborts the sweep at ≤1 route; a restart does not buy a fresh budget; a worker is quarantined; a busy port block is a preflight error with nothing executed and its holder left running; a block still draining from a previous run is waited for at startup, and a stop request ends that wait; `--dry-run` writes no report and leaves a simulator on the block alone; `resume.mode: none` requires `--force`; a strict-manifest mismatch refuses to run. |
+No GPU, CARLA, network or third-party package is needed; the four tests that load the shipped
+YAML templates need PyYAML and are skipped without it.
 
-Also verified by hand:
+| File | Tests | What it checks |
+|---|---:|---|
+| `test_ports.py` | 13 | Port allocation is deterministic and collision-free up to 64 workers; overlapping or out-of-range blocks are rejected; a bound port reads busy. |
+| `test_port_locks.py` | 15 | A second run on an overlapping block is refused at once; locks are released only after reaping; unusable lock directories, symlinks and FIFOs are handled safely. |
+| `test_results.py` | 22 | Which checkpoints count as finished; every status seen in about 4,000 real records is classified; unknown statuses are flagged. |
+| `test_plan.py` | 23 | Result paths keep the `{scenario}/{level}/` part; an edited route file is caught by its sha256; budgets persist across restarts. |
+| `test_report_and_state.py` | 17 | No incomplete sweep exits 0; the ledger is written atomically and a corrupt one is kept, not reset. |
+| `test_config_and_jobscript.py` | 46 | Required fields, unknown keys, unique CUDA and Vulkan numbers, reserved `agent.env` names; the job script pins both GPUs, uses the given ports and exports the runner's variables last. |
+| `test_shipped_configs.py` | 4 | Every shipped config template loads and validates once its placeholders are filled. |
+| `test_result_preservation.py` | 14 | A failed launch leaves an existing result untouched and charges the infrastructure budget; interrupts charge nothing. |
+| `test_settlement_model.py` | 13 | The retry rules of `DESIGN.md` §6A for killed, never-started and degenerate routes. |
+| `test_verification_findings.py` | 24 | Parses the 24-cell table in `DESIGN.md` §6A.5 and checks the code against every cell; recovery with `--retry-infra-exhausted`; the config digest. |
+| `test_hard_death_and_infra_zero.py` | 28 | Death by signal is read from the exit status; `infra_budget: 0` still runs each route once; `--dry-run` writes nothing. |
+| `test_backend_concurrency.py` | 14 | The loop opens exactly the backend's slots; SLURM concurrency is `slurm.max_parallel`. |
+| `test_integration_local.py` | 24 | The full loop against a stand-in evaluator: resume, retry, timeout, quarantine, busy ports and every exit code. |
+| `test_env_preflight.py` | 18 | The interpreter check and the agent-code fingerprint. |
+| `test_world_ready.py` | 8 | The simulator start-up deadline (evaluator exit 75). |
+| `test_gpus.py` | 8 | `--check-gpus` parsing; software rasterizers are never offered. |
+| `test_reap.py` | 2 | Reaping sends the requested signal and still escalates to SIGKILL. |
+| `test_reference_agent_interface.py` | 3 | The reference agent accepts the pinned evaluator's `setup()` call. |
+| `test_slurm_backend.py` | 74 | The SLURM backend against a stand-in scheduler, including the fault paths in §2, several replayed from output captured on a real SLURM 24.11.5 scheduler. |
+| `test_slurm_replay.py` | 7 | The replay helper reproduces the captured scheduler output exactly. |
 
-- The de-hardcoding gate — a case-insensitive recursive grep for the internal storage
-  mounts, cluster hostnames, submit host and conda environment names — returns **nothing** over
-  this tree. There is not a single site-specific default anywhere in it. (The gate pattern is
-  deliberately not reproduced here, so that quoting it does not make this file match.)
-- `--check-gpus` runs and produces a usable CUDA/Vulkan comparison. On the machine this was
-  written on it surfaced a real instance of the hazard the design is built around: a host with
-  **one** physical GPU enumerates **two** Vulkan adapters, index 1 being the `llvmpipe`
-  software rasterizer. `vulkan == cuda` is an assumption, not a fact.
-- `run_benchmark.py --help`, missing `--config` and a nonexistent config all behave (exit 2).
-- The reference agent byte-compiles.
+The tests cannot show what a real process writes to a real stream. Several defects listed under
+"Fixed defects" passed every test until a real run or a careful reading found them.
 
 ---
 
-## 2. Hardware-validation criteria and current evidence
+## 2. Hardware evidence
 
-These criteria require observation rather than a stand-in evaluator. Dates and states below are
-the hardware evidence current as of 2026-08-15 (each row carries its own measurement date; H1–H7
-and H10 were measured 2026-08-11/12, H9 on 2026-08-15). **CLOSED** means the stated criterion was
-observed;
-**PARTIAL** and **OPEN** name exactly what remains.
+**CLOSED** means the criterion was observed on real hardware. **PARTIAL** and **OPEN** say what
+is missing.
 
-| # | State | Observed evidence | Remaining limit or risk |
+| # | State | Observed evidence | Remaining limit |
 |---|---|---|---|
-| H1 | **CLOSED — 2026-08-11** | A real route reached `Completed`, DS 50.0, `duration_game` 41.85 s, attached criteria and populated `ttr_dar`; its finalized checkpoint and reference-agent log landed in the mirrored paths. | This proves plumbing, not useful model quality. |
-| H2 | **CLOSED — 2026-08-11** | Two workers ran eight real routes on one physical GPU twice. Both CARLA processes were live together; worker 0 exclusively owned RPC 20000–20002/TM 30000 and worker 1 owned 20010–20012/TM 30010. | Larger worker counts and multi-node execution are unmeasured. |
-| H3 | **OPEN / one-GPU partial — 2026-08-11** | On the one-GPU host, both agent and simulator used CUDA 0/Vulkan 0 and both CARLA commands carried `-graphicsadapter=0`. | Requires at least two physical GPUs to prove distinct mappings do not collapse onto adapter 0. |
-| H4 | **CLOSED — 2026-08-11/12** | Normal teardown and a real mid-sweep Ctrl-C reaped both evaluator/CARLA trees. No process or assigned listener survived before resume. | A brief self-clearing busy port was measured separately; refusing that dirty launch was correct. |
-| H5 | **CLOSED — 2026-08-11** | Live listener and generated-job observations showed the evaluator retained each configured free RPC/TM base exactly; no silent relocation crossed a worker window. | Only the local backend was measured. |
-| H6 | **CLOSED — 2026-08-12** | Ctrl-C exited 3 after writing state/report; interrupted routes charged no retry axis and stayed unfinished. Resume ran exactly the unfinished routes, then a third invocation launched nothing. | None for the measured local two-worker case. |
-| H7 | **CLOSED — 2026-08-11/12** | Three real `Failed - TickRuntime` records were settled and reported complete at the configured zero retry budget. Eight deliberate setup failures each charged exactly one record attempt; rerun changed no counters and still exited 0 with all routes settled. | Hard-death/fault-pattern cases were not induced on hardware. |
-| H8 | **PARTIAL — 2026-08-13** | One inference model (TFPP) ran the full 70-route static category, seed 42, as four concurrent one-GPU jobs on an RTX 6000 Ada node: **0.136 GPU-h/route** measured. A shared workstation GPU measured 0.211 on a partial run of the same category. Eight-route constant-velocity sweeps measured 0.044–0.079. | Budget ≈0.14 GPU-h/route (≈67 GPU-h for 475 routes, per model and seed). The full 475-route run is unmeasured, and the figure is one model on one category; other models and categories may differ. |
-| H9 | **CLOSED — 2026-08-15** | The repaired SLURM backend ran a full route category (70 routes, seed 42) on a real scheduler at two concurrent jobs: every route settled with a genuine final checkpoint, concurrent jobs used distinct physical GPUs with the scheduler's CUDA allocation preserved and each job's configured Vulkan adapter selected, held disjoint RPC+TM ports, and every job was reaped with no orphan. SLURM statuses and §6A axes match the local backend for the same nine routes and seed. | Validated at two-way concurrency on one node. The full 475-route scale and larger multi-node fan-out are unmeasured, and a transient simulator freeze (the "no liveness probe" gap in §3) is only caught by `route_timeout_s` — absorbed by the infra-retry budget, but with no early detector. Three rare fault paths (a job the runner cannot identify, missing accounting, queue time recorded as runtime) were fixed on 2026-10-04 against captured scheduler output. On 2026-10-05 the fixed backend re-ran the same category on a real scheduler at up to six concurrent jobs on one node, including a job cancelled while queued and one cancelled while running; missing accounting and an unidentifiable `sbatch` reply were not reproduced there and remain covered by replayed output only (§2). |
-| H10 | **PARTIAL — 2026-08-11/12** | A fresh GitHub clone ran setup twice (26/26 patches, idempotent), 222 runner tests, a strict 475-route dry run, real smoke routes, and the nine-route PDM-Lite golden/acceptance flow with every path supplied by config. | The host still had the maintainers' internal mounts available; the stronger “those mounts do not exist” portability proof must be repeated externally. |
+| H1 | **CLOSED, 2026-08-11** | A real route reached `Completed` (DS 50.0); its checkpoint and agent log landed in the mirrored paths. | Shows the plumbing works, not model quality. |
+| H2 | **CLOSED, 2026-08-11** | Two workers ran eight routes on one GPU, twice, with both CARLAs live together on separate port blocks. | More workers and several nodes are untested. |
+| H3 | **OPEN (one-GPU partial), 2026-08-11** | On a one-GPU host, agent and simulator both used CUDA 0 / Vulkan 0. | Needs a host with two or more GPUs to show distinct mappings do not collapse onto adapter 0. |
+| H4 | **CLOSED, 2026-08-11/12** | Normal teardown and a real mid-sweep Ctrl-C reaped every evaluator and CARLA; no process or listener survived. | None. |
+| H5 | **CLOSED, 2026-08-11** | Each worker kept exactly its configured ports; nothing moved silently. | Local backend only. |
+| H6 | **CLOSED, 2026-08-12** | Ctrl-C exited 3 with state and report written, charging no budget. A resume ran exactly the unfinished routes; a third run launched nothing. | None for the local two-worker case. |
+| H7 | **CLOSED, 2026-08-11/12** | Real `Failed - TickRuntime` results settled at a zero retry budget; eight deliberate setup failures each charged one record attempt. | Hard deaths (segfault, abort, out-of-memory kill) were not induced on hardware. |
+| H8 | **PARTIAL, 2026-08-13** | One model (TFPP) ran the 70-route static category, seed 42, as four one-GPU jobs: **0.136 GPU-h per route**. | One model on one category. The full 475-route run is unmeasured. |
+| H9 | **CLOSED, 2026-08-15; re-run 2026-10-05** | The SLURM backend ran the 70-route static category, seed 42, on one node. See below. | One node only; the full 475-route scale and several nodes are untested. |
+| H10 | **PARTIAL, 2026-08-11/12** | A fresh GitHub clone ran setup twice (26/26 patches), the tests, a 475-route dry run, real routes and the acceptance flow, with every path from the config. | The host still had the maintainers' internal storage mounted. Repeating the nine-route run on a host without it would close this. |
 
-> ### ✅ The SLURM backend is validated (2026-08-15).
->
-> A 2026-08-09 stand-in-scheduler review drove `SlurmBackend` and found two critical and six major
-> defects, all repairable without a cluster: `submit()` never created the `results/` directory its
-> own `--checkpoint` pointed into (every job died at its first checkpoint write); a signal-killed
-> job was classified `EXITED`, charging a crash-shaped record to the **model's** budget instead of
-> the bounded axis the local backend uses; `route_timeout_s` was measured from `sbatch` submission
-> so queue time counted as route runtime; every non-terminal `sacct` state including `RUNNING` read
-> as `EXITED`; `scancel` was asynchronous but settlement did not wait; a successful `sbatch` with
-> non-numeric output was recorded as a launch failure while its job really ran unsupervised; worker
-> quarantine treated SLURM slot indices as machines; and the job script hard-coded
-> `CUDA_VISIBLE_DEVICES=0` / `--gpu-rank 0`, overriding the scheduler's allocation.
->
-> All eight were repaired **red-first**, independently cross-reviewed (`.reviews/`), and then
-> **closed by observation on a real scheduler**. A full route category (70 routes, seed 42) ran at
-> two concurrent jobs: every route settled on a genuine `Finished` checkpoint (60
-> `Failed - TickRuntime`, 9 `Completed`, 1 `Failed - Agent got blocked` — all valid model-side
-> results); concurrent jobs landed on distinct physical GPUs with the scheduler's CUDA allocation
-> preserved and each job's configured Vulkan adapter selected, held disjoint RPC/TM ports, and were
-> reaped with no orphan. Against the local backend, SLURM matched status and every §6A axis for the
-> same nine routes and seed. C1 (checkpoint parent) and C2 (signal→bounded-axis, not model verdict)
-> are closed on hardware: a cancel or signal maps to the bounded *killed* axis rather than the
-> model's record budget, and a crash-shaped record is only accepted as the verdict after that
-> budget is spent — exactly as the local backend settles it.
->
-> **Measured limits.** Validation is at two-way concurrency on a single node; the full 475-route
-> scale and larger multi-node fan-out are unmeasured. There is no early liveness probe (§3), so a
-> CARLA simulation that transiently freezes mid-route is caught only by `execution.route_timeout_s`:
-> the infra-retry budget absorbs the transient and the route settles on a later attempt, but a
-> long, generous `route_timeout_s` makes each freeze expensive. Size `infra_budget` and
-> `route_timeout_s` for your agent. The local backend is unaffected by any of the above.
->
-> **SLURM fault paths fixed (2026-10-04).** Three rare paths that the 2026-08-15 backend did not
-> handle cleanly are fixed, red-first, with tests that replay output captured from a real SLURM
-> 24.11.5 scheduler. The fixed backend was re-run on a real scheduler on 2026-10-05 (below), which
-> exercised some of these paths but not all. None of this
-> touches the local backend.
->
-> - **Missing accounting is no longer read as a normal exit.** When a job has left the queue but
->   `sacct` fails or returns no record, the runner waits up to 180 s for accounting to appear. If
->   none does, it cancels the job (best effort) and settles the attempt as `FAULT` with the detail
->   `accounting unavailable after 180s: <reason>`. As on the local backend, a `FAULT` never
->   spends the model's record budget: with no final checkpoint it is retried on the
->   infrastructure budget, and with a retryable final checkpoint (such as a crash status) on
->   the bounded *killed* axis. A failing `squeue` is not taken as "left the queue": only an empty reply or "Invalid
->   job id" (a purged job) is. If `squeue` fails for any other reason and `sacct` has no state
->   for 180 s, nothing shows the job has ended, so the run stops with an error naming the job
->   rather than retry the route beside it. `squeue` runs without the caller's `SQUEUE_*`
->   variables: a `SQUEUE_STATES` default in a user's shell would hide a running job, which
->   would then look gone. The three that choose which federation clusters it asks
->   (`SQUEUE_FEDERATION`, `SQUEUE_LOCAL`, `SQUEUE_SIBLING`) are kept; this has not been tried
->   on a federated cluster.
-> - **Queue time is no longer recorded as runtime.** Runtime counts only while `squeue` shows
->   the job `RUNNING`. It stops when the job is paused, or at the first poll that no longer
->   finds the job in `squeue`, and restarts only if `squeue` shows it `RUNNING` again. A
->   lagging `RUNNING` from `sacct` after the job has left the queue does not move it; the run
->   waits for a final `sacct` state, and cancels the job as a timeout if none arrives within
->   `route_timeout_s` of it leaving the queue. A job that ends before it is seen `RUNNING`
->   takes its runtime from `sacct`'s `Start`, `End` and `Elapsed`; if those are unavailable
->   too, it records 0 s and the detail ends with `runtime unknown (never observed RUNNING)`.
-> - The `SQUEUE_*` handling and the runtime cut-off at leaving the queue were added after the
->   2026-10-05 re-run and are covered by tests only.
-> - **A route's previous checkpoint survives a job the runner cannot identify.** Before
->   submitting, the runner copies the route's existing checkpoint to `<checkpoint>.aside-<ns>`,
->   synced to disk, and logs each step to `_runner/aside.jsonl`. A route with no checkpoint gets
->   a small `<checkpoint>.unsettled-<ns>` file naming the job's name and tag instead, so every job
->   in flight has a file on disk that stops a second run from starting beside it, even if the
->   runner is killed outright. The file is deleted once the job is confirmed ended; a refused
->   submission puts the checkpoint back or deletes the marker. If it cannot be written (a full
->   disk), the route is not submitted. If `sbatch` accepts a job but
->   prints no job id, the runner looks among your queued jobs for one with the route's job name
->   **and** this submission's own tag, which each job carries as `--comment=oodbench:<32 hex>`
->   (a name, or a name and script, can match an older job of the same route); exactly one match
->   is supervised as usual. With no match, several, or a job whose `scancel` is not confirmed
->   within 60 s, the run stops with an error that names the job(s) and the file, and leaves the
->   file in place (an `.unsettled-` file is rewritten to say why, and with the job id if known).
->
-> **Recovering a set-aside checkpoint.** While any `*.aside-*` or `*.unsettled-*` file remains
-> under the output root, a SLURM run refuses to start and lists each file with its checkpoint.
-> For each one:
->
-> 1. Stop any job of the earlier run that is still queued or running
->    (`squeue -u $USER -o '%i %j %k'`, then `scancel <id>`), and confirm it has ended
->    (`sacct -j <id>`). An `.unsettled-` file names its job by id, or by job name and comment.
-> 2. For an `.aside-` file, either put the earlier result back
->    (`mv <checkpoint>.aside-<ns> <checkpoint>`) or delete the file so the route runs again.
->    Delete an `.unsettled-` file once its job has ended.
-> 3. If the checkpoint exists again, a job wrote it after the file was set aside: keep whichever
->    you trust.
->
-> Then resume.
->
-> **Re-validated on a real scheduler (2026-10-05).** The fixed backend re-ran the same 70-route
-> static category at seed 42 on one node, with up to six jobs in flight. Every route settled with
-> a final checkpoint, the run exited 0, and no `.aside-` or `.unsettled-` file was left.
->
-> - A job cancelled while still queued settled as an infrastructure retry with runtime 0 s and
->   `runtime unknown (never observed RUNNING)`, not its time in the queue.
-> - A job cancelled while running settled as an infrastructure retry; its retry reproduced the
->   earlier run's status and score for that route.
-> - Stopping the runner mid-run cancelled its two in-flight jobs, confirmed both ended, charged
->   no retry budget, and left no hold file; the resumed run finished the category.
-> - The accounting-lag path (a job gone from the queue before `sacct` knows it) could not be
->   forced on real hardware. It is covered only by tests that replay captured output.
-> - An `sbatch` reply with no usable job id did not occur, so the tag lookup and the refusal
->   paths are covered only by tests as well.
-> - Scores of the shipped constant-velocity reference agent differed from the 2026-08-15 run on
->   16 of 70 routes (4 of them between `Completed` and `Failed - TickRuntime`); the category mean
->   moved by +0.38. Three of these routes had been run twice during the 2026-08-15 validation with
->   identical code, and two of them differed between those passes too. The difference is consistent with
->   run-to-run variation of this agent on these routes, and the backend change does not touch the
->   simulation or the agent; it was accepted on that basis, but this run does not prove it.
->
-> Two setup notes from this run. `slurm.extra_directives` entries are copied as they are into the
-> job script, after the runner's own `#SBATCH` lines, so each must be a complete `#SBATCH ...`
-> line. `sbatch` stops reading directives at the first line that is neither blank nor a `#`
-> comment, and bash then runs that line as a command: a bare `--hold` entry did exactly that.
-> And `setup.sh --existing-checkout` needs a plain clone of `carla_garage` (with a `.git`
-> directory); it rejects a git worktree.
+### SLURM (H9)
 
-### Hardware-validation measurement notes
+**2026-08-15.** At two jobs at a time, every route settled with a real checkpoint (60
+`Failed - TickRuntime`, 9 `Completed`, 1 `Failed - Agent got blocked`, all model results).
+Concurrent jobs used different GPUs and separate ports, and every job was cleaned up. For nine
+routes run on both backends, SLURM matched the local backend's statuses and retry accounting.
 
-All observations above came from one **single-GPU** host (1× RTX 3090, driver 580.82.09,
-CARLA 0.9.15). The PDM-Lite acceptance bundle was generated on 2026-08-12 from three forced,
-sequential, one-worker replicates in separate roots. All nine routes completed at DS 100.0 in
-all three replicates; maximum spread was 0.0 and the bundle tolerance is ±1.0 DS. Removing one
-shipped static asset and rerunning its route produced a plausible `Completed`, DS 100.0 result
-with a Tesla fallback, which A1 correctly rejected. The active defects and decisions found by
-these runs are consolidated in [`../docs/HARDWARE_VALIDATION_ISSUES.md`](../docs/HARDWARE_VALIDATION_ISSUES.md).
+**Fault paths fixed on 2026-10-04**, each with tests that replay output captured from a real
+SLURM 24.11.5 scheduler:
 
-**Measured 2026-08-12, and it changed a shipped default.** At the previously-shipped
-`infra_budget: 1`, a worker's own RPC port was still occupied after the reaper ran *and* after
-`post_kill_cooldown_s` elapsed. Refusing to launch on a dirty port is correct; exhausting the
-whole infrastructure budget on that one self-clearing event is not. The route was left unsettled,
-the sweep exited 1, and recovery needed a manual `--retry-infra-exhausted`. Frequency was about
-1 launch in 30 — a 475-route sweep would meet it a dozen times. `configs/reference_agent.yaml`
-now uses the schema defaults (3/3); see the comment there for the reasoning.
+- **Missing accounting is no longer read as a normal exit.** When a job has left the queue but
+  `sacct` fails or has no record, the runner waits up to 180 s, then cancels the job and settles
+  the attempt as a fault, which never spends the model's retries. A failing `squeue` is not
+  taken to mean the job left the queue; if neither `squeue` nor `sacct` can say, the run stops
+  with an error naming the job. `squeue` runs without the caller's `SQUEUE_*` variables, because
+  a `SQUEUE_STATES` default in a user's shell would hide a running job. The three that choose
+  which federation clusters it asks (`SQUEUE_FEDERATION`, `SQUEUE_LOCAL`, `SQUEUE_SIBLING`) are
+  kept; this has not been tried on a federated cluster.
+- **Queue time is no longer counted as runtime.** Runtime counts only while `squeue` shows the
+  job running, and stops when the job is paused or leaves the queue. A job that ends before it
+  is seen running takes its runtime from `sacct`, or records 0 s with
+  `runtime unknown (never observed RUNNING)`.
+- **A previous checkpoint survives a job the runner cannot identify.** See "Set-aside
+  checkpoints" in [`README.md`](README.md#slurm). If `sbatch` accepts a job but prints no job
+  id, the runner looks for the job by its name and a per-submission tag
+  (`--comment=oodbench:<32 hex>`).
+- The `SQUEUE_*` handling and the runtime cut-off at leaving the queue were added after the
+  2026-10-05 re-run and are covered by tests only.
 
-Throughput, for planning only: **0.044–0.079 physical GPU-hours per route** across the two
-sweeps, measured with the constant-velocity reference agent, which does no inference. For a real
-model, see H8: TFPP measured 0.136 GPU-h/route over the 70-route static category on a separate
-multi-GPU node, so budget ≈0.14.
+**2026-10-05 re-run** of the same category on one node, with up to six jobs in flight. Every
+route settled, the run exited 0, and no set-aside file was left behind.
 
-**Remaining validation order** (cheapest first, each gates the next):
+- A job cancelled while queued settled as an infrastructure retry with runtime 0 s.
+- A job cancelled while running settled as an infrastructure retry; the retry reproduced the
+  earlier status and score.
+- Stopping the runner cancelled its two jobs, charged no budget, and the resumed run finished
+  the category.
+- Missing accounting and an `sbatch` reply without a job id could not be produced on demand;
+  those paths are covered by replayed output only.
+- The reference agent's scores differed from the 2026-08-15 run on 16 of 70 routes (category
+  mean +0.38). Three of those routes had been run twice on 2026-08-15, and two of them had
+  differed between those two runs too. This fits the agent's run-to-run variation, and the
+  backend change does not touch the simulation, but this run does not prove it.
 
-1. Repeat the nine-route acceptance run on a host where the maintainers' internal mounts do not
-   exist. Closes the remaining H10 wording.
-2. Repeat the two-worker live GPU observation on a host with at least two physical GPUs. Closes
-   H3 if agents and simulators spread together.
-3. A real inference model has run one category (H8). Run the full 475-route set to measure the
-   remaining H8 scale claim.
-4. SLURM is repaired, reviewed, and validated at category scale (H9, 2026-08-15). What remains for
-   it is the full 475-route scale and larger multi-node fan-out, and an early liveness probe so a
-   transient simulator freeze need not wait out `route_timeout_s`.
+### Measurement notes
+
+- H1–H7 and H10 ran on one host with one RTX 3090 (driver 580.82.09).
+- The current acceptance bundle (`tests/goldens/`) was made on 2026-10-05 on an RTX 6000 Ada
+  (driver 570.211.01), from three separate runs of the nine-route smoke split. Every route
+  scored DS 100.0 in all three, and the tolerance is ±1.0 DS. On the earlier bundle, removing
+  one shipped prop and re-running its route gave a normal-looking `Completed`, DS 100.0, with a
+  Tesla in its place, and the acceptance check rejected it.
+- A worker's own port was sometimes still busy after the previous CARLA was reaped (about 1
+  launch in 30). With `infra_budget: 1` this left a route unsettled, so
+  `configs/reference_agent.yaml` now uses the defaults (3/3).
+- The reference agent, which runs no model, used 0.044–0.079 GPU-h per route. For a real model
+  plan on about 0.14 (H8).
+
+### What to test next (cheapest first)
+
+1. The nine-route acceptance run on a host without the maintainers' internal storage (H10).
+2. Two workers on a host with two or more GPUs (H3).
+3. The full 475-route set with a real model (H8).
+4. SLURM at full scale and across several nodes, and an early liveness check so a frozen
+   simulator does not have to wait out `route_timeout_s` (H9).
 
 ---
 
-## 3. Known gaps and deferred work
+## 3. Known gaps
 
-| Gap | Impact | Suggested disposition |
+| Gap | Impact | Plan |
 |---|---|---|
-| **Fresh-host portability is only partially closed** | The fresh GitHub clone ran real smoke routes and the golden flow, but on a host where internal mounts still existed. Config paths were explicit and no internal default was observed. | Repeat the nine-route flow on a genuinely external host; tracked as HV-09. |
-| **No liveness probe** | A CARLA server that hangs without exiting is caught only by `execution.route_timeout_s`, so a hung route burns the full timeout. A checkpoint-mtime stall detector would cut that to minutes. **Measured on hardware (2026-08-13):** a hung route emits `> Running the route`, one agent tick at `Ratio = 0.000x`, then nothing for the remaining ~39 min of a 3600 s budget. At `infra_budget: 3` a permanently hanging route costs **three wall-clock hours** before it is skipped. | Designed, not implemented. Now the largest remaining cost in this class — the two accounting defects around it were fixed 2026-08-13 (see below). |
-| **`environment.activate` does not prove interpreter selection** | H5 measured bare `python3` resolving to system Python even after activation, leading to no-record retries and quarantine. | Decide on exact-interpreter documentation or a dependency preflight; tracked as HV-01. |
-| **No CARLA version assertion** | The content pack is hard-locked to CARLA 0.9.15 (the factory assets overwrite base content). A user on 0.9.14 gets missing props, which **fail silently with a plausible score**. | Add a preflight that reads the CARLA version and hard-fails on mismatch. This is the §3.3 failure class and belongs in the runner, not only in the acceptance harness. |
-| **No blueprint-spawn assertion** | Same failure class: the runner cannot tell whether the intended OOD prop actually spawned. | That is what `tests/` is for. The runner should eventually surface that check as an opt-in flag. |
-| **An unexpected exception mid-sweep exits 2 and writes no report** | `main()` catches everything not already handled and returns `EXIT_CONFIG`. Non-zero, so the exit contract holds and `state.json` is still saved — but exit 2 means "configuration or preflight error", which sends an operator debugging their config when the sweep actually died 300 routes in. The per-route results on disk are fine and a re-run resumes correctly; only the diagnosis and the report are lost. | Split the handler: before the sweep starts keep exit 2; once `runner.run()` is under way, build and write the report, then exit 1. Small, worth doing before a 475-route sweep. |
-| SLURM: no array jobs | One `sbatch` per route is 475 submissions. Works, but an array job would be kinder to the scheduler. | Deferred. |
-| **Port locks are per lock directory** | The local backend's per-port locks (`DESIGN.md` §3, defence 0) coordinate only oodbench runs that share the lock directory: one machine and one `/tmp` (or one `OODPB_PORT_LOCK_DIR`). Two containers with private `/tmp`s on one host do not see each other's locks, and a CARLA started by hand takes none; for both, only the startup probe guards, and only at startup. A lock directory the run cannot use degrades to probe-only, with a report warning. | Document. Containers sharing a host should bind-mount one lock directory. |
-| SLURM: node-level port collisions | Ports come from the deterministic allocator, but two *independent* runs by different users on one node could still collide. | Document; consider deriving the base from the SLURM job ID. |
-| No structured progress output | Progress is log lines only; long sweeps want a machine-readable heartbeat. | `state.json` is already written continuously and can be polled. Good enough for v0.9. |
-| Windows / macOS | `/proc` scanning and `killpg` are Linux-only. | Out of scope; CARLA + this benchmark are Linux. |
-
-### Fixed 2026-08-13 — hang accounting
-
-Found by the first real ML model to run through this runner (TFPP, seed 42), 14 routes into a
-70-route static sweep. Three defects, none reachable without hardware:
-
-1. **A wall-clock timeout advanced the worker-quarantine streak.** Three hanging routes in a row
-   therefore quarantined the *only* worker and aborted the sweep, leaving every remaining route
-   unattempted. The streak's own docstring says it tracks attempts where *nothing ran at all*; a
-   route that drove for a full `route_timeout_s` is the opposite of that. It now advances on
-   every no-record outcome **except** `TIMEOUT` — a fast death without a record still counts,
-   because that does look like a sick worker. Regression test:
-   `test_timeouts_do_not_quarantine_a_worker_that_is_demonstrably_running`.
-2. **The quarantine message asserted a pattern that cannot occur at `workers: 1`** — "one worker
-   failing while others progress" — and named a wedged GPU as the only cause. Both halves sent
-   the operator to re-probe a device that was healthy every time; the real cause was a socket
-   still in `TIME_WAIT`. `_charge_infra` had always named the port block as the other cause; the
-   user-facing text had not. Fixed in the log line and in the report section.
-3. **`INFRA_RECOVERY_HINT` coached an unconditional retry loop.** The runner prints it on every
-   quarantine, so the natural response is to script `--retry-infra-exhausted`. But a timeout is
-   charged to `attempts_infra`, which is exactly the counter that flag clears, so a hung route
-   gets a fresh budget on every restart and is retried forever at one `route_timeout_s` per
-   attempt — while the loop reports progress. The flag's mechanics are unchanged and correct
-   after a genuine repair; the guidance now says plainly not to pass it unconditionally.
-
-Note the interaction: `killed_budget` sounds like the budget that governs a killed route, but a
-wall-clock kill is charged to `attempts_infra`, so `killed_budget` never applies to a hang. That
-is unchanged and still worth knowing when reading a ledger.
-
-### Fixed 2026-10-03 — the port block at startup and shutdown
-
-Item 1 was found on 2026-10-03 while reading the shutdown path; item 2 on hardware the same day.
-
-1. **A run that never took its port block still reaped it.** Shutdown sends SIGTERM, then
-   SIGKILL, to every CARLA of this user whose command line names a port in the block. A
-   `--dry-run` skips the startup probe but still shut the backend down, and so did a run that
-   was refused because the block was busy. Either one, pointed at the config of a sweep running
-   from another terminal, killed that sweep's simulator mid-route. Shutdown now reaps only after
-   the startup probe found the block free (or the probe was disabled). Regression tests:
-   `test_dry_run_leaves_a_simulator_on_the_block_alone`, and a holder check added to
-   `test_busy_port_block_is_a_preflight_error_not_a_silent_shift`.
-2. **A run started straight after another one on the same block was refused.** Between routes
-   the runner already waits for a finished simulator's sockets to drain (CARLA's streaming socket
-   lingers for about a minute and refuses the bind like a live server), but the startup probe
-   did not wait: a golden replicate scripted to start the moment the previous run exited failed
-   with exit 2 in the same second. Startup now re-probes once a second for up to
-   `execution.port_release_timeout_s` (90 s by default) before refusing, and signals nothing
-   while it waits; a stop request ends the wait as an interrupted run. Regression tests:
-   `test_ports_still_draining_from_a_previous_run_are_waited_for_at_startup`,
-   `test_a_stop_request_ends_the_startup_port_wait`.
-3. **A free probe was taken for ownership.** Found by a pre-push code review. After the probe
-   the run waits — the startup wait, then the environment preflight, up to 600 s — before its
-   first launch, and a second oodbench run on the same or an overlapping block could probe it
-   free in that window. Both then believed they owned the block, so each one's orphan handling
-   (SIGTERM, then SIGKILL) and shutdown reaping killed the other's simulators, and a route whose
-   ambiguous-kill budget ran out had its crash record accepted as the result. The local backend
-   now takes an exclusive `flock` on one file per reserved port *before* probing (also with the
-   probe disabled), holds it for the whole run, and releases it in `shutdown()` after reaping.
-   A second run on any of those ports is refused at once with exit 2, naming the ports and the
-   lock file. The limits are listed in §3 under "Port locks are per lock directory". Regression
-   tests: `tests/test_port_locks.py`.
+| **No liveness check** | A CARLA that hangs without exiting is caught only by `execution.route_timeout_s`. Measured: a hung route logs one agent tick and then nothing; at `infra_budget: 3` with a 3600 s timeout it costs three hours before it is skipped. | A checkpoint-age stall detector is designed, not implemented. |
+| **No CARLA version check** | The content pack is built for CARLA 0.9.15. On another version the new objects can be missing, and routes then score normally without them. | Add a preflight that fails on a version mismatch. Until then, run the acceptance test in `tests/`. |
+| **No blueprint-spawn check** | The runner cannot tell whether the intended object actually spawned. | That is what `tests/` checks. |
+| **An unexpected exception mid-sweep exits 2 with no report** | Exit 2 suggests a config error when the sweep died later. Results on disk are fine and a re-run resumes. | Write the report and exit 1 once the sweep has started. |
+| **Signal deaths are inferred from `128 + N`** | Safe for the pinned evaluator (it exits only 0 or 255). An evaluator you configure that deliberately exits 129–192 would be read as killed by a signal. | A `trap` in the job script; needs hardware to test. |
+| **Port locks are per lock directory** | Runs in containers with private `/tmp` directories do not see each other's locks; a CARLA started by hand takes none. Only the startup port check guards those. | Containers sharing a host should mount one lock directory. |
+| SLURM: no array jobs | One `sbatch` per route: 475 submissions. | Deferred. |
+| SLURM: ports on a shared node | Two independent runs on one node could pick the same ports. | Consider deriving the port base from the job id. |
+| No machine-readable progress | Progress is log lines only. | `state.json` is updated continuously and can be polled. |
+| Linux only | Process handling uses `/proc` and process groups. | Out of scope; CARLA and this benchmark are Linux. |
 
 ---
 
-## 4. One decision that needs user sign-off
+## 4. A deliberate difference from the internal tools
 
-**`resume.mode` defaults to `skip_terminal`, not to the internal tool's `skip_if_final`
-semantics.**
-
-The brief says to preserve `--skip_if_final`. It *is* preserved, exactly, as
-`resume.mode: skip_any_final`. But it is not the default, because it has a silent
-data-corruption path: interrupt a sweep while a route holds a `Failed - Agent crashed`
-checkpoint, resume, and that route is accepted forever without ever being retried — even though
-the same run *would* have retried it had it not been interrupted. Within-run and across-run
-retry semantics disagree under the legacy default; `skip_terminal` makes them agree.
-
-This does not change any published number (it changes whether a route is *retried*, not how it
-is scored), and the legacy behaviour is one config line away. But it is a deliberate divergence
-from the internal orchestrators' behaviour, and should be confirmed rather than discovered.
+`resume.mode` defaults to `skip_terminal`. The internal orchestrators' `--skip_if_final` is
+kept, exactly, as `resume.mode: skip_any_final`, but it is not the default: with it, a route
+interrupted while it held a `Failed - Agent crashed` result is never retried after a resume,
+although the same run would have retried it. This changes which routes are retried, not how any
+route is scored, so it cannot move a published number.
 
 ---
 
-## 5. Honest summary
+## 5. Fixed defects
 
-- **Design:** complete, and the expensive-to-change decisions are written down with rationale.
-- **Implementation:** a working first cut. The supervision logic — resume, retry accounting,
-  worker isolation, exit semantics, seed determinism — is implemented and genuinely exercised,
-  including end to end against a stand-in evaluator.
-- **Review:** two reading passes — a correctness pass and then an independent cross-review of
-  that pass — found **seven** real defects (see "Seven defects found and fixed on review",
-  above). Four destroyed, abandoned or froze valid results; three could have put two workers on
-  one simulator, one GPU, or a different seed. Not one tripped the exit contract. That they
-  existed in code this carefully commented is the argument for hardware validation, not
-  against it: the classes of bug that survive review are exactly the ones only a real sweep
-  surfaces. **The cross-review found more than the first pass did, which is itself a reason to
-  treat the untested surfaces below as likelier to be wrong than they look.**
-- **Validation:** the local backend has real CARLA evidence for single-route plumbing,
-  two-worker one-GPU stacking and ports, reaping/interrupt/resume, real settled failures, and the
-  nine-route PDM-Lite acceptance bundle. The exact boundaries are the §2 table, not a general
-  production claim.
-- **Not started or still open:** multi-GPU placement, the full 475-route scale run, a genuinely
-  external-host H10 repeat, and SLURM at the full 475-route scale and multi-node fan-out (two-way
-  single-node SLURM concurrency is validated — H9). CARLA-version and blueprint-spawn runner
-  preflights remain design gaps; the separate acceptance probe has been exercised live.
+Each was reproduced first, then fixed with a test that fails on the old code. None changes how
+a route is scored. They changed whether a route got its fair attempts, or whether two workers
+could share a simulator, GPU or seed.
 
-The next decisions are listed in
-[`docs/HARDWARE_VALIDATION_ISSUES.md`](../docs/HARDWARE_VALIDATION_ISSUES.md); this consolidation
-does not silently turn any of them into implementation work.
+**Found by review, before any hardware run (2026-08).** About two dozen, over five review
+rounds; each round found real defects in the previous one. The main ones:
+
+- A failed launch deleted the result it was about to replace, and charged the model's retries
+  instead of the infrastructure budget.
+- Ctrl-C, timeouts and other kills charged budgets, so a few interrupts could freeze a crash
+  result in as the route's answer. The rules in `DESIGN.md` §6A replaced the patches; a test now
+  checks the code against its table.
+- `agent.env` could override the runner's own `PORT`, `SEED` or `CUDA_VISIBLE_DEVICES`.
+- Two config entries could share a Vulkan adapter, putting two CARLAs on one GPU.
+- `slurm.max_parallel` limited nothing, and slot numbers could wrap onto another job's ports.
+- Deaths by SIGABRT or out-of-memory kill were read as normal exits, because the stderr patterns
+  did not match what a real shell writes. Signals are now read from the exit status.
+- `infra_budget: 0` skipped every route; `--dry-run` wrote to the ledger.
+
+**SLURM backend (2026-08-09, before H9).** Eight defects found against a stand-in scheduler,
+including: the results directory was never created, signal kills charged the model's retries,
+queue time counted as runtime, `RUNNING` read as finished, and the job script overrode the
+scheduler's GPU allocation. All were fixed and then confirmed on a real scheduler (H9).
+
+**Hang accounting (2026-08-13).** Found by the first real model run. Wall-clock timeouts
+counted towards quarantine, so three hanging routes in a row quarantined the only worker; the
+quarantine message named only a stuck GPU when the real cause was a busy port; and the recovery
+hint encouraged retrying a permanently hanging route for ever.
+
+**Port block (2026-10-03).** A `--dry-run`, or a run refused for a busy block, still reaped the
+block's CARLAs, killing another sweep's simulator. A run started right after another on the same
+block was refused instead of waiting for the ports to free. Two runs could both find the block
+free and each kill the other's simulators; the per-port locks fix this.
+
+**SLURM fault paths (2026-10-04).** See §2.

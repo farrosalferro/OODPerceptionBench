@@ -148,7 +148,7 @@ routes:
   manifest: <path-to-repo>/routes/MANIFEST.tsv
   strict_manifest: false
 
-# Only read when execution.backend == slurm. FIRST CUT, never run against a real scheduler.
+# Only read when execution.backend == slurm. Tested on a real scheduler on one node (runner/STATUS.md, H9).
 slurm:
   partition: null
   account: null

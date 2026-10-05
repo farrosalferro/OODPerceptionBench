@@ -5,13 +5,12 @@
 > to arXiv v2; scores produced by the two are **not** comparable and the runner stamps which
 > one it targeted into every report it writes.
 >
-> **Status of the accompanying code: local first cut with bounded hardware validation.** Real
-> CARLA 0.9.15 runs have exercised local single/two-worker execution, ports, reaping,
-> interrupt/resume, failure reporting, and the nine-route acceptance split. Multi-GPU mapping and
-> the full 475-route scale remain unvalidated; the SLURM backend is validated at two-way
-> concurrency on a single node (H9, 2026-08-15), with its full 475-route scale and multi-node
-> fan-out still open. See `STATUS.md` §2 for the exact
-> evidence. This document is the durable part: decisions that are expensive to change later.
+> **Status of the code.** Real CARLA 0.9.15 runs have exercised local one- and two-worker
+> execution, ports, reaping, interrupt and resume, failure accounting, and the nine-route
+> acceptance split. The SLURM backend has run one full route category on one node (H9, 2026-08-15,
+> re-run 2026-10-05 with up to six jobs in flight). Several GPUs on one machine, several SLURM
+> nodes, and the full 475-route set are untested. `STATUS.md` §2 has the evidence. This document
+> records the decisions that are expensive to change later, and why they were made.
 
 ---
 
@@ -599,8 +598,8 @@ values, and nothing else, are:
 > verdicts could never be demoted, so a UE4 abort during teardown sent
 > `Failed - Simulation crashed` and `Failed - Agent couldn't be set up` — **the status family of
 > four of the six published v0.9 rows** — to the bounded ambiguity budget instead of the model's
-> own. The discriminator is `signalled is None`. Found by cross-review, `cursor-grok-4.5-high`,
-> 2026-08-07; settled by the user in the reviewer's favour.
+> own. The discriminator is `signalled is None`. Found in review on
+> 2026-08-07; the maintainers ruled for the change.
 >
 > **Consequence, and it is checkable rather than merely argued: after a process has exited, a
 > fault pattern cannot move any counter.** With a record on disk, `signalled` alone picks the
@@ -647,7 +646,7 @@ values, and nothing else, are:
 > and `leaderboard.evaluator` are yours to point elsewhere, and an evaluator that intentionally
 > exits in 129–192 will have that attempt read as a hard death — charging the bounded `killed`
 > axis instead of `record`, which costs retries and can change the status a route settles on.
-> The `rc < 0` half has no such ambiguity. Raised by cross-review (`gpt-5.6-luna`, 2026-08-07)
+> The `rc < 0` half has no such ambiguity. Raised in review (2026-08-07)
 > and accepted as documented rather than closed: the clean fix is a `trap` in
 > `jobscript.render` writing the signal to a side channel, which removes the inference
 > entirely — but it changes the generated job script, which has now run against real CARLA but
@@ -1032,12 +1031,12 @@ is the audit trail, and it is what the report shows as `attempts.infra_total`.
    agent, not a benchmark result for the route. This cannot change an exit code (fatal always
    yields 5) and only affects the report's totals, where it is the honest count.
 
-#### Amended again by adversarial review of this section
+#### Later amendments (items 6–21)
 
-The first draft of 6A.5 sent ABNORMAL_END × `RETRY_RECORD` and × `UNKNOWN` to `infra`, never
-settling. Review — checked against the code and the published records — found that this
-re-opened the trap through a second door, and three further defects. All four are accepted; the
-tables above are the amended version.
+This model was reviewed several times after it was first written, and each review changed it.
+The items below record what changed and why; the tables above already include every change.
+Items 6–9: the first draft of 6A.5 sent ABNORMAL_END × `RETRY_RECORD` and × `UNKNOWN` to
+`infra`, never settling, which re-opened the trap through a second door.
 
 6. **The ambiguous cell gets its own bounded budget, not `infra`.** Two facts kill the
    `infra` routing. *(a)* `AttemptOutcome.FAULT` is not reliable evidence of an abnormal end at
@@ -1074,12 +1073,9 @@ tables above are the amended version.
    downstream aggregator sums. `by_status` now covers exactly the complete routes and
    `by_status_unsettled` exactly the incomplete ones (6A.8).
 
-#### Amended a third time, by an independent verification pass over the repair
-
-The pass that implemented 6A.1–6A.11 was itself verified, and six defects came back. Two of
-them are the same *class* of defect this section was written to end — a rule stated in one
-artifact and not implemented in the other — which is why the response is not only six fixes but
-one machine check.
+Items 10–15 came from verifying the implementation of 6A.1–6A.11. Two of them were a rule
+stated in one place and not implemented in the other, which is why the table is now
+machine-checked (item 12).
 
 10. **The `FAULT` demotion must test the child's exit status.** As first written it demoted on
     "a fault pattern *and* a final record", with no test on `rc`, so it also swallowed the
@@ -1102,11 +1098,8 @@ one machine check.
 15. **Schema growth is not a configuration change** (`DIGEST_COMPAT_DEFAULTS`, 6A.11), and
     `unsettled_reason` is evaluated ledger-first so its three values are actually three (6A.8).
 
-#### Amended a fourth time, by an independent verification pass over *that* verification
-
-Three agents audited item 10–15. Two of them, working from different directions, arrived at the
-same two defects and then failed to refute them. Both are this section's recurring shape once
-more: a rule that is right, implemented over the wrong quantity.
+Items 16–17 came from verifying items 10–15: in both, a correct rule was applied to the wrong
+quantity.
 
 16. **A hard death is read from the exit status, not from a log line.** Item 10 gated the
     demotion on `rc == 0` — correct, and unreachable, because the gate sits inside `if fault:`
@@ -1130,13 +1123,7 @@ edit an operator had asked only to preview, and the exit-contract tests ran only
 and `settled` agree, leaving the off-diagonal — the case the whole distinction in 6A.8 exists
 for — asserted nowhere.
 
-#### Amended a fifth time, by the cross-review that round three finally ran
-
-Round three's repair was reviewed by two models from other labs (`gpt-5.6-luna`,
-`cursor-grok-4.5-high`); cursor returned BLOCKING. Record:
-the maintainers' review record (kept internal). **All four surviving findings were escalated rather than
-fixed in place, and the user ruled on each** — the first time in five rounds that a model change
-was made by the person who owns the release rather than by the agent that found it.
+Items 18–21 came from a further review of items 16–17. The maintainers ruled on each of them.
 
 18. **The demotion's discriminator is "was this process signalled", not "was `rc` zero"**
     (6A.2). Round three's own widening of `FAULT_PATTERNS` is what made the difference bite:
@@ -1144,8 +1131,8 @@ was made by the person who owns the release rather than by the agent that found 
     ambiguity axis. This **inverts** a round-two regression test, which is recorded in that
     test's docstring rather than quietly rewritten.
 19. **The accounting model is versioned in the ledger** (`state.ACCOUNTING_EPOCH`), and
-    resuming a tree written under a different epoch warns. Raised independently by both
-    reviewers *and* by round three's own auditor — three of three. `DIGEST_COMPAT_DEFAULTS` is
+    resuming a tree written under a different epoch warns. Raised independently three
+    times. `DIGEST_COMPAT_DEFAULTS` is
     right that adding a key at its default is not a settings change, but the accounting model
     changed alongside that key and nothing compared it. Three questions now have three answers:
     the digest for settings, the runner version for the build, the epoch for the rules.
@@ -1154,8 +1141,7 @@ was made by the person who owns the release rather than by the agent that found 
     digest — so previewing under a changed config **erased the `config_changed()` warning** the
     real run would have shown. A dry run now never calls `save()` at all, which subsumes
     round three's field-by-field rollback. A first attempt snapshotted and restored the file
-    instead; codex reviewed *that* and was right again — a snapshot leaves a crash window and
-    its restoring write is not atomic. Not writing is crash-safe by construction, and a test
+    instead, but a snapshot leaves a crash window and its restoring write is not atomic. Not writing is crash-safe by construction, and a test
     makes `save()` fatal to assert it structurally.
 21. **The `128 + N` inference is documented as an assumption about the configured evaluator**
     (6A.2), not closed. The clean fix changes the generated job script and waits for hardware.
@@ -1534,11 +1520,17 @@ Kept, because each was a real incident:
 - **Bounded resubmission** with the same two-budget accounting as local.
 - **Finalized-result skipping** on resume, same predicate.
 
-**The SLURM backend was the least-tested part of this first cut, and has since been validated on
-hardware.** It is written against the same interface and shares all the planning, resume, retry
-and reporting logic; it ran on a real scheduler at two-way concurrency on a single node
-(`STATUS.md` §2, H9, 2026-08-15), matching the local backend's status and §6A axes for the same
-routes and seed. Its full 475-route scale and multi-node fan-out remain unmeasured.
+**Scheduler faults are settled like local ones.** A job whose accounting never appears is
+cancelled and settled as `FAULT`; runtime counts only while `squeue` shows the job running, so
+queue time is never route time; and before each submission the route's existing checkpoint is
+set aside (or a marker written), so a job the runner cannot identify can neither destroy a
+result nor run unsupervised beside a second one. The runner stops rather than guess. Operator
+steps are in `README.md` ("Set-aside checkpoints").
+
+**Hardware evidence.** The backend shares all the planning, resume, retry and reporting logic.
+It ran a full route category on a real scheduler on one node (`STATUS.md` §2, H9: two jobs at a
+time on 2026-08-15, up to six on 2026-10-05), matching the local backend's statuses and §6A
+axes for the same routes and seed. The full 475-route scale and several nodes are untested.
 
 ---
 
@@ -1552,6 +1544,7 @@ oodbench/
   results.py                finalization predicate + status taxonomy + classification
   ports.py                  deterministic allocator, invariants, probing, per-port run locks
   gpus.py                   cuda/vulkan pair resolution, --check-gpus preflight
+  envcheck.py               interpreter preflight, env_provenance.json, agent-code fingerprint
   jobscript.py              per-route bash generation (the inverted template)
   state.py                  attempt ledger, atomic persistence, resume
   report.py                 report.json / report.md, exit-code derivation
@@ -1559,7 +1552,7 @@ oodbench/
   backends/
     base.py                 Backend interface
     local.py                worker pool
-    slurm.py                sbatch backend (validated 2026-08-15, H9; full-scale/multi-node unmeasured)
+    slurm.py                sbatch backend (H9: one node; full scale and several nodes untested)
 reference_agent/
   constant_velocity_agent.py   stock AutonomousAgent, no ML dependency
 configs/
