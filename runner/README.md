@@ -170,8 +170,11 @@ world for its settings every 10 s and logs `world ready after N s`. If the world
 answered within `OODPB_WORLD_READY_S` seconds, the evaluator exits with status **75**, which
 the runner counts as an infrastructure failure. The default is two thirds of
 `execution.route_timeout_s`, at most 1800 s. To change it, set it in `agent.env` or export it in
-`environment.activate`. It must stay below the route timeout, because start-up time counts
-against the route's clock.
+`environment.activate`. A value set only in the shell you start the runner from is ignored
+(the job script unsets it), so it cannot change a run unrecorded. It must stay below the route
+timeout, because start-up time counts against the route's clock: a deadline at or above
+`execution.route_timeout_s` never fires, and the attempt is killed as a timeout instead, which
+does not count towards quarantining the worker.
 
 ---
 
@@ -180,10 +183,12 @@ against the route's clock.
 `configs/example.yaml` is the full reference. YAML needs PyYAML; JSON, and TOML on Python 3.11
 and later, need only the standard library.
 
-**`gpus`: two numbers per GPU.** `cuda` pins the agent (`CUDA_VISIBLE_DEVICES`); `vulkan` pins
-the CARLA server (`-graphicsadapter`). Both must be unique. If `vulkan` is missing it is
-assumed equal to `cuda`, with a warning. Under SLURM, `slurm.vulkan_index_scope: allocation`
-allows every one-GPU job to use Vulkan adapter 0. Use it only after checking, inside a job,
+**`gpus`: two numbers per GPU.** Locally, `cuda` pins the agent (`CUDA_VISIBLE_DEVICES`);
+under SLURM it is only the key that identifies the GPU, and the job keeps the
+`CUDA_VISIBLE_DEVICES` the scheduler gives it. `vulkan` pins the CARLA server
+(`-graphicsadapter`). CUDA numbers must be unique, and so must Vulkan numbers on one host. If
+`vulkan` is missing it is assumed equal to `cuda`, with a warning. Under SLURM,
+`slurm.vulkan_index_scope: allocation` allows every one-GPU job to use Vulkan adapter 0. Use it only after checking, inside a job,
 that the GPU's UUID or PCI address matches on the CUDA and Vulkan sides.
 
 **`ports`: fixed per worker, and checked.** Worker *i* gets `rpc_base + i*stride` and
@@ -212,8 +217,10 @@ result is never retried after a resume, although the same run would have retried
   A healthy attempt resets the count.
 - `tickruntime_budget`: default 0. `Failed - TickRuntime` means the agent is slower than
   CARLA's tick budget, and retrying does not fix that.
-- `killed_budget`: attempts the runner killed while a crash-shaped result was on disk. That
-  result might be the model's or an artefact of the kill, so it gets its own bounded budget.
+- `killed_budget`: attempts that ended abnormally (killed by the runner at the wall clock or
+  for quarantine, or a fault such as a signal, a node failure or preemption) while a
+  crash-shaped result was on disk. That result might be the model's or an artefact of the
+  ending, so it gets its own bounded budget.
 
 A broken GPU therefore cannot use up a route's model retries. Exhausting `infra_budget` leaves
 the route **unsettled**: the run exits 1, and later runs keep it that way. After fixing the
@@ -234,7 +241,9 @@ startup error.
 **Resuming after a config change.** A report warns *"produced by a DIFFERENT configuration"*
 when a setting changed since the output root was written. Adding a key at its default value
 does not trigger it (`DESIGN.md` §6A.11). The report also records the runner version, and the
-ledger records which version of the retry rules it was written under.
+ledger records which version of the retry rules it was written under; resuming a ledger written
+under older rules prints a warning naming both versions. The counters carry over unchanged, but
+routes still in progress may settle after a different number of attempts.
 
 ---
 

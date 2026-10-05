@@ -1517,20 +1517,24 @@ Kept, because each was a real incident:
   own job — so the pool ran one slot short, and if you renamed the orchestrator to dodge it, a
   second pool sharing the prefix would collide with the first. Tracking the IDs we submitted
   removes the whole class.
-- **Bounded resubmission** with the same two-budget accounting as local.
+- **Bounded resubmission** with the same four §6A budgets as local.
 - **Finalized-result skipping** on resume, same predicate.
 
-**Scheduler faults are settled like local ones.** A job whose accounting never appears is
-cancelled and settled as `FAULT`; runtime counts only while `squeue` shows the job running, so
-queue time is never route time; and before each submission the route's existing checkpoint is
+**Scheduler faults are settled like local ones.** A job that has left the queue and has no
+accounting record after 180 s is cancelled and settled as `FAULT`; if `squeue` itself fails and
+accounting has no record either, the run stops without settling the route. Runtime counts only
+while the job is seen running (in `squeue`, or in `sacct` when `squeue` fails), so queue time
+is never route time; a job that has left the queue but still shows as running in `sacct` is
+cancelled as a `TIMEOUT` once `execution.route_timeout_s` has passed since it left; and before each submission the route's existing checkpoint is
 set aside (or a marker written), so a job the runner cannot identify can neither destroy a
 result nor run unsupervised beside a second one. The runner stops rather than guess. Operator
 steps are in `README.md` ("Set-aside checkpoints").
 
 **Hardware evidence.** The backend shares all the planning, resume, retry and reporting logic.
 It ran a full route category on a real scheduler on one node (`STATUS.md` §2, H9: two jobs at a
-time on 2026-08-15, up to six on 2026-10-05), matching the local backend's statuses and §6A
-axes for the same routes and seed. The full 475-route scale and several nodes are untested.
+time on 2026-08-15, up to six on 2026-10-05). On 2026-08-15 it matched the local backend's
+statuses and §6A axes on nine routes run on both, for the same seed; the 2026-10-05 re-run
+exited 0 and is compared with the earlier SLURM run in `STATUS.md`. The full 475-route scale and several nodes are untested.
 
 ---
 

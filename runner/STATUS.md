@@ -88,8 +88,11 @@ SLURM 24.11.5 scheduler:
   a `SQUEUE_STATES` default in a user's shell would hide a running job. The three that choose
   which federation clusters it asks (`SQUEUE_FEDERATION`, `SQUEUE_LOCAL`, `SQUEUE_SIBLING`) are
   kept; this has not been tried on a federated cluster.
-- **Queue time is no longer counted as runtime.** Runtime counts only while `squeue` shows the
-  job running, and stops when the job is paused or leaves the queue. A job that ends before it
+- **Queue time is no longer counted as runtime.** Runtime counts only while the job is seen
+  running (in `squeue`, or in `sacct` when `squeue` itself fails), and stops when the job is
+  paused or leaves the queue. If `sacct` still says running after the job has left the queue,
+  the runner waits up to `execution.route_timeout_s` from leaving, then cancels the job and
+  settles a timeout. A job that ends before it
   is seen running takes its runtime from `sacct`, or records 0 s with
   `runtime unknown (never observed RUNNING)`.
 - **A previous checkpoint survives a job the runner cannot identify.** See "Set-aside
@@ -109,8 +112,8 @@ route settled, the run exited 0, and no set-aside file was left behind.
   the category.
 - Missing accounting and an `sbatch` reply without a job id could not be produced on demand;
   those paths are covered by replayed output only.
-- The reference agent's scores differed from the 2026-08-15 run on 16 of 70 routes (category
-  mean +0.38). Three of those routes had been run twice on 2026-08-15, and two of them had
+- The reference agent's scores differed from the 2026-08-15 run on 16 of 70 routes (4 of them
+  between `Completed` and `Failed - TickRuntime`; category mean +0.38). Three of those routes had been run twice on 2026-08-15, and two of them had
   differed between those two runs too. This fits the agent's run-to-run variation, and the
   backend change does not touch the simulation, but this run does not prove it.
 

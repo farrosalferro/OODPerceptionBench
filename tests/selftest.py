@@ -680,7 +680,7 @@ class TestMakeGolden(TempCase):
         self.assertEqual(p.returncode, 1)
         self.assertIn("disagree on status", p.stdout)
 
-    # ---- HV-07: the reference agent must be retrievable ------------------------------
+    # ---- the reference agent must be retrievable ------------------------------------
     def test_stamps_a_retrievable_reference_agent(self):
         p, _, doc = self.build(self.rep("rep1"), self.rep("rep2"))
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
@@ -802,7 +802,7 @@ class TestMakeGolden(TempCase):
         self.assertIn("no agent_code", p.stderr)
         self.assertFalse(os.path.exists(out))
 
-    # ---- HV-04: stamp the interpreter that RAN the routes, not the builder's -----------
+    # ---- stamp the interpreter that RAN the routes, not the builder's -----------------
     def test_stamps_the_replicates_python_not_the_builders(self):
         p, _, doc = self.build(self.rep("rep1", python="3.10.99"),
                                self.rep("rep2", python="3.10.99"))
@@ -850,7 +850,7 @@ class TestMakeGolden(TempCase):
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         self.assertFalse(os.path.exists(out))
 
-    # ---- HV-06: one composite digest over several archives, with a stated rule ----------
+    # ---- one composite digest over several archives, with a stated rule ----------------
     def test_composite_is_independent_of_archive_order(self):
         sums = read_asset_sums()
         self.assertGreaterEqual(len(sums), 2)
