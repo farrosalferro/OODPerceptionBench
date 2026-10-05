@@ -7,7 +7,7 @@
 
 A production runner for this benchmark includes scale and multi-GPU evidence that this release
 does not yet have. What exists now is the part that is expensive to change later — the design
-decisions in `DESIGN.md` — plus a working local implementation whose *logic* is covered by 371
+decisions in `DESIGN.md` — plus a working local implementation whose *logic* is covered by 376
 automated tests and whose *simulator interaction* was exercised against CARLA 0.9.15 on
 2026-08-11 and 2026-08-12. Single-route execution, two-worker one-GPU stacking, exact port
 isolation, real Ctrl-C/reaping/resume, failure accounting, and a nine-route PDM-Lite golden were
@@ -252,7 +252,7 @@ All of these run with no GPU, no CARLA, no network and no third-party packages (
 shipped-template tests need PyYAML and are skipped without it):
 
 ```
-python -m unittest discover -s tests -t .    ->  371 tests, OK, ~102 s
+python -m unittest discover -s tests -t .    ->  376 tests, OK, ~102 s
 ```
 
 | Area | Covered by | Notes |
@@ -363,12 +363,14 @@ observed;
 >   rather than retry the route beside it. `squeue` runs without the caller's `SQUEUE_*`
 >   variables: a `SQUEUE_STATES` default in a user's shell would hide a running job, which
 >   would then look gone.
-> - **Queue time is no longer recorded as runtime.** Runtime counts from when the runner first
->   sees the job `RUNNING` and stops at the first poll that no longer finds it in `squeue`, so
->   time spent waiting for accounting is not runtime either. A job that ends before it is seen
->   `RUNNING` takes its runtime from `sacct`'s `Start`, `End` and `Elapsed`; if those are
->   unavailable too, it records 0 s and the detail ends with
->   `runtime unknown (never observed RUNNING)`.
+> - **Queue time is no longer recorded as runtime.** Runtime counts only while `squeue` shows
+>   the job `RUNNING`. It stops when the job is paused, or at the first poll that no longer
+>   finds the job in `squeue`, and restarts only if `squeue` shows it `RUNNING` again. A
+>   lagging `RUNNING` from `sacct` after the job has left the queue does not move it; the run
+>   waits for a final `sacct` state, and cancels the job as a timeout if none arrives within
+>   `route_timeout_s` of it leaving the queue. A job that ends before it is seen `RUNNING`
+>   takes its runtime from `sacct`'s `Start`, `End` and `Elapsed`; if those are unavailable
+>   too, it records 0 s and the detail ends with `runtime unknown (never observed RUNNING)`.
 > - The `SQUEUE_*` handling and the runtime cut-off at leaving the queue were added after the
 >   2026-10-05 re-run and are covered by tests only.
 > - **A route's previous checkpoint survives a job the runner cannot identify.** Before

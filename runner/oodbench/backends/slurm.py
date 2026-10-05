@@ -583,7 +583,7 @@ class SlurmBackend(Backend):
 
         # The job has left the queue, or squeue cannot say: either way accounting decides.
         if queued == "":
-            self._gone_since.setdefault(job_ref, time.time())
+            self._leave_queue(job_ref)
         accounting, missing = self._sacct_query(job_ref)
         if accounting is None:
             if queued is None:
@@ -593,6 +593,8 @@ class SlurmBackend(Backend):
         state, exit_code = accounting
         base_state = self._base_state(state)
         if base_state in _NONTERMINAL_STATES:
+            if job_ref in self._gone_since:
+                return self._poll_after_the_queue(attempt, job_ref, base_state)
             return self._poll_active_state(attempt, job_ref, base_state)
 
         finished_at = time.time()
@@ -610,6 +612,32 @@ class SlurmBackend(Backend):
         self._settle_attempt(attempt, outcome, detail, finished_at, runtime, unknown)
         self._forget(job_ref)
         return True
+
+    def _leave_queue(self, job_ref: str) -> None:
+        """squeue no longer lists the job: stop the route clock as a pause would.
+
+        Only squeue listing the job again restarts it (through ``_poll_active_state``).
+        """
+        now = time.time()
+        self._gone_since.setdefault(job_ref, now)
+        if job_ref in self._running:
+            self._running.remove(job_ref)
+            self._paused_at[job_ref] = now
+
+    def _poll_after_the_queue(self, attempt: Attempt, job_ref: str, state: str) -> bool:
+        """Accounting still reports ``state`` for a job squeue no longer lists.
+
+        Accounting lags the queue, so this neither starts nor resumes the route clock. The
+        wait is bounded by ``route_timeout_s`` from when the job left the queue.
+        """
+        waited = time.time() - self._gone_since[job_ref]
+        if waited > float(self.cfg.execution["route_timeout_s"]):
+            self.kill(attempt, "wall-clock timeout")
+            attempt.outcome = AttemptOutcome.TIMEOUT
+            attempt.detail = (f"scancelled {waited:.0f}s after it left the queue; accounting "
+                              f"still says {state}")
+            return True
+        return False
 
     def _poll_without_accounting(self, attempt: Attempt, job_ref: str, missing: str) -> bool:
         """The job has left the queue but accounting has no state: after a grace, a FAULT.
@@ -694,14 +722,14 @@ class SlurmBackend(Backend):
         return False
 
     def _observed_runtime(self, attempt: Attempt, job_ref: str, now: float) -> Optional[float]:
-        """RUNNING time seen by polls, excluding paused residence and anything after the job
-        left the queue; None if never seen RUNNING.
+        """RUNNING time seen by polls, excluding paused residence and time out of the queue;
+        None if never seen RUNNING.
 
         Reads without mutating, so ``kill`` can call it before cancellation forgets the job.
         """
         if job_ref not in self._started:
             return None
-        running_until = self._paused_at.get(job_ref, self._gone_since.get(job_ref, now))
+        running_until = self._paused_at.get(job_ref, now)
         return max(0.0, running_until - attempt.started_at)
 
     def _route_runtime(self, attempt: Attempt, job_ref: str, now: float) -> Tuple[float, bool]:

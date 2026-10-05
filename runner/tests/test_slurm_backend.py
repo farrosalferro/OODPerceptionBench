@@ -931,6 +931,131 @@ class TestRuntimeWithoutRunning(SlurmBackendBase):
                 self.assertTrue(got["settle"][1].endswith(t["tag"]), got["settle"][1])
 
 
+class TestRouteClockAfterTheQueue(SlurmBackendBase):
+    """Once ``squeue`` no longer lists a job, accounting that lags behind cannot move its clock.
+
+    ``sacct`` can still say ``RUNNING`` or ``PENDING`` for a job that has already left the queue.
+    Leaving the queue stops the route clock, like a pause; only the job showing up in ``squeue``
+    again restarts it. Every scheduler answer here is captured output.
+    """
+
+    def submitted(self, clock, *, squeue, sacct, times=("sacct_times_failed",),
+                  route_timeout_s=3600):
+        self.replay("sbatch", "sbatch_parsable")
+        self.replay("squeue", *squeue)
+        self.replay("sacct", *sacct)
+        self.replay("sacct", *times, when="Start,End,Elapsed")
+        self.replay("scancel", "scancel_ok")
+        _, backend, task = self.backend_and_task(
+            execution={"route_timeout_s": route_timeout_s}, slurm={"submit_interval_s": 0})
+        attempt = backend.submit(task, worker=0)
+        attempt.started_at = clock.now
+        return backend, attempt
+
+    def polls(self, clock, backend, attempt, *offsets):
+        start = clock.now
+        results = []
+        for offset in offsets:
+            clock.now = start + offset
+            results.append(backend.poll(attempt))
+        return results
+
+    def test_lagging_running_accounting_does_not_start_the_clock(self):
+        """RED BEFORE THE FIX:
+
+            AssertionError: 0.0 != 5.0 : a run never seen RUNNING was recorded as a measured 0 s
+
+        Never seen RUNNING by ``squeue``: gone at t+20 while ``sacct`` still says RUNNING, then
+        FAILED. The runtime must come from ``sacct`` ``Elapsed`` (5 s in the capture).
+        """
+        clock = _Clock()
+        with unittest.mock.patch("time.time", clock):
+            backend, attempt = self.submitted(
+                clock, squeue=("squeue_pending", "squeue_gone_recent"),
+                sacct=("sacct_running", "sacct_failed_exit3"))
+            self.assertEqual(self.polls(clock, backend, attempt, 10, 20, 30),
+                             [False, False, True])
+
+        self.assertEqual(attempt.duration_s, 5.0,
+                         "a run never seen RUNNING was recorded as a measured 0 s")
+        self.assertEqual(attempt.detail, "SLURM state FAILED")
+
+    def test_a_later_accounting_pause_does_not_extend_the_clock(self):
+        """RED BEFORE THE FIX:
+
+            AssertionError: 20.0 != 10.0 : time after the job left the queue was counted
+
+        RUNNING at t0, gone at t10 (sacct still RUNNING), sacct PENDING at t20, FAILED at t30.
+        """
+        clock = _Clock()
+        with unittest.mock.patch("time.time", clock):
+            backend, attempt = self.submitted(
+                clock, squeue=("squeue_running", "squeue_gone_recent"),
+                sacct=("sacct_running", "sacct_pending", "sacct_failed_exit3"))
+            self.assertEqual(self.polls(clock, backend, attempt, 0, 10, 20, 30),
+                             [False, False, False, True])
+
+        self.assertEqual(attempt.duration_s, 10.0,
+                         "time after the job left the queue was counted")
+
+    def test_a_lagging_resume_does_not_erase_the_clock(self):
+        """RED BEFORE THE FIX:
+
+            AssertionError: 0.0 != 10.0 : the RUNNING time before the job left the queue was lost
+
+        RUNNING at t0, gone at t10 (sacct PENDING), sacct RUNNING at t30, FAILED at t40.
+        """
+        clock = _Clock()
+        with unittest.mock.patch("time.time", clock):
+            backend, attempt = self.submitted(
+                clock, squeue=("squeue_running", "squeue_gone_recent"),
+                sacct=("sacct_pending", "sacct_running", "sacct_failed_exit3"))
+            self.assertEqual(self.polls(clock, backend, attempt, 0, 10, 30, 40),
+                             [False, False, False, True])
+
+        self.assertEqual(attempt.duration_s, 10.0,
+                         "the RUNNING time before the job left the queue was lost")
+
+    def test_time_out_of_the_queue_is_not_counted_when_the_job_returns(self):
+        """RED BEFORE THE FIX:
+
+            AssertionError: 60.0 != 20.0 : the time the job was out of the queue was counted
+
+        RUNNING at t0, gone at t10 (sacct RUNNING), listed RUNNING again at t50, gone and
+        FAILED at t60: 10 s + 10 s of observed RUNNING time.
+        """
+        clock = _Clock()
+        with unittest.mock.patch("time.time", clock):
+            backend, attempt = self.submitted(
+                clock, squeue=("squeue_running", "squeue_gone_recent", "squeue_running",
+                               "squeue_gone_recent"),
+                sacct=("sacct_running", "sacct_failed_exit3"))
+            self.assertEqual(self.polls(clock, backend, attempt, 0, 10, 50, 60),
+                             [False, False, False, True])
+
+        self.assertEqual(attempt.duration_s, 20.0,
+                         "the time the job was out of the queue was counted")
+
+    def test_accounting_stuck_on_running_still_hits_the_route_timeout(self):
+        """Guard, green before and after: a job gone from ``squeue`` whose accounting never
+        leaves RUNNING is still cancelled at ``route_timeout_s`` instead of being polled
+        forever, and the recorded runtime is the 10 s it was seen RUNNING.
+        """
+        clock = _Clock()
+        with unittest.mock.patch("time.time", clock), \
+                unittest.mock.patch("oodbench.backends.slurm._CANCEL_POLL_S", 0):
+            backend, attempt = self.submitted(
+                clock, squeue=("squeue_running", "squeue_gone_recent"),
+                sacct=("sacct_running", "sacct_running", "sacct_cancelled_running"),
+                route_timeout_s=100)
+            self.assertEqual(self.polls(clock, backend, attempt, 0, 10, 120),
+                             [False, False, True])
+
+        self.assertIs(attempt.outcome, AttemptOutcome.TIMEOUT)
+        self.assertEqual(attempt.duration_s, 10.0)
+        self.assertEqual(self.calls("scancel"), [["141229"]])
+
+
 class TestDurableAside(SlurmBackendBase):
     """The checkpoint a retry replaces is kept on disk, not only in process memory.
 
