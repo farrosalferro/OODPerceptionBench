@@ -157,7 +157,7 @@ slurm:                   # only read when backend == slurm
   max_parallel: 8      # concurrency under this backend (NOT execution.workers)
   submit_interval_s: 1.0
   vulkan_index_scope: host  # host | allocation
-  extra_directives: []
+  extra_directives: []      # full "#SBATCH ..." lines, copied as they are
 ```
 
 **Why `agent.env`, `agent.pythonpath` and `agent.working_dir` exist.** Surveying all ~18
@@ -572,7 +572,7 @@ values, and nothing else, are:
 |---|---|---|
 | `EXITED` | both backends | the process finished **on its own**; local sets it when `Popen.poll()` returns a code and stderr has no fault pattern, SLURM when the job left the queue and `sacct` reports a non-fault state |
 | `TIMEOUT` | both backends | breached `execution.route_timeout_s`; the runner killed it |
-| `FAULT` | both backends | a fault pattern in stderr (`Segmentation fault`, `Aborted (core dumped)`, …) — see the warning below; or a SLURM state of `CANCELLED`/`TIMEOUT`/`NODE_FAIL`/`OUT_OF_MEMORY`/`PREEMPTED`/`BOOT_FAIL` |
+| `FAULT` | both backends | a fault pattern in stderr (`Segmentation fault`, `Aborted (core dumped)`, …) — see the warning below; or a SLURM state of `CANCELLED`/`TIMEOUT`/`NODE_FAIL`/`OUT_OF_MEMORY`/`PREEMPTED`/`BOOT_FAIL`; or a SLURM job that left the queue with no accounting record for 180 s |
 | `KILLED` | `Backend.kill()` | the runner killed it and no more specific outcome was already set |
 | `LAUNCH_FAILED` | both backends | it never started: busy ports after reaping, an out-of-range slot, `Popen`/`sbatch` refusal, an unparsable job id, a checkpoint that could not be moved aside |
 | *(`None`)* | — | not a member of the enum, but `Attempt.outcome` is `Optional` and `_settle` must handle it. Treated as `LAUNCH_FAILED` (see 6A.4 class **NEVER_STARTED**) and warned about, because it means a backend returned "finished" without saying how |
@@ -1342,8 +1342,10 @@ deliberately not results.
 
 - **Not fixed here (separate decisions, out of scope):** resume identity does not hash the model
   / checkpoint / route content, so a changed agent resumes onto an old tree (finding 1); a
-  `squeue` failure still reads as "job finished" (finding 3); SLURM has no node-local port probe
-  (finding 4); release metadata is hard-coded (finding 8).
+  `squeue` failure still reads as "job finished" (finding 3; since fixed: an `squeue` error falls
+  through to `sacct`; a job that has left the queue with no accounting for 180 s settles as
+  `FAULT`, and one that `squeue` cannot place either stops the run instead); SLURM has no
+  node-local port probe (finding 4); release metadata is hard-coded (finding 8).
 - **Cost — an ambiguous record is destroyed by its own retry.** Charging ABNORMAL_END +
   `RETRY_RECORD` to the `killed` axis means the route is re-queued, and `take_checkpoint_aside`
   deletes the record on the next *successful* launch. If that attempt then produces nothing, the

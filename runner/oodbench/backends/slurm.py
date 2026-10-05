@@ -40,17 +40,21 @@ collide.
 
 from __future__ import annotations
 
+import json
+import os
+import pwd
 import re
 import shlex
 import subprocess
 import time
+import uuid
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from .. import jobscript, ports as ports_mod, reap
 from ..config import Config
 from ..plan import RouteTask
-from .base import (Attempt, AttemptOutcome, Backend, restore_checkpoint,
-                   take_checkpoint_aside)
+from .base import Attempt, AttemptOutcome, Backend, take_checkpoint_aside
 
 _JOBID_RE = re.compile(
     r"\s*(?P<job>\d+)(?:;(?P<cluster>[A-Za-z0-9_.-]+))?\s*\Z"
@@ -69,8 +73,20 @@ _FAULT_STATES = frozenset({
     "REVOKED", "TIMEOUT",
 })
 
+# ``<checkpoint>.aside-<unix ns>`` (SlurmBackend._write_aside) and
+# ``<checkpoint>.unsettled-<unix ns>`` (SlurmBackend._write_marker).
+_LEFTOVER_RE = re.compile(r"\A(?P<checkpoint>.+)\.(?P<kind>aside|unsettled)-\d+\Z")
+_LEFTOVERS_LISTED = 20
+
 _CANCEL_WAIT_S = 60.0
 _CANCEL_POLL_S = 0.2
+
+# How long a job may be unknown to both ``squeue`` and ``sacct`` before it settles as FAULT.
+# A module constant, not a config key: a new key would move every existing config digest.
+_ACCOUNTING_GRACE_S = 180.0
+
+_ELAPSED_RE = re.compile(r"\A(?:(?P<days>\d+)-)?(?P<h>\d+):(?P<m>\d+):(?P<s>\d+)\Z")
+_RUNTIME_UNKNOWN = "runtime unknown (never observed RUNNING)"
 
 
 class SlurmBackendError(Exception):
@@ -104,8 +120,16 @@ class SlurmBackend(Backend):
         self._running: set[str] = set()
         self._started: set[str] = set()
         self._paused_at: Dict[str, float] = {}
+        self._unknown_since: Dict[str, float] = {}
+        # When squeue first stopped listing a job: the route clock stops there, however long
+        # accounting then takes to report how it ended.
+        self._gone_since: Dict[str, float] = {}
+        # Every supervised job's route, and the file that holds the route on disk until the
+        # job is settled: its set-aside checkpoint, or a marker when there was none.
+        self._routes: Dict[str, Tuple[RouteTask, Path]] = {}
 
     def preflight(self) -> None:
+        self._refuse_leftovers()
         for tool in ("sbatch", "squeue"):
             if subprocess.call(["bash", "-lc", f"command -v {tool} >/dev/null"]) != 0:
                 raise SlurmBackendError(
@@ -122,10 +146,53 @@ class SlurmBackend(Backend):
             "the generated job script before launching a large sweep."
         )
 
+    def _refuse_leftovers(self) -> None:
+        """Refuse to start while an earlier run left a route unsettled on disk.
+
+        A set-aside checkpoint or an ``.unsettled-`` marker means that run stopped without
+        settling the route (a crash, or a job it could not identify or confirm cancelled).
+        This run would plan the route from whatever now sits at the checkpoint path, beside a
+        job that may still write it. Nothing is moved automatically: whether a job still
+        writes that path is the operator's call.
+        """
+        root = Path(self.cfg.output["root"])
+        found = sorted(path for path in root.rglob("*-*")
+                       if _LEFTOVER_RE.match(path.name) and path.is_file())
+        if not found:
+            return
+        kinds = [_LEFTOVER_RE.match(path.name).group("kind") for path in found]
+        listed = []
+        for path, kind in list(zip(found, kinds))[:_LEFTOVERS_LISTED]:
+            checkpoint = path.with_name(_LEFTOVER_RE.match(path.name).group("checkpoint"))
+            if kind == "aside":
+                listed.append(f"  {path} -> {checkpoint}")
+            else:
+                listed.append(f"  {path} (a job may still write {checkpoint})")
+        if len(found) > _LEFTOVERS_LISTED:
+            listed.append(f"  ... and {len(found) - _LEFTOVERS_LISTED} more "
+                          f"(find {root} -name '*.aside-*' -o -name '*.unsettled-*')")
+        counts = []
+        if "aside" in kinds:
+            counts.append(f"{kinds.count('aside')} set-aside checkpoint(s)")
+        if "unsettled" in kinds:
+            counts.append(f"{kinds.count('unsettled')} unsettled-job marker(s)")
+        find_jobs = f"squeue -u {_user() or '$USER'} -o '%i %j %k'; scancel <id>"
+        raise SlurmBackendError(
+            f"{' and '.join(counts)} under {root} were left by an earlier run that stopped "
+            "before settling those routes:\n" + "\n".join(listed) + "\n"
+            "Refusing to start until each is resolved. First stop any job of the earlier run "
+            f"that is still queued or running ({find_jobs}). Then, for each set-aside "
+            "checkpoint, either put the earlier result back (mv <aside> <checkpoint>) or "
+            "delete the file to rerun the route. If the checkpoint exists again, a job wrote "
+            "it after the file was set aside: keep whichever you trust. Delete each "
+            ".unsettled- file once the job it names (by id, or by name and comment) has ended. "
+            f"{root / '_runner' / 'aside.jsonl'} records when and why each file was left."
+        )
+
     # -- submit -------------------------------------------------------------------------
-    def _sbatch_header(self, task: RouteTask) -> str:
+    def _sbatch_header(self, task: RouteTask, tag: str) -> str:
         s = self.cfg.slurm
-        job_name = f"oodbench-{task.stem}"[:60]
+        job_name = _job_name(task)
 
         def directive(flag: str, value: object) -> str:
             return f"#SBATCH {flag}={shlex.quote(str(value))}"
@@ -133,6 +200,8 @@ class SlurmBackend(Backend):
         lines = [
             "#!/bin/bash",
             directive("--job-name", job_name),
+            # This submission's own identity, for when sbatch's reply names no job.
+            directive("--comment", tag),
             directive("--output", task.stdout_path),
             directive("--error", task.stderr_path),
             "#SBATCH --nodes=1",
@@ -243,21 +312,42 @@ class SlurmBackend(Backend):
         # otherwise loses every route at its first write.
         task.mkdirs()
 
-        # Keep the old record in hand: sbatch refusing a submission (full queue, QOS limit) is
-        # routine, and must not destroy a valid result. See backends.base.take_checkpoint_aside.
+        wrapper = task.job_script.with_suffix(".sbatch")
+        tag = _submission_tag()
+
+        # Keep the old record: sbatch refusing a submission (full queue, QOS limit) is routine,
+        # and must not destroy a valid result. See backends.base.take_checkpoint_aside. It is
+        # kept on disk, synced, before the original goes: held only in memory, any exception
+        # or crash before sbatch's answer was understood lost the route's only record.
+        # With no old record, a marker takes its place. Either way a file on disk stops the
+        # next run from starting beside this job until it is settled (``_refuse_leftovers``),
+        # even if this process dies without reaching shutdown.
+        what = "set the old checkpoint aside"
         try:
-            stale = take_checkpoint_aside(task)
+            hold = self._write_aside(task)
+            if hold is None:
+                what = "write the unsettled-job marker"
+                hold = self._write_marker(task, "marked", "submitted", job_name=_job_name(task),
+                                          comment=tag, script=str(wrapper))
         except OSError as exc:
+            attempt.outcome = AttemptOutcome.LAUNCH_FAILED
+            attempt.detail = f"could not {what}: {exc}"
+            attempt.finished_at = time.time()
+            self.log.error("%s: %s; not submitting", task.key, attempt.detail)
+            return attempt
+        try:
+            take_checkpoint_aside(task)
+        except OSError as exc:
+            self._drop_hold(task, hold)
             attempt.outcome = AttemptOutcome.LAUNCH_FAILED
             attempt.detail = f"could not remove stale checkpoint: {exc}"
             attempt.finished_at = time.time()
             return attempt
 
-        wrapper = task.job_script.with_suffix(".sbatch")
         wrapper.parent.mkdir(parents=True, exist_ok=True)
         task.stdout_path.parent.mkdir(parents=True, exist_ok=True)
         body = self._job_body(task, worker)
-        wrapper.write_text(self._sbatch_header(task) + body, encoding="utf-8")
+        wrapper.write_text(self._sbatch_header(task, tag) + body, encoding="utf-8")
         wrapper.chmod(0o750)
 
         # Submission rate limiting: caps a runaway submit loop regardless of the gate above it.
@@ -272,7 +362,7 @@ class SlurmBackend(Backend):
             out = subprocess.check_output(["sbatch", "--parsable", str(wrapper)], text=True,
                                           stderr=subprocess.PIPE).strip()
         except (subprocess.CalledProcessError, OSError) as exc:
-            restore_checkpoint(task, stale)
+            self._drop_hold(task, hold)
             attempt.outcome = AttemptOutcome.LAUNCH_FAILED
             attempt.detail = f"sbatch failed: {exc}"
             attempt.finished_at = time.time()
@@ -286,12 +376,7 @@ class SlurmBackend(Backend):
             # checkpoint or returning an outcome that the runner may requeue.
             recovered = _JOBID_PREFIX_RE.match(out)
             if recovered is None:
-                raise SlurmBackendError(
-                    "sbatch accepted a job but returned no recoverable job identity; "
-                    f"output was {out!r}. Refusing to restore the prior checkpoint or requeue "
-                    "while an unidentified scheduler job may still write it; operator "
-                    "intervention is required"
-                )
+                return self._identify_by_tag(attempt, task, wrapper, hold, out, tag)
             job_ref = recovered.group(0).strip()
             attempt.handle = job_ref
             self._submitted.append(job_ref)
@@ -299,8 +384,16 @@ class SlurmBackend(Backend):
                 "%s: sbatch accepted SLURM job %s with malformed parsable output %r; "
                 "cancelling it before retry is allowed", task.key, job_ref, out,
             )
-            self._cancel_and_wait(job_ref)
-            restore_checkpoint(task, stale)
+            try:
+                self._cancel_and_wait(job_ref)
+            except SlurmBackendError as exc:
+                # The job may still be writing the checkpoint, so the route stays held.
+                # The job stays in ``_submitted``: shutdown tries the cancel again.
+                hold = self._leave_unsettled(task, hold, "cancel unconfirmed", job=job_ref)
+                raise SlurmBackendError(
+                    f"{exc}. {_reclaim_steps(task, hold, f'scancel {job_ref}')}"
+                ) from exc
+            self._drop_hold(task, hold)
             attempt.outcome = AttemptOutcome.LAUNCH_FAILED
             attempt.detail = (
                 f"sbatch returned malformed parsable output {out!r}; recovered and "
@@ -311,8 +404,162 @@ class SlurmBackend(Backend):
         job_ref = m.group(0).strip()
         attempt.handle = job_ref
         self._submitted.append(job_ref)
+        self._routes[job_ref] = (task, hold)
         self.log.info("submitted %s as SLURM job %s", task.key, job_ref)
         return attempt
+
+    def _identify_by_tag(self, attempt: Attempt, task: RouteTask, wrapper: Path,
+                         hold: Path, out: str, tag: str) -> Attempt:
+        """sbatch exited zero, so a job exists, but its reply named none. Find it.
+
+        Name and script are not enough: an older job of the same route (an earlier retry or
+        run on this output root) has both, and while the new job is not yet visible it would
+        be the only match. So each submission carries its own ``--comment`` tag, and only a
+        job of the user's with this route's name *and* this tag is supervised. Otherwise
+        nothing is cancelled or restored: an unknown job may still write the checkpoint, and
+        the operator is told how to recover.
+        """
+        name = _job_name(task)
+        found, failure = _own_jobs(name, tag)
+        if found is not None and len(found) == 1:
+            job_ref = found[0]
+            attempt.handle = job_ref
+            self._submitted.append(job_ref)
+            self._routes[job_ref] = (task, hold)
+            self.log.warning(
+                "%s: sbatch reply %r carried no job id; identified SLURM job %s by its name and "
+                "submission tag", task.key, out, job_ref,
+            )
+            return attempt
+
+        if found is None:
+            lookup = f"Looking it up by name {name} and tag {tag} failed: {failure}"
+        elif not found:
+            lookup = f"There is no job of yours named {name} with the tag {tag}"
+        else:
+            lookup = (f"Jobs {', '.join(found)} of yours are all named {name} with the tag "
+                      f"{tag}, so none can be told apart")
+        hold = self._leave_unsettled(task, hold, "unidentified job", job_name=name,
+                                     comment=tag, script=str(wrapper), reply=out)
+        find = f"squeue -u {_user() or '$USER'} --name {name} -o '%i %k'; scancel <id>"
+        raise SlurmBackendError(
+            "sbatch accepted a job but returned no recoverable job identity; "
+            f"output was {out!r}. {lookup}. Refusing to restore the prior checkpoint or "
+            "requeue while an unidentified scheduler job may still write it. "
+            + _reclaim_steps(task, hold, find)
+        )
+
+    # -- the set-aside checkpoint -------------------------------------------------------
+    def _write_aside(self, task: RouteTask) -> Optional[Path]:
+        """Copy the current checkpoint to ``<checkpoint>.aside-<unix ns>``, synced to disk.
+
+        Returns None when there is no checkpoint. Raises OSError (a full disk, say) with no
+        partial file left and the original untouched, so the caller can abort before sbatch.
+        """
+        try:
+            blob = task.result_path.read_bytes()
+        except FileNotFoundError:
+            return None
+        aside = task.result_path.with_name(f"{task.result_path.name}.aside-{time.time_ns()}")
+        _write_synced(aside, blob)
+        self._aside_ledger(task, "set_aside", aside)
+        return aside
+
+    def _write_marker(self, task: RouteTask, event: str, reason: str, **info: object) -> Path:
+        """Write ``<checkpoint>.unsettled-<unix ns>``, a synced note on the job that may write
+        ``task``'s checkpoint. Raises OSError with no partial file left."""
+        marker = task.result_path.with_name(
+            f"{task.result_path.name}.unsettled-{time.time_ns()}")
+        note = {"checkpoint": str(task.result_path), "reason": reason, **info}
+        _write_synced(marker, (json.dumps(note, sort_keys=True) + "\n").encode("utf-8"))
+        self._aside_ledger(task, event, marker, reason=reason, **info)
+        return marker
+
+    def _leave_unsettled(self, task: RouteTask, hold: Path, reason: str,
+                         **info: object) -> Path:
+        """This run gives up on a job that may still write ``task``'s checkpoint.
+
+        The file holding the route stays, so the next run refuses to start until the operator
+        has looked (see ``_refuse_leftovers``). A marker is rewritten to say why and which job;
+        its replacement is on disk before the first goes, so the route is never left without
+        one. Returns the file that now holds the route.
+        """
+        if _hold_kind(hold) == "aside":
+            self._aside_ledger(task, "kept", hold, reason=reason, **info)
+            return hold
+        try:
+            earlier = json.loads(hold.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            earlier = {}
+        known = {k: v for k, v in earlier.items() if k not in ("checkpoint", "reason")}
+        try:
+            marker = self._write_marker(task, "kept", reason, **{**known, **info})
+        except OSError as exc:
+            self.log.error("%s: could not update %s (%s); it still stops the next run",
+                           task.key, hold, exc)
+            self._aside_ledger(task, "kept", hold, reason=reason, **info)
+            return hold
+        try:
+            hold.unlink()
+        except OSError as exc:  # two markers for one route still stop the next run
+            self.log.warning("%s: could not delete %s: %s", task.key, hold, exc)
+        return marker
+
+    def _abandon(self, job_ref: str, why: str, reason: str) -> SlurmBackendError:
+        """Stop managing ``job_ref``'s route, leaving it unsettled on disk; the error to raise.
+
+        The job stays in ``_submitted``, so shutdown still tries to cancel it. Its route is
+        no longer tracked, so even a cancel confirmed later deletes nothing.
+        """
+        entry = self._routes.pop(job_ref, None)
+        if entry is None:
+            return SlurmBackendError(why)
+        task, hold = entry
+        hold = self._leave_unsettled(task, hold, reason, job=job_ref)
+        return SlurmBackendError(f"{why}. {_reclaim_steps(task, hold, f'scancel {job_ref}')}")
+
+    def _drop_hold(self, task: RouteTask, hold: Path) -> None:
+        """No job was left running: put the set-aside checkpoint back, or delete the marker."""
+        try:
+            if _hold_kind(hold) == "aside":
+                os.replace(hold, task.result_path)  # the rename also removes the file
+            else:
+                hold.unlink()
+            _fsync_dir(hold.parent)
+        except OSError as exc:  # the file survives; startup refuses until reclaimed
+            self.log.error("%s: could not %s %s: %s", task.key,
+                           "restore" if _hold_kind(hold) == "aside" else "delete", hold, exc)
+            return
+        self._aside_ledger(task, "restored" if _hold_kind(hold) == "aside" else "discarded",
+                           hold)
+
+    def _release(self, job_ref: str) -> None:
+        """The job is over: the file that held its route is no longer needed."""
+        task, hold = self._routes.pop(job_ref, (None, None))
+        if hold is None:
+            return
+        try:
+            hold.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            self.log.warning("%s: could not delete %s: %s", task.key, hold, exc)
+            return
+        self._aside_ledger(task, "discarded", hold, job=job_ref)
+
+    def _aside_ledger(self, task: RouteTask, event: str, aside: Path, **extra) -> None:
+        """Append one synced line to ``_runner/aside.jsonl``: what happened to which file."""
+        path = Path(self.cfg.output["root"]) / "_runner" / "aside.jsonl"
+        line = {"time": time.time(), "event": event, "key": task.key, "path": str(aside)}
+        line.update(extra)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(line, sort_keys=True) + "\n")
+                f.flush()
+                os.fsync(f.fileno())
+        except OSError as exc:  # the aside file itself is the record; the ledger explains it
+            self.log.warning("could not append to %s: %s", path, exc)
 
     # -- poll ---------------------------------------------------------------------------
     def poll(self, attempt: Attempt) -> bool:
@@ -323,48 +570,122 @@ class SlurmBackend(Backend):
             attempt.outcome = AttemptOutcome.LAUNCH_FAILED
             attempt.finished_at = time.time()
             return True
-        job_id, cluster_args = self._job_id_and_cluster(job_ref)
 
         # Gate on *our* job ids, never on a name grep -- see the module docstring.
-        try:
-            out = subprocess.check_output(
-                ["squeue", "-h", "-j", job_id, "-o", "%T"] + cluster_args, text=True,
-                stderr=subprocess.DEVNULL).strip()
-        except (subprocess.CalledProcessError, OSError):
-            out = ""
-        if out:
-            queue_state = self._base_state(out.splitlines()[0])
+        queued, queue_missing = self._squeue_query(job_ref)
+        if queued:
+            self._unknown_since.pop(job_ref, None)
+            self._gone_since.pop(job_ref, None)
             # A state still visible in squeue is active scheduler ownership. PENDING,
             # COMPLETING, REQUEUED and SUSPENDED pause the evaluator clock; only RUNNING
             # advances it. Terminal accounting below remains the source of truth.
-            return self._poll_active_state(attempt, job_ref, queue_state)
+            return self._poll_active_state(attempt, job_ref, self._base_state(queued))
 
-        accounting = self._sacct_state(job_ref)
-        state, exit_code = accounting if accounting is not None else (None, None)
-        base_state = self._base_state(state or "")
+        # The job has left the queue, or squeue cannot say: either way accounting decides.
+        if queued == "":
+            self._leave_queue(job_ref)
+        accounting, missing = self._sacct_query(job_ref)
+        if accounting is None:
+            if queued is None:
+                return self._poll_unreachable(attempt, job_ref, f"{queue_missing}; {missing}")
+            return self._poll_without_accounting(attempt, job_ref, missing)
+        self._unknown_since.pop(job_ref, None)
+        state, exit_code = accounting
+        base_state = self._base_state(state)
         if base_state in _NONTERMINAL_STATES:
+            if job_ref in self._gone_since:
+                return self._poll_after_the_queue(attempt, job_ref, base_state)
             return self._poll_active_state(attempt, job_ref, base_state)
 
         finished_at = time.time()
-        self._close_route_clock(attempt, job_ref, finished_at)
-        attempt.finished_at = finished_at
+        runtime, unknown = self._route_runtime(attempt, job_ref, finished_at)
         if exit_code:
             attempt.exit_code = self._exit_code(exit_code)
         signalled = (reap.describe_exit_signal(attempt.exit_code)
                      if attempt.exit_code is not None else None)
         if signalled:
-            attempt.outcome = AttemptOutcome.FAULT
-            attempt.detail = f"SLURM state {state or 'unknown'}; {signalled}"
-            self._forget(job_ref)
-            return True
-        if base_state in _FAULT_STATES:
-            attempt.outcome = AttemptOutcome.FAULT
-            attempt.detail = f"SLURM state {state}"
+            outcome, detail = AttemptOutcome.FAULT, f"SLURM state {state}; {signalled}"
+        elif base_state in _FAULT_STATES:
+            outcome, detail = AttemptOutcome.FAULT, f"SLURM state {state}"
         else:
-            attempt.outcome = AttemptOutcome.EXITED
-            attempt.detail = f"SLURM state {state or 'unknown'}"
+            outcome, detail = AttemptOutcome.EXITED, f"SLURM state {state}"
+        self._settle_attempt(attempt, outcome, detail, finished_at, runtime, unknown)
         self._forget(job_ref)
         return True
+
+    def _leave_queue(self, job_ref: str) -> None:
+        """squeue no longer lists the job: stop the route clock as a pause would.
+
+        Only squeue listing the job again restarts it (through ``_poll_active_state``).
+        """
+        now = time.time()
+        self._gone_since.setdefault(job_ref, now)
+        if job_ref in self._running:
+            self._running.remove(job_ref)
+            self._paused_at[job_ref] = now
+
+    def _poll_after_the_queue(self, attempt: Attempt, job_ref: str, state: str) -> bool:
+        """Accounting still reports ``state`` for a job squeue no longer lists.
+
+        Accounting lags the queue, so this neither starts nor resumes the route clock. The
+        wait is bounded by ``route_timeout_s`` from when the job left the queue.
+        """
+        waited = time.time() - self._gone_since[job_ref]
+        if waited > float(self.cfg.execution["route_timeout_s"]):
+            self.kill(attempt, "wall-clock timeout")
+            attempt.outcome = AttemptOutcome.TIMEOUT
+            attempt.detail = (f"scancelled {waited:.0f}s after it left the queue; accounting "
+                              f"still says {state}")
+            return True
+        return False
+
+    def _poll_without_accounting(self, attempt: Attempt, job_ref: str, missing: str) -> bool:
+        """The job has left the queue but accounting has no state: after a grace, a FAULT.
+
+        An empty or failed accounting reply is absence of evidence. Settling it as a clean
+        exit charged the model's record budget for an end nobody observed. After
+        ``_ACCOUNTING_GRACE_S`` it settles as FAULT instead (a retry, never the record
+        budget), with the route clock stopped where the job was last seen, and a best-effort
+        ``scancel`` in case it is still alive somewhere.
+        """
+        now = time.time()
+        since = self._unknown_since.setdefault(job_ref, now)
+        if now - since < _ACCOUNTING_GRACE_S:
+            return False
+        job_id, cluster_args = self._job_id_and_cluster(job_ref)
+        try:
+            subprocess.call(["scancel"] + cluster_args + [job_id],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError:
+            pass
+        self.log.warning("SLURM job %s: no squeue or sacct answer for %.0fs (%s); settling it "
+                         "as a fault", job_ref, now - since, missing)
+        # Accounting is down, so a never-observed run cannot be measured either.
+        runtime = self._observed_runtime(attempt, job_ref, since)
+        self._settle_attempt(
+            attempt, AttemptOutcome.FAULT,
+            f"accounting unavailable after {_ACCOUNTING_GRACE_S:.0f}s: {missing}",
+            since, runtime if runtime is not None else 0.0, runtime is None)
+        self._forget(job_ref)
+        return True
+
+    def _poll_unreachable(self, attempt: Attempt, job_ref: str, missing: str) -> bool:
+        """squeue failed and accounting has no state: nothing says the job has ended.
+
+        Settling would let the route be retried, and its old checkpoint deleted, beside a job
+        that may still be running. After ``_ACCOUNTING_GRACE_S`` the run stops instead and
+        leaves the route unsettled on disk for the operator.
+        """
+        now = time.time()
+        since = self._unknown_since.setdefault(job_ref, now)
+        if now - since < _ACCOUNTING_GRACE_S:
+            return False
+        raise self._abandon(
+            job_ref,
+            f"SLURM job {job_ref}: squeue cannot say whether it is queued and accounting has no "
+            f"state after {now - since:.0f}s ({missing}); refusing to settle it while it may "
+            "still write its checkpoint",
+            "scheduler unreachable")
 
     def _poll_active_state(self, attempt: Attempt, job_ref: str, state: str) -> bool:
         """Advance only RUNNING time; scheduler-owned residence pauses the route clock."""
@@ -400,18 +721,59 @@ class SlurmBackend(Backend):
             return True
         return False
 
-    def _close_route_clock(self, attempt: Attempt, job_ref: str, now: float) -> None:
-        """Exclude a final scheduler-owned paused interval from the duration audit."""
-        paused_at = self._paused_at.pop(job_ref, None)
-        if paused_at is not None:
-            attempt.started_at += max(0.0, now - paused_at)
+    def _observed_runtime(self, attempt: Attempt, job_ref: str, now: float) -> Optional[float]:
+        """RUNNING time seen by polls, excluding paused residence and time out of the queue;
+        None if never seen RUNNING.
 
-    def _route_runtime_at(self, attempt: Attempt, job_ref: str, now: float) -> float:
-        """Return observed RUNNING time without mutating state needed by cancellation."""
+        Reads without mutating, so ``kill`` can call it before cancellation forgets the job.
+        """
         if job_ref not in self._started:
-            return 0.0
+            return None
         running_until = self._paused_at.get(job_ref, now)
         return max(0.0, running_until - attempt.started_at)
+
+    def _route_runtime(self, attempt: Attempt, job_ref: str, now: float) -> Tuple[float, bool]:
+        """The route runtime to record, and whether it is unknown (then it is 0).
+
+        The one clock shared by settlement and ``kill``. ``Attempt.started_at`` is stamped
+        before ``sbatch``, so for a job no poll saw RUNNING, "now - started_at" is mostly queue
+        wait. Such a job takes its runtime from accounting ``Elapsed`` instead, which also
+        sidesteps clock skew between the compute node and this host.
+        """
+        observed = self._observed_runtime(attempt, job_ref, now)
+        if observed is not None:
+            return observed, False
+        accounted = self._accounted_runtime(job_ref)
+        return (accounted, False) if accounted is not None else (0.0, True)
+
+    @staticmethod
+    def _accounted_runtime(job_ref: str) -> Optional[float]:
+        """sacct ``Elapsed`` in seconds; None if the job never started or sacct cannot say."""
+        job_id, cluster_args = SlurmBackend._job_id_and_cluster(job_ref)
+        try:
+            out = subprocess.check_output(
+                ["sacct", "-X", "-j", job_id, "-n", "-P", "-o", "Start,End,Elapsed"]
+                + cluster_args,
+                text=True, stderr=subprocess.DEVNULL).strip()
+        except (subprocess.CalledProcessError, OSError):
+            return None
+        fields = out.splitlines()[0].split("|") if out else []
+        if len(fields) < 3 or fields[0].strip() in ("", "None", "Unknown"):
+            return None  # a job cancelled while PENDING reports Start=None
+        match = _ELAPSED_RE.match(fields[2].strip())
+        if match is None:
+            return None
+        return float(int(match["days"] or 0) * 86400 + int(match["h"]) * 3600
+                     + int(match["m"]) * 60 + int(match["s"]))
+
+    @staticmethod
+    def _settle_attempt(attempt: Attempt, outcome: AttemptOutcome, detail: str,
+                        finished_at: float, runtime: float, unknown: bool) -> None:
+        """Record the outcome so that ``Attempt.duration_s`` is exactly ``runtime``."""
+        attempt.outcome = outcome
+        attempt.detail = f"{detail}; {_RUNTIME_UNKNOWN}" if unknown else detail
+        attempt.finished_at = finished_at
+        attempt.started_at = finished_at - runtime
 
     @staticmethod
     def _base_state(state: str) -> str:
@@ -428,22 +790,57 @@ class SlurmBackend(Backend):
         return match.group("job"), (["-M", cluster] if cluster else [])
 
     @staticmethod
-    def _sacct_state(job_ref: str) -> Optional[Tuple[str, str]]:
+    def _squeue_query(job_ref: str) -> Tuple[Optional[str], str]:
+        """Return ``(state, "")`` while queued, ``("", "")`` once gone, or ``(None, why)``.
+
+        Gone is a normal end: a real squeue prints nothing for a recently finished job, and
+        exits 1 with "Invalid job id specified" once the job is purged (the same reply as for
+        an id never issued). Any other failure, such as an unreachable controller, says
+        nothing about the job.
+        """
         job_id, cluster_args = SlurmBackend._job_id_and_cluster(job_ref)
         try:
-            out = subprocess.check_output(
+            result = subprocess.run(["squeue", "-h", "-j", job_id, "-o", "%T"] + cluster_args,
+                                    capture_output=True, text=True, env=_squeue_env())
+        except OSError as exc:
+            return None, f"squeue could not run ({exc.strerror or exc})"
+        out = result.stdout.strip()
+        if result.returncode == 0:
+            return (out.splitlines()[0] if out else ""), ""
+        if "Invalid job id specified" in result.stderr:
+            return "", ""
+        lines = result.stderr.strip().splitlines()
+        reason = f": {lines[0].strip()[:200]}" if lines else ""
+        return None, f"squeue failed (exit {result.returncode}){reason}"
+
+    @staticmethod
+    def _sacct_state(job_ref: str) -> Optional[Tuple[str, str]]:
+        return SlurmBackend._sacct_query(job_ref)[0]
+
+    @staticmethod
+    def _sacct_query(job_ref: str) -> Tuple[Optional[Tuple[str, str]], str]:
+        """Return ``((state, exit_code), "")``, or ``(None, why accounting had no answer)``."""
+        job_id, cluster_args = SlurmBackend._job_id_and_cluster(job_ref)
+        try:
+            result = subprocess.run(
                 ["sacct", "-X", "-j", job_id, "--format=State,ExitCode", "-n", "-P"]
                 + cluster_args,
-                text=True,
-                stderr=subprocess.DEVNULL).strip()
-        except (subprocess.CalledProcessError, OSError):
-            return None
+                capture_output=True, text=True)
+        except OSError as exc:
+            return None, f"sacct could not run ({exc.strerror or exc})"
+        if result.returncode != 0:
+            lines = result.stderr.strip().splitlines()
+            reason = f": {lines[0].strip()[:200]}" if lines else ""
+            return None, f"sacct failed (exit {result.returncode}){reason}"
+        out = result.stdout.strip()
         if not out:
-            return None
+            return None, "sacct returned no record"
         fields = out.splitlines()[0].strip().split("|")
         state = fields[0].strip()
+        if not state:
+            return None, "sacct returned no state"
         exit_code = fields[1].strip() if len(fields) > 1 else ""
-        return state, exit_code
+        return (state, exit_code), ""
 
     @staticmethod
     def _exit_code(value: str) -> Optional[int]:
@@ -458,19 +855,27 @@ class SlurmBackend(Backend):
     def kill(self, attempt: Attempt, reason: str) -> None:
         job_ref = attempt.handle
         finished_at = time.time()
-        route_runtime = None
-        if isinstance(job_ref, str):
-            # Capture the route-only clock before positive-terminal cancellation calls
-            # ``_forget`` and discards the RUNNING/paused markers. The scheduler's asynchronous
-            # teardown latency is not evaluator runtime either.
-            route_runtime = self._route_runtime_at(attempt, job_ref, finished_at)
+        if not isinstance(job_ref, str):
+            if attempt.outcome is None:
+                attempt.outcome = AttemptOutcome.KILLED
+                attempt.detail = reason
+                attempt.finished_at = finished_at
+            return
+        # Capture the route-only clock before positive-terminal cancellation calls ``_forget``
+        # and discards the RUNNING/paused markers. The scheduler's asynchronous teardown
+        # latency is not evaluator runtime either.
+        observed = self._observed_runtime(attempt, job_ref, finished_at)
+        try:
             self._cancel_and_wait(job_ref)
+        except SlurmBackendError as exc:
+            raise self._abandon(job_ref, str(exc), "cancel unconfirmed") from exc
         if attempt.outcome is None:
-            attempt.outcome = AttemptOutcome.KILLED
-            attempt.detail = reason
-            attempt.finished_at = finished_at
-            if route_runtime is not None:
-                attempt.started_at = finished_at - route_runtime
+            if observed is not None:
+                runtime, unknown = observed, False
+            else:  # only now is accounting final; same rule as settlement
+                runtime, unknown = self._route_runtime(attempt, job_ref, finished_at)
+            self._settle_attempt(attempt, AttemptOutcome.KILLED, reason, finished_at,
+                                 runtime, unknown)
 
     def shutdown(self) -> None:
         if not self._submitted:
@@ -480,20 +885,14 @@ class SlurmBackend(Backend):
             try:
                 self._cancel_and_wait(job_ref)
             except SlurmBackendError as exc:  # best effort, but never silently
-                self.log.warning("%s", exc)
+                self.log.warning("%s", self._abandon(job_ref, str(exc), "cancel unconfirmed"))
 
     def _cancel_and_wait(self, job_ref: str) -> None:
         job_id, cluster_args = self._job_id_and_cluster(job_ref)
         subprocess.call(["scancel"] + cluster_args + [job_id])
         deadline = time.time() + _CANCEL_WAIT_S
         while True:
-            try:
-                queued = subprocess.check_output(
-                    ["squeue", "-h", "-j", job_id, "-o", "%T"] + cluster_args, text=True,
-                    stderr=subprocess.DEVNULL).strip()
-            except (subprocess.CalledProcessError, OSError):
-                queued = ""
-
+            queued = self._squeue_query(job_ref)[0]
             accounting = self._sacct_state(job_ref) if not queued else None
             state = self._base_state(accounting[0]) if accounting is not None else ""
             # An empty/failed status query is absence of evidence, not evidence that the job's
@@ -511,6 +910,9 @@ class SlurmBackend(Backend):
             time.sleep(_CANCEL_POLL_S)
 
     def _forget(self, job_ref: str) -> None:
+        self._release(job_ref)
+        self._unknown_since.pop(job_ref, None)
+        self._gone_since.pop(job_ref, None)
         self._running.discard(job_ref)
         self._started.discard(job_ref)
         self._paused_at.pop(job_ref, None)
@@ -518,3 +920,107 @@ class SlurmBackend(Backend):
             self._submitted.remove(job_ref)
         except ValueError:
             pass
+
+
+def _job_name(task: RouteTask) -> str:
+    return f"oodbench-{task.stem}"[:60]
+
+
+def _submission_tag() -> str:
+    """A fresh identity for one submission, carried in the job's ``--comment``."""
+    return f"oodbench:{uuid.uuid4().hex}"
+
+
+def _user() -> Optional[str]:
+    """The effective user's name, which SLURM records; never LOGNAME or USER."""
+    try:
+        return pwd.getpwuid(os.geteuid()).pw_name
+    except KeyError:  # no passwd entry, as in some containers
+        return None
+
+
+# squeue settings that choose which clusters of a federation it asks; dropping them could make
+# a job on a sibling cluster look gone.
+_SQUEUE_ROUTING_ENV = frozenset({"SQUEUE_FEDERATION", "SQUEUE_LOCAL", "SQUEUE_SIBLING"})
+
+
+def _squeue_env() -> Dict[str, str]:
+    """This process's environment without the ``SQUEUE_*`` defaults squeue reads as options.
+
+    A user's ``SQUEUE_STATES=PENDING`` would hide a RUNNING job, which then reads as gone; the
+    other settings change which jobs or rows are printed. Only the cluster routing settings
+    are kept. ``SLURM_*`` settings such as ``SLURM_CONF`` still pass through.
+    """
+    return {k: v for k, v in os.environ.items()
+            if not k.startswith("SQUEUE_") or k in _SQUEUE_ROUTING_ENV}
+
+
+def _own_jobs(name: str, tag: str) -> Tuple[Optional[List[str]], str]:
+    """IDs of the user's queued jobs named ``name`` whose comment is ``tag``.
+
+    Returns ``(None, reason)`` when the lookup itself failed.
+    """
+    user = _user()
+    if user is None:
+        return None, "the current user name is unknown"
+    try:
+        done = subprocess.run(["squeue", "-h", "-u", user, "--name", name, "-o", "%i|%k"],
+                              capture_output=True, text=True, env=_squeue_env())
+    except OSError as exc:
+        return None, f"squeue could not run ({exc})"
+    if done.returncode != 0:
+        first = (done.stderr.strip().splitlines() or [""])[0][:200]
+        return None, f"squeue failed (exit {done.returncode}): {first}"
+    found = []
+    for line in done.stdout.splitlines():
+        job_id, sep, comment = line.strip().partition("|")
+        if sep and job_id.isdigit() and comment.strip() == tag:
+            found.append(job_id)
+    return found, ""
+
+
+def _reclaim_steps(task: RouteTask, hold: Path, stop_job: str) -> str:
+    """How an operator gets a route back after the runner refused to touch it."""
+    if _hold_kind(hold) == "unsettled":
+        return (f"There was no previous checkpoint at {task.result_path}. Stop the job "
+                f"({stop_job}), confirm it has ended (sacct -j <id>), then delete {hold}, "
+                "which keeps the next run from starting.")
+    return (f"The previous checkpoint was set aside to {hold} and was not restored. To "
+            f"recover: stop the job ({stop_job}), confirm it has ended (sacct -j <id>), then "
+            f"move {hold} back to {task.result_path}.")
+
+
+def _hold_kind(path: Path) -> str:
+    """``"aside"`` or ``"unsettled"``: which kind of file holds a route on disk."""
+    return _LEFTOVER_RE.match(path.name).group("kind")
+
+
+def _write_synced(path: Path, blob: bytes) -> None:
+    """Create ``path`` holding ``blob``, synced with its directory entry.
+
+    Raises OSError (a full disk, say) with no partial file left behind.
+    """
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    try:
+        view = memoryview(blob)
+        while view:
+            view = view[os.write(fd, view):]
+        os.fsync(fd)
+    except BaseException:
+        os.close(fd)
+        try:
+            path.unlink()
+        except OSError:  # never mask the write error that brought us here
+            pass
+        raise
+    os.close(fd)
+    _fsync_dir(path.parent)
+
+
+def _fsync_dir(directory: Path) -> None:
+    """Make a create, rename or delete in ``directory`` durable."""
+    fd = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)

@@ -1,0 +1,581 @@
+{
+  "captured": "2026-10-04",
+  "slurm_version": "24.11.5",
+  "note": "Real scheduler output, scrubbed; see README.md. Replay stdout/stderr/rc exactly.",
+  "cases": {
+    "sbatch_parsable": {
+      "argv": [
+        "sbatch",
+        "--parsable",
+        "<jobdir>/completed.sbatch"
+      ],
+      "rc": 0,
+      "stdout": "141229\n",
+      "stderr": ""
+    },
+    "sbatch_parsable_cluster": {
+      "argv": [
+        "sbatch",
+        "--parsable",
+        "-M",
+        "cluster0",
+        "<jobdir>/cluster_suffix.sbatch"
+      ],
+      "rc": 0,
+      "stdout": "141230;cluster0\n",
+      "stderr": ""
+    },
+    "sbatch_invalid_partition": {
+      "argv": [
+        "sbatch",
+        "--parsable",
+        "--partition=no-such-partition",
+        "<jobdir>/badpart.sbatch"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": "sbatch: error: invalid partition specified: no-such-partition\nsbatch: error: Batch job submission failed: Invalid partition name specified\n"
+    },
+    "sbatch_without_parsable": {
+      "argv": [
+        "sbatch",
+        "run1/jobs/plain.sbatch"
+      ],
+      "rc": 0,
+      "stdout": "Submitted batch job 141242\n",
+      "stderr": ""
+    },
+    "squeue_pending": {
+      "argv": [
+        "squeue",
+        "-h",
+        "-j",
+        "141229",
+        "-o",
+        "%T"
+      ],
+      "rc": 0,
+      "stdout": "PENDING\n",
+      "stderr": ""
+    },
+    "squeue_running": {
+      "argv": [
+        "squeue",
+        "-h",
+        "-j",
+        "141229",
+        "-o",
+        "%T"
+      ],
+      "rc": 0,
+      "stdout": "RUNNING\n",
+      "stderr": ""
+    },
+    "squeue_completing": {
+      "argv": [
+        "squeue",
+        "-h",
+        "-j",
+        "141234",
+        "-o",
+        "%T"
+      ],
+      "rc": 0,
+      "stdout": "COMPLETING\n",
+      "stderr": ""
+    },
+    "squeue_gone_recent": {
+      "argv": [
+        "squeue",
+        "-h",
+        "-j",
+        "141229",
+        "-o",
+        "%T"
+      ],
+      "rc": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    "squeue_purged": {
+      "argv": [
+        "squeue",
+        "-h",
+        "-j",
+        "141229",
+        "-o",
+        "%T"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": "slurm_load_jobs error: Invalid job id specified\n"
+    },
+    "squeue_never_issued": {
+      "argv": [
+        "squeue",
+        "-h",
+        "-j",
+        "999999999",
+        "-o",
+        "%T"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": "slurm_load_jobs error: Invalid job id specified\n"
+    },
+    "sacct_pending": {
+      "argv": [
+        "sacct",
+        "-X",
+        "-j",
+        "141229",
+        "--format=State,ExitCode",
+        "-n",
+        "-P"
+      ],
+      "rc": 0,
+      "stdout": "PENDING|0:0\n",
+      "stderr": ""
+    },
+    "sacct_running": {
+      "argv": [
+        "sacct",
+        "-X",
+        "-j",
+        "141229",
+        "--format=State,ExitCode",
+        "-n",
+        "-P"
+      ],
+      "rc": 0,
+      "stdout": "RUNNING|0:0\n",
+      "stderr": ""
+    },
+    "sacct_completed": {
+      "argv": [
+        "sacct",
+        "-X",
+        "-j",
+        "141229",
+        "--format=State,ExitCode",
+        "-n",
+        "-P"
+      ],
+      "rc": 0,
+      "stdout": "COMPLETED|0:0\n",
+      "stderr": ""
+    },
+    "sacct_failed_exit3": {
+      "argv": [
+        "sacct",
+        "-X",
+        "-j",
+        "141231",
+        "--format=State,ExitCode",
+        "-n",
+        "-P"
+      ],
+      "rc": 0,
+      "stdout": "FAILED|3:0\n",
+      "stderr": ""
+    },
+    "sacct_failed_sigkill": {
+      "argv": [
+        "sacct",
+        "-X",
+        "-j",
+        "141232",
+        "--format=State,ExitCode",
+        "-n",
+        "-P"
+      ],
+      "rc": 0,
+      "stdout": "FAILED|0:9\n",
+      "stderr": ""
+    },
+    "sacct_timeout": {
+      "argv": [
+        "sacct",
+        "-X",
+        "-j",
+        "141234",
+        "--format=State,ExitCode",
+        "-n",
+        "-P"
+      ],
+      "rc": 0,
+      "stdout": "TIMEOUT|0:0\n",
+      "stderr": ""
+    },
+    "sacct_cancelled_pending": {
+      "argv": [
+        "sacct",
+        "-X",
+        "-j",
+        "141235",
+        "--format=State,ExitCode",
+        "-n",
+        "-P"
+      ],
+      "rc": 0,
+      "stdout": "CANCELLED by 1000|0:0\n",
+      "stderr": ""
+    },
+    "sacct_cancelled_running": {
+      "argv": [
+        "sacct",
+        "-X",
+        "-j",
+        "141237",
+        "--format=State,ExitCode",
+        "-n",
+        "-P"
+      ],
+      "rc": 0,
+      "stdout": "CANCELLED by 1000|0:0\n",
+      "stderr": ""
+    },
+    "sacct_never_issued": {
+      "argv": [
+        "sacct",
+        "-X",
+        "-j",
+        "999999999",
+        "--format=State,ExitCode",
+        "-n",
+        "-P"
+      ],
+      "rc": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    "sacct_command_error": {
+      "argv": [
+        "sacct",
+        "-X",
+        "-j",
+        "141229",
+        "--format=NoSuchField",
+        "-n",
+        "-P"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": "sacct: error: Invalid field requested: \"NoSuchField\"\n"
+    },
+    "sacct_times_failed": {
+      "argv": [
+        "sacct",
+        "-X",
+        "-j",
+        "141231",
+        "-n",
+        "-P",
+        "-o",
+        "Start,End,Elapsed"
+      ],
+      "rc": 0,
+      "stdout": "2026-10-04T12:31:21|2026-10-04T12:31:26|00:00:05\n",
+      "stderr": ""
+    },
+    "sacct_times_timeout": {
+      "argv": [
+        "sacct",
+        "-X",
+        "-j",
+        "141234",
+        "-n",
+        "-P",
+        "-o",
+        "Start,End,Elapsed"
+      ],
+      "rc": 0,
+      "stdout": "2026-10-04T12:31:21|2026-10-04T12:32:46|00:01:25\n",
+      "stderr": ""
+    },
+    "sacct_times_cancelled_pending": {
+      "argv": [
+        "sacct",
+        "-X",
+        "-j",
+        "141235",
+        "-n",
+        "-P",
+        "-o",
+        "Start,End,Elapsed"
+      ],
+      "rc": 0,
+      "stdout": "None|2026-10-04T12:31:25|00:00:00\n",
+      "stderr": ""
+    },
+    "sacct_all_completed": {
+      "argv": [
+        "sacct",
+        "-X",
+        "-j",
+        "141229",
+        "-n",
+        "-P",
+        "-o",
+        "State,ExitCode,Submit,Start,End,Elapsed"
+      ],
+      "rc": 0,
+      "stdout": "COMPLETED|0:0|2026-10-04T12:30:59|2026-10-04T12:31:00|2026-10-04T12:31:20|00:00:20\n",
+      "stderr": ""
+    },
+    "sacct_all_cancelled_pending": {
+      "argv": [
+        "sacct",
+        "-X",
+        "-j",
+        "141235",
+        "-n",
+        "-P",
+        "-o",
+        "State,ExitCode,Submit,Start,End,Elapsed"
+      ],
+      "rc": 0,
+      "stdout": "CANCELLED by 1000|0:0|2026-10-04T12:31:20|None|2026-10-04T12:31:25|00:00:00\n",
+      "stderr": ""
+    },
+    "sacct_all_cancelled_running": {
+      "argv": [
+        "sacct",
+        "-X",
+        "-j",
+        "141237",
+        "-n",
+        "-P",
+        "-o",
+        "State,ExitCode,Submit,Start,End,Elapsed"
+      ],
+      "rc": 0,
+      "stdout": "CANCELLED by 1000|0:0|2026-10-04T12:31:25|2026-10-04T12:31:27|2026-10-04T12:31:32|00:00:05\n",
+      "stderr": ""
+    },
+    "sacct_all_timeout": {
+      "argv": [
+        "sacct",
+        "-X",
+        "-j",
+        "141234",
+        "-n",
+        "-P",
+        "-o",
+        "State,ExitCode,Submit,Start,End,Elapsed"
+      ],
+      "rc": 0,
+      "stdout": "TIMEOUT|0:0|2026-10-04T12:31:20|2026-10-04T12:31:21|2026-10-04T12:32:46|00:01:25\n",
+      "stderr": ""
+    },
+    "squeue_name_two_matches": {
+      "argv": [
+        "squeue",
+        "-h",
+        "-u",
+        "user",
+        "--name",
+        "oodbench-fixture-pending",
+        "-o",
+        "%i"
+      ],
+      "rc": 0,
+      "stdout": "141235\n141236\n",
+      "stderr": ""
+    },
+    "squeue_name_one_match": {
+      "argv": [
+        "squeue",
+        "-h",
+        "-u",
+        "user",
+        "--name",
+        "oodbench-fixture-pending",
+        "-o",
+        "%i"
+      ],
+      "rc": 0,
+      "stdout": "141235\n",
+      "stderr": ""
+    },
+    "squeue_name_zero_matches": {
+      "argv": [
+        "squeue",
+        "-h",
+        "-u",
+        "user",
+        "--name",
+        "oodbench-fixture-no-such-job",
+        "-o",
+        "%i"
+      ],
+      "rc": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    "scancel_ok": {
+      "argv": [
+        "scancel",
+        "141236"
+      ],
+      "rc": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    "squeue_name_cmd_three_matches": {
+      "argv": [
+        "squeue",
+        "-h",
+        "-u",
+        "user",
+        "--name",
+        "oodbench-fixture-shared",
+        "-o",
+        "%i|%o"
+      ],
+      "rc": 0,
+      "stdout": "141460|<jobdir>/a/route_x_seed42.sbatch\n141459|<jobdir>/b/route_x_seed42.sbatch\n141458|<jobdir>/a/route_x_seed42.sbatch\n",
+      "stderr": ""
+    },
+    "squeue_name_cmd_zero_matches": {
+      "argv": [
+        "squeue",
+        "-h",
+        "-u",
+        "user",
+        "--name",
+        "oodbench-fixture-none",
+        "-o",
+        "%i|%o"
+      ],
+      "rc": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    "squeue_name_comment_two_tagged": {
+      "argv": [
+        "squeue",
+        "-h",
+        "-u",
+        "user",
+        "--name",
+        "oodbench-fixture-tagged",
+        "-o",
+        "%i|%k"
+      ],
+      "rc": 0,
+      "stdout": "141565|oodbench:9b17e4c2a05d4f3e8c6b2d1a7f904e55\n141564|oodbench:3f2a9c0d6e4b4c1fa7d85e9b0c6a1f42\n",
+      "stderr": ""
+    },
+    "squeue_name_comment_zero": {
+      "argv": [
+        "squeue",
+        "-h",
+        "-u",
+        "user",
+        "--name",
+        "oodbench-fixture-none",
+        "-o",
+        "%i|%k"
+      ],
+      "rc": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    "squeue_unknown_cluster": {
+      "argv": [
+        "squeue",
+        "-h",
+        "-j",
+        "141564",
+        "-o",
+        "%T",
+        "-M",
+        "nosuchcluster"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": "squeue: error: No cluster 'nosuchcluster' known by database.\nsqueue: error: 'nosuchcluster' can't be reached now, or it is an invalid entry for --cluster.  Use 'sacctmgr list clusters' to see available clusters.\nsqueue: fatal: Could not get cluster information\n"
+    }
+  },
+  "timelines": {
+    "completed": {
+      "squeue": [
+        {
+          "rc": 0,
+          "stdout": "PENDING\n",
+          "stderr": ""
+        },
+        {
+          "rc": 0,
+          "stdout": "RUNNING\n",
+          "stderr": ""
+        },
+        {
+          "rc": 0,
+          "stdout": "",
+          "stderr": ""
+        }
+      ],
+      "sacct": [
+        {
+          "rc": 0,
+          "stdout": "PENDING|0:0\n",
+          "stderr": ""
+        },
+        {
+          "rc": 0,
+          "stdout": "RUNNING|0:0\n",
+          "stderr": ""
+        },
+        {
+          "rc": 0,
+          "stdout": "COMPLETED|0:0\n",
+          "stderr": ""
+        }
+      ]
+    },
+    "timeout": {
+      "squeue": [
+        {
+          "rc": 0,
+          "stdout": "RUNNING\n",
+          "stderr": ""
+        },
+        {
+          "rc": 0,
+          "stdout": "COMPLETING\n",
+          "stderr": ""
+        }
+      ],
+      "sacct": [
+        {
+          "rc": 0,
+          "stdout": "RUNNING|0:0\n",
+          "stderr": ""
+        },
+        {
+          "rc": 0,
+          "stdout": "TIMEOUT|0:0\n",
+          "stderr": ""
+        }
+      ]
+    },
+    "running_cancelled": {
+      "squeue": [
+        {
+          "rc": 0,
+          "stdout": "COMPLETING\n",
+          "stderr": ""
+        }
+      ],
+      "sacct": [
+        {
+          "rc": 0,
+          "stdout": "CANCELLED by 1000|0:0\n",
+          "stderr": ""
+        }
+      ]
+    }
+  }
+}
