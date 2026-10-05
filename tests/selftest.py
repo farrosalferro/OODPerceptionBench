@@ -180,9 +180,9 @@ class TestSplitIntegrity(TempCase):
 
     def test_tiers_have_the_documented_sizes(self):
         self.assertEqual(len(read_split("all")), 9)
-        self.assertEqual(len(read_split("core")), 6)
+        self.assertEqual(len(read_split("core")), 7)
 
-    def test_split_covers_all_six_shipped_assets(self):
+    def test_split_covers_all_five_shipped_assets(self):
         shipped = {r["prop_blueprint_id"] for r in read_split("all")
                    if r["asset_class"] == "shipped_v0.9"}
         self.assertEqual(shipped, {
@@ -190,17 +190,16 @@ class TestSplitIntegrity(TempCase):
             "static.prop.roadclosedbarricade",
             "walker.pedestrian.astronaut",
             "walker.pedestrian.firefighter",
-            "walker.pedestrian.boar",
             "walker.pedestrian.deliveryrobot",
         }, "the split must exercise every asset shipped in v0.9; a pack missing one of them "
            "would otherwise pass")
 
     def test_split_names_no_unshipped_asset(self):
-        """A v0.9 user cannot install the other twelve, so a route needing one is unrunnable."""
+        """A v0.9 user cannot install the other thirteen, so a route needing one is unrunnable."""
         unshippable = {
             "static.prop.trafficmessageboard", "static.prop.trafficarrowboard",
             "static.prop.europianarrowboardtrailer", "static.prop.roadclosedsign",
-            "walker.pedestrian.soldier", "walker.pedestrian.wheelchair",
+            "walker.pedestrian.soldier", "walker.pedestrian.wheelchair", "walker.pedestrian.boar",
             "vehicle.ood.sedan", "vehicle.ood.hatchback", "vehicle.ood.suv",
             "vehicle.ood.armoredvan", "vehicle.ood.dumptruck", "vehicle.ood.roadroller",
         }

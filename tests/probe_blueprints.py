@@ -24,7 +24,7 @@ that will run the benchmark, against the CARLA build that will run the benchmark
 
 Usage
 -----
-    python3 probe_blueprints.py                          # localhost:2000, split's 9 blueprints
+    python3 probe_blueprints.py                          # localhost:2000, split's 8 blueprints
     python3 probe_blueprints.py --port 20000 --tier core
     python3 probe_blueprints.py --blueprint walker.pedestrian.astronaut
     python3 probe_blueprints.py --json probe.json

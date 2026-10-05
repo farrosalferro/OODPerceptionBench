@@ -38,10 +38,9 @@ Verify before going further — this must list `Town11`, `Town12` and `Town13`:
 ls /path/to/CARLA_0.9.15/CarlaUE4/Content/Carla/Maps/ | grep -E '^Town1[123]$'
 ```
 
-> **The nine-route golden bundle cannot catch this.** Its routes are set in Town02, Town03 and
-> Town04, all of which are in the base build. A CARLA install without the additional maps passes
-> every golden and then fails on roughly two thirds of the benchmark. Run the check above rather
-> than inferring map coverage from a green golden run.
+> **The smoke test only partly catches this.** One of its nine routes is set in Town12 and fails
+> without the additional maps. No route uses Town11 or Town13, so a partial install can still pass.
+> Run the check above rather than inferring map coverage from a green smoke run.
 
 ---
 

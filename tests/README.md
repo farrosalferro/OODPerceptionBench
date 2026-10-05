@@ -38,20 +38,26 @@ Nine routes from the frozen 475, defined by [`smoke/SMOKE_SPLIT.tsv`](smoke/SMOK
 | 1 | core | static | base | `static.prop.trafficwarning` | native |
 | 2 | core | static | geometric | `static.prop.concreteroadbarrier` | shipped |
 | 3 | extended | static | geometric | `static.prop.roadclosedbarricade` | shipped |
-| 4 | core | pedestrian | base | `walker.pedestrian.0001` | native |
-| 5 | core | pedestrian | visual | `walker.pedestrian.astronaut` | shipped |
-| 6 | extended | pedestrian | visual | `walker.pedestrian.firefighter` | shipped |
-| 7 | core | pedestrian | geometric | `walker.pedestrian.boar` | shipped |
-| 8 | extended | pedestrian | geometric | `walker.pedestrian.deliveryrobot` | shipped |
+| 4 | core | static | geometric | `static.prop.roadclosedbarricade` (Town12) | shipped |
+| 5 | core | pedestrian | base | `walker.pedestrian.0001` | native |
+| 6 | core | pedestrian | visual | `walker.pedestrian.astronaut` | shipped |
+| 7 | extended | pedestrian | visual | `walker.pedestrian.firefighter` | shipped |
+| 8 | core | pedestrian | geometric | `walker.pedestrian.deliveryrobot` | shipped |
 | 9 | core | vehicle | base | `vehicle.lincoln.mkz_2020` | native |
 
-- `--tier core` runs the six routes that span three categories × three levels. The default,
-  `--tier all`, adds three more so that each of the six assets shipped in v0.9 has its own route.
+- `--tier core` runs seven routes: six that span three categories × three levels, plus the
+  Town12 route. The default, `--tier all`, adds two more so that each of the five assets shipped
+  in v0.9 has its own route.
 - Static routes share base route 24795 and pedestrian routes share 24224, so base and shifted
   variants have the same ego route, town and weather.
-- There are no static `visual_shift` or vehicle-shift routes: they need the twelve
-  non-redistributable assets (see [`../NOTICE`](../NOTICE) §3). A green run certifies only the shipped half of
-  the benchmark. See [Coverage gaps](#coverage-gaps-at-v09).
+- Route 4 (base route 2513) is the one exception: it is the only route set in Town12. Town11,
+  12 and 13 ship in the separate `AdditionalMaps_0.9.15` download, and 301 of the 475 routes need
+  them. Every other split route is in Town02, Town03 or Town04, so without route 4 an install
+  missing the additional maps would pass.
+- There are no static `visual_shift` or vehicle-shift routes: they need assets that cannot be
+  redistributed (see [`../NOTICE`](../NOTICE) §3). Pedestrian `geometric_shift` is covered by the
+  delivery robot only. A green run certifies only the shipped part of the benchmark. See
+  [Coverage gaps](#coverage-gaps-at-v09).
 - **Not reportable. Never publish a score from this split.** Nine routes cannot stand in for the
   full set. Every artifact it produces carries `"reportable": false`.
 

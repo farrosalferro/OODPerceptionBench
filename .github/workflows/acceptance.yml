@@ -116,13 +116,13 @@ jobs:
           python3 -c "import json;d=json.load(open('tests/goldens/EXAMPLE.golden.json'));assert d['split']['sha256']=='0'*64,'the EXAMPLE must keep a zeroed split hash so it can never validate';print('example OK')"
 
       - name: Smoke split must not name a non-redistributable asset
-        # v0.9 ships six assets. A split route needing one of the other twelve would be an
+        # v0.9 ships five assets. A split route needing one of the other thirteen would be an
         # unrunnable test for every user of this release -- a guaranteed red that teaches
         # people to ignore the harness.
         run: |
           set -euo pipefail
           bad=0
-          for a in trafficmessageboard trafficarrowboard europianarrowboardtrailer roadclosedsign soldier wheelchair sedan hatchback suv armoredvan dumptruck roadroller; do
+          for a in trafficmessageboard trafficarrowboard europianarrowboardtrailer roadclosedsign soldier wheelchair boar sedan hatchback suv armoredvan dumptruck roadroller; do
             if grep -qE "^[^#].*\.${a}\b" tests/smoke/SMOKE_SPLIT.tsv; then
               echo "::error file=tests/smoke/SMOKE_SPLIT.tsv::split names ${a}, which is not redistributable at v0.9"
               bad=1

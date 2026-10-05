@@ -103,7 +103,7 @@ python3 smoke/materialize.py --out /scratch/smoke_routes
 
 This copies the nine route XMLs out of the frozen `routes/` tree, verifying each one's sha256
 against the split first, and writes a `MANIFEST.tsv` next to them. Use `--tier core` for the
-six-route subset; the bundle records which tier it covers and the harness refuses to compare
+seven-route subset; the bundle records which tier it covers and the harness refuses to compare
 across tiers.
 
 ---
@@ -116,7 +116,7 @@ python3 probe_blueprints.py --host localhost --port 2000 --json /scratch/probe.j
 echo "probe exit: $?"     # must be 0
 ```
 
-Nine distinct blueprints are checked: three stock CARLA reference props and the six OOD assets
+Eight distinct blueprints are checked: three stock CARLA reference props and the five OOD assets
 shipped in v0.9. Each must be registered in `blueprint_library` **and** spawn with a matching
 `type_id`.
 
@@ -317,5 +317,5 @@ The split covers `base` for all three categories, plus `visual_shift` and `geome
   them redistributable.
 
 So a v0.9 golden bundle certifies that the *shipped* half of the benchmark is installed
-correctly. It says nothing about an install of the other twelve assets, because no v0.9 user has
+correctly. It says nothing about an install of the other thirteen assets, because no v0.9 user has
 them. Extending the split to full level coverage is v1.0 work and is listed in `../README.md`.
