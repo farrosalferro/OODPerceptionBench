@@ -310,7 +310,7 @@ observed;
 | H6 | **CLOSED — 2026-08-12** | Ctrl-C exited 3 after writing state/report; interrupted routes charged no retry axis and stayed unfinished. Resume ran exactly the unfinished routes, then a third invocation launched nothing. | None for the measured local two-worker case. |
 | H7 | **CLOSED — 2026-08-11/12** | Three real `Failed - TickRuntime` records were settled and reported complete at the configured zero retry budget. Eight deliberate setup failures each charged exactly one record attempt; rerun changed no counters and still exited 0 with all routes settled. | Hard-death/fault-pattern cases were not induced on hardware. |
 | H8 | **PARTIAL — 2026-08-13** | One inference model (TFPP) ran the full 70-route static category, seed 42, as four concurrent one-GPU jobs on an RTX 6000 Ada node: **0.136 GPU-h/route** measured. A shared workstation GPU measured 0.211 on a partial run of the same category. Eight-route constant-velocity sweeps measured 0.044–0.079. | Budget ≈0.14 GPU-h/route (≈67 GPU-h for 475 routes, per model and seed). The full 475-route run is unmeasured, and the figure is one model on one category; other models and categories may differ. |
-| H9 | **CLOSED — 2026-08-15** | The repaired SLURM backend ran a full route category (70 routes, seed 42) on a real scheduler at two concurrent jobs: every route settled with a genuine final checkpoint, concurrent jobs used distinct physical GPUs with the scheduler's CUDA allocation preserved and each job's configured Vulkan adapter selected, held disjoint RPC+TM ports, and every job was reaped with no orphan. SLURM statuses and §6A axes match the local backend for the same nine routes and seed. | Validated at two-way concurrency on one node. The full 475-route scale and larger multi-node fan-out are unmeasured, and a transient simulator freeze (the "no liveness probe" gap in §3) is only caught by `route_timeout_s` — absorbed by the infra-retry budget, but with no early detector. Three rare fault paths (a job the runner cannot identify, missing accounting, queue time recorded as runtime) were fixed on 2026-10-04 against captured scheduler output; re-running on a real scheduler is pending (§2). |
+| H9 | **CLOSED — 2026-08-15** | The repaired SLURM backend ran a full route category (70 routes, seed 42) on a real scheduler at two concurrent jobs: every route settled with a genuine final checkpoint, concurrent jobs used distinct physical GPUs with the scheduler's CUDA allocation preserved and each job's configured Vulkan adapter selected, held disjoint RPC+TM ports, and every job was reaped with no orphan. SLURM statuses and §6A axes match the local backend for the same nine routes and seed. | Validated at two-way concurrency on one node. The full 475-route scale and larger multi-node fan-out are unmeasured, and a transient simulator freeze (the "no liveness probe" gap in §3) is only caught by `route_timeout_s` — absorbed by the infra-retry budget, but with no early detector. Three rare fault paths (a job the runner cannot identify, missing accounting, queue time recorded as runtime) were fixed on 2026-10-04 against captured scheduler output and re-validated on a real scheduler on 2026-10-05, the same category at up to six concurrent jobs on one node (§2). |
 | H10 | **PARTIAL — 2026-08-11/12** | A fresh GitHub clone ran setup twice (26/26 patches, idempotent), 222 runner tests, a strict 475-route dry run, real smoke routes, and the nine-route PDM-Lite golden/acceptance flow with every path supplied by config. | The host still had the maintainers' internal mounts available; the stronger “those mounts do not exist” portability proof must be repeated externally. |
 
 > ### ✅ The SLURM backend is validated (2026-08-15).
@@ -347,7 +347,7 @@ observed;
 >
 > **SLURM fault paths fixed (2026-10-04).** Three rare paths that the 2026-08-15 backend did not
 > handle cleanly are fixed, red-first, with tests that replay output captured from a real SLURM
-> 24.11.5 scheduler. Re-running the fixed backend on a real scheduler is pending. None of this
+> 24.11.5 scheduler, and re-validated on a real scheduler on 2026-10-05 (below). None of this
 > touches the local backend.
 >
 > - **Missing accounting is no longer read as a normal exit.** When a job has left the queue but
@@ -393,6 +393,28 @@ observed;
 >    you trust.
 >
 > Then resume.
+>
+> **Re-validated on a real scheduler (2026-10-05).** The fixed backend re-ran the same 70-route
+> static category at seed 42 on one node, with up to six jobs in flight. Every route settled with
+> a final checkpoint, the run exited 0, and no `.aside-` or `.unsettled-` file was left.
+>
+> - A job cancelled while still queued settled as an infrastructure retry with runtime 0 s and
+>   `runtime unknown (never observed RUNNING)`, not its time in the queue.
+> - A job cancelled while running settled as an infrastructure retry; its retry reproduced the
+>   earlier run's status and score for that route.
+> - Stopping the runner mid-run cancelled its two in-flight jobs, confirmed both ended, charged
+>   no retry budget, and left no hold file; the resumed run finished the category.
+> - The accounting-lag path (a job gone from the queue before `sacct` knows it) could not be
+>   forced on real hardware. It is covered only by tests that replay captured output.
+> - Scores of the shipped constant-velocity reference agent differed from the 2026-08-15 run on
+>   16 of 70 routes (4 of them between `Completed` and `Failed - TickRuntime`); the category mean
+>   moved by +0.38. The same routes also differed between two passes of the 2026-08-15 run with
+>   identical code, so this is run-to-run variation of those routes, not a backend effect.
+>
+> Two setup notes from this run. `slurm.extra_directives` entries are copied into the job script
+> as they are, so each must be a complete `#SBATCH ...` line: any other line ends `sbatch`'s
+> directive parsing and is run as a shell command. And `setup.sh --existing-checkout` needs a
+> plain clone of `carla_garage` (with a `.git` directory); it rejects a git worktree.
 
 ### Hardware-validation measurement notes
 

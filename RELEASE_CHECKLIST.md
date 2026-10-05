@@ -34,8 +34,8 @@ is below; this file carries the parts a script cannot judge.
       local backend exercised against real CARLA; multi-GPU/full-scale open and SLURM broken —
       see `runner/STATUS.md`). *As of that date. Since then: 367 tests, and the SLURM backend
       validated on a real scheduler at two-way concurrency, one GPU per job, with three rare
-      fault paths fixed on 2026-10-04; full scale and local multi-GPU still unmeasured
-      (`runner/STATUS.md` §2).*
+      fault paths fixed on 2026-10-04 and re-validated on 2026-10-05; full scale and local
+      multi-GPU still unmeasured (`runner/STATUS.md` §2).*
 - [x] `docs/` — `replacing-props.md`, `ASSET_TRAPS.md`, the three `import_procedure_*.md`
       and the parameterised `stages/` scripts
 - [x] `classifier/` — the three dimension-checker notebooks (the admissibility rule itself)

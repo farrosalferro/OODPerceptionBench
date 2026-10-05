@@ -157,7 +157,7 @@ slurm:                   # only read when backend == slurm
   max_parallel: 8      # concurrency under this backend (NOT execution.workers)
   submit_interval_s: 1.0
   vulkan_index_scope: host  # host | allocation
-  extra_directives: []
+  extra_directives: []      # full "#SBATCH ..." lines, copied as they are
 ```
 
 **Why `agent.env`, `agent.pythonpath` and `agent.working_dir` exist.** Surveying all ~18

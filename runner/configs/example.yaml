@@ -166,4 +166,5 @@ slurm:
   # allocation: each one-GPU job has its own Vulkan enumeration; repeated adapter 0 is valid.
   # Validate allocation scope by matching CUDA/NVML and Vulkan UUID or PCI identity in-job.
   vulkan_index_scope: host
+  # Copied into the job script as they are: each entry must be a full "#SBATCH ..." line.
   extra_directives: []
