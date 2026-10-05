@@ -7,7 +7,7 @@
 
 A production runner for this benchmark includes scale and multi-GPU evidence that this release
 does not yet have. What exists now is the part that is expensive to change later — the design
-decisions in `DESIGN.md` — plus a working local implementation whose *logic* is covered by 367
+decisions in `DESIGN.md` — plus a working local implementation whose *logic* is covered by 371
 automated tests and whose *simulator interaction* was exercised against CARLA 0.9.15 on
 2026-08-11 and 2026-08-12. Single-route execution, two-worker one-GPU stacking, exact port
 isolation, real Ctrl-C/reaping/resume, failure accounting, and a nine-route PDM-Lite golden were
@@ -252,7 +252,7 @@ All of these run with no GPU, no CARLA, no network and no third-party packages (
 shipped-template tests need PyYAML and are skipped without it):
 
 ```
-python -m unittest discover -s tests -t .    ->  367 tests, OK, ~101 s
+python -m unittest discover -s tests -t .    ->  371 tests, OK, ~102 s
 ```
 
 | Area | Covered by | Notes |
@@ -310,7 +310,7 @@ observed;
 | H6 | **CLOSED — 2026-08-12** | Ctrl-C exited 3 after writing state/report; interrupted routes charged no retry axis and stayed unfinished. Resume ran exactly the unfinished routes, then a third invocation launched nothing. | None for the measured local two-worker case. |
 | H7 | **CLOSED — 2026-08-11/12** | Three real `Failed - TickRuntime` records were settled and reported complete at the configured zero retry budget. Eight deliberate setup failures each charged exactly one record attempt; rerun changed no counters and still exited 0 with all routes settled. | Hard-death/fault-pattern cases were not induced on hardware. |
 | H8 | **PARTIAL — 2026-08-13** | One inference model (TFPP) ran the full 70-route static category, seed 42, as four concurrent one-GPU jobs on an RTX 6000 Ada node: **0.136 GPU-h/route** measured. A shared workstation GPU measured 0.211 on a partial run of the same category. Eight-route constant-velocity sweeps measured 0.044–0.079. | Budget ≈0.14 GPU-h/route (≈67 GPU-h for 475 routes, per model and seed). The full 475-route run is unmeasured, and the figure is one model on one category; other models and categories may differ. |
-| H9 | **CLOSED — 2026-08-15** | The repaired SLURM backend ran a full route category (70 routes, seed 42) on a real scheduler at two concurrent jobs: every route settled with a genuine final checkpoint, concurrent jobs used distinct physical GPUs with the scheduler's CUDA allocation preserved and each job's configured Vulkan adapter selected, held disjoint RPC+TM ports, and every job was reaped with no orphan. SLURM statuses and §6A axes match the local backend for the same nine routes and seed. | Validated at two-way concurrency on one node. The full 475-route scale and larger multi-node fan-out are unmeasured, and a transient simulator freeze (the "no liveness probe" gap in §3) is only caught by `route_timeout_s` — absorbed by the infra-retry budget, but with no early detector. Three rare fault paths (a job the runner cannot identify, missing accounting, queue time recorded as runtime) were fixed on 2026-10-04 against captured scheduler output and re-validated on a real scheduler on 2026-10-05, the same category at up to six concurrent jobs on one node (§2). |
+| H9 | **CLOSED — 2026-08-15** | The repaired SLURM backend ran a full route category (70 routes, seed 42) on a real scheduler at two concurrent jobs: every route settled with a genuine final checkpoint, concurrent jobs used distinct physical GPUs with the scheduler's CUDA allocation preserved and each job's configured Vulkan adapter selected, held disjoint RPC+TM ports, and every job was reaped with no orphan. SLURM statuses and §6A axes match the local backend for the same nine routes and seed. | Validated at two-way concurrency on one node. The full 475-route scale and larger multi-node fan-out are unmeasured, and a transient simulator freeze (the "no liveness probe" gap in §3) is only caught by `route_timeout_s` — absorbed by the infra-retry budget, but with no early detector. Three rare fault paths (a job the runner cannot identify, missing accounting, queue time recorded as runtime) were fixed on 2026-10-04 against captured scheduler output. On 2026-10-05 the fixed backend re-ran the same category on a real scheduler at up to six concurrent jobs on one node, including a job cancelled while queued and one cancelled while running; missing accounting and an unidentifiable `sbatch` reply were not reproduced there and remain covered by replayed output only (§2). |
 | H10 | **PARTIAL — 2026-08-11/12** | A fresh GitHub clone ran setup twice (26/26 patches, idempotent), 222 runner tests, a strict 475-route dry run, real smoke routes, and the nine-route PDM-Lite golden/acceptance flow with every path supplied by config. | The host still had the maintainers' internal mounts available; the stronger “those mounts do not exist” portability proof must be repeated externally. |
 
 > ### ✅ The SLURM backend is validated (2026-08-15).
@@ -347,7 +347,8 @@ observed;
 >
 > **SLURM fault paths fixed (2026-10-04).** Three rare paths that the 2026-08-15 backend did not
 > handle cleanly are fixed, red-first, with tests that replay output captured from a real SLURM
-> 24.11.5 scheduler, and re-validated on a real scheduler on 2026-10-05 (below). None of this
+> 24.11.5 scheduler. The fixed backend was re-run on a real scheduler on 2026-10-05 (below), which
+> exercised some of these paths but not all. None of this
 > touches the local backend.
 >
 > - **Missing accounting is no longer read as a normal exit.** When a job has left the queue but
@@ -359,11 +360,17 @@ observed;
 >   the bounded *killed* axis. A failing `squeue` is not taken as "left the queue": only an empty reply or "Invalid
 >   job id" (a purged job) is. If `squeue` fails for any other reason and `sacct` has no state
 >   for 180 s, nothing shows the job has ended, so the run stops with an error naming the job
->   rather than retry the route beside it.
+>   rather than retry the route beside it. `squeue` runs without the caller's `SQUEUE_*`
+>   variables: a `SQUEUE_STATES` default in a user's shell would hide a running job, which
+>   would then look gone.
 > - **Queue time is no longer recorded as runtime.** Runtime counts from when the runner first
->   sees the job `RUNNING`. A job that ends before that takes its runtime from `sacct`'s `Start`,
->   `End` and `Elapsed`; if those are unavailable too, it records 0 s and the detail ends with
+>   sees the job `RUNNING` and stops at the first poll that no longer finds it in `squeue`, so
+>   time spent waiting for accounting is not runtime either. A job that ends before it is seen
+>   `RUNNING` takes its runtime from `sacct`'s `Start`, `End` and `Elapsed`; if those are
+>   unavailable too, it records 0 s and the detail ends with
 >   `runtime unknown (never observed RUNNING)`.
+> - The `SQUEUE_*` handling and the runtime cut-off at leaving the queue were added after the
+>   2026-10-05 re-run and are covered by tests only.
 > - **A route's previous checkpoint survives a job the runner cannot identify.** Before
 >   submitting, the runner copies the route's existing checkpoint to `<checkpoint>.aside-<ns>`,
 >   synced to disk, and logs each step to `_runner/aside.jsonl`. A route with no checkpoint gets
@@ -406,15 +413,21 @@ observed;
 >   no retry budget, and left no hold file; the resumed run finished the category.
 > - The accounting-lag path (a job gone from the queue before `sacct` knows it) could not be
 >   forced on real hardware. It is covered only by tests that replay captured output.
+> - An `sbatch` reply with no usable job id did not occur, so the tag lookup and the refusal
+>   paths are covered only by tests as well.
 > - Scores of the shipped constant-velocity reference agent differed from the 2026-08-15 run on
 >   16 of 70 routes (4 of them between `Completed` and `Failed - TickRuntime`); the category mean
->   moved by +0.38. The same routes also differed between two passes of the 2026-08-15 run with
->   identical code, so this is run-to-run variation of those routes, not a backend effect.
+>   moved by +0.38. Three of these routes had been run twice during the 2026-08-15 validation with
+>   identical code, and two of them differed between those passes too. The difference is consistent with
+>   run-to-run variation of this agent on these routes, and the backend change does not touch the
+>   simulation or the agent; it was accepted on that basis, but this run does not prove it.
 >
-> Two setup notes from this run. `slurm.extra_directives` entries are copied into the job script
-> as they are, so each must be a complete `#SBATCH ...` line: any other line ends `sbatch`'s
-> directive parsing and is run as a shell command. And `setup.sh --existing-checkout` needs a
-> plain clone of `carla_garage` (with a `.git` directory); it rejects a git worktree.
+> Two setup notes from this run. `slurm.extra_directives` entries are copied as they are into the
+> job script, after the runner's own `#SBATCH` lines, so each must be a complete `#SBATCH ...`
+> line. `sbatch` stops reading directives at the first line that is neither blank nor a `#`
+> comment, and bash then runs that line as a command: a bare `--hold` entry did exactly that.
+> And `setup.sh --existing-checkout` needs a plain clone of `carla_garage` (with a `.git`
+> directory); it rejects a git worktree.
 
 ### Hardware-validation measurement notes
 

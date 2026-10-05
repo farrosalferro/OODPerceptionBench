@@ -121,6 +121,9 @@ class SlurmBackend(Backend):
         self._started: set[str] = set()
         self._paused_at: Dict[str, float] = {}
         self._unknown_since: Dict[str, float] = {}
+        # When squeue first stopped listing a job: the route clock stops there, however long
+        # accounting then takes to report how it ended.
+        self._gone_since: Dict[str, float] = {}
         # Every supervised job's route, and the file that holds the route on disk until the
         # job is settled: its set-aside checkpoint, or a marker when there was none.
         self._routes: Dict[str, Tuple[RouteTask, Path]] = {}
@@ -572,12 +575,15 @@ class SlurmBackend(Backend):
         queued, queue_missing = self._squeue_query(job_ref)
         if queued:
             self._unknown_since.pop(job_ref, None)
+            self._gone_since.pop(job_ref, None)
             # A state still visible in squeue is active scheduler ownership. PENDING,
             # COMPLETING, REQUEUED and SUSPENDED pause the evaluator clock; only RUNNING
             # advances it. Terminal accounting below remains the source of truth.
             return self._poll_active_state(attempt, job_ref, self._base_state(queued))
 
         # The job has left the queue, or squeue cannot say: either way accounting decides.
+        if queued == "":
+            self._gone_since.setdefault(job_ref, time.time())
         accounting, missing = self._sacct_query(job_ref)
         if accounting is None:
             if queued is None:
@@ -688,13 +694,14 @@ class SlurmBackend(Backend):
         return False
 
     def _observed_runtime(self, attempt: Attempt, job_ref: str, now: float) -> Optional[float]:
-        """RUNNING time seen by polls, excluding paused residence; None if never seen RUNNING.
+        """RUNNING time seen by polls, excluding paused residence and anything after the job
+        left the queue; None if never seen RUNNING.
 
         Reads without mutating, so ``kill`` can call it before cancellation forgets the job.
         """
         if job_ref not in self._started:
             return None
-        running_until = self._paused_at.get(job_ref, now)
+        running_until = self._paused_at.get(job_ref, self._gone_since.get(job_ref, now))
         return max(0.0, running_until - attempt.started_at)
 
     def _route_runtime(self, attempt: Attempt, job_ref: str, now: float) -> Tuple[float, bool]:
@@ -766,7 +773,7 @@ class SlurmBackend(Backend):
         job_id, cluster_args = SlurmBackend._job_id_and_cluster(job_ref)
         try:
             result = subprocess.run(["squeue", "-h", "-j", job_id, "-o", "%T"] + cluster_args,
-                                    capture_output=True, text=True)
+                                    capture_output=True, text=True, env=_squeue_env())
         except OSError as exc:
             return None, f"squeue could not run ({exc.strerror or exc})"
         out = result.stdout.strip()
@@ -877,6 +884,7 @@ class SlurmBackend(Backend):
     def _forget(self, job_ref: str) -> None:
         self._release(job_ref)
         self._unknown_since.pop(job_ref, None)
+        self._gone_since.pop(job_ref, None)
         self._running.discard(job_ref)
         self._started.discard(job_ref)
         self._paused_at.pop(job_ref, None)
@@ -903,6 +911,15 @@ def _user() -> Optional[str]:
         return None
 
 
+def _squeue_env() -> Dict[str, str]:
+    """This process's environment without the ``SQUEUE_*`` defaults squeue reads as options.
+
+    A user's ``SQUEUE_STATES=PENDING`` would hide a RUNNING job, which then reads as gone.
+    ``SLURM_*`` settings such as ``SLURM_CONF`` still pass through.
+    """
+    return {k: v for k, v in os.environ.items() if not k.startswith("SQUEUE_")}
+
+
 def _own_jobs(name: str, tag: str) -> Tuple[Optional[List[str]], str]:
     """IDs of the user's queued jobs named ``name`` whose comment is ``tag``.
 
@@ -913,7 +930,7 @@ def _own_jobs(name: str, tag: str) -> Tuple[Optional[List[str]], str]:
         return None, "the current user name is unknown"
     try:
         done = subprocess.run(["squeue", "-h", "-u", user, "--name", name, "-o", "%i|%k"],
-                              capture_output=True, text=True)
+                              capture_output=True, text=True, env=_squeue_env())
     except OSError as exc:
         return None, f"squeue could not run ({exc})"
     if done.returncode != 0:

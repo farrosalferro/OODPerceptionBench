@@ -649,6 +649,32 @@ class TestAccountingUnavailable(SlurmBackendBase):
         self.assertIs(attempt.outcome, AttemptOutcome.EXITED)
         self.assertEqual(attempt.exit_code, 3)
 
+    def test_the_route_clock_stops_when_the_job_leaves_the_queue(self):
+        """RED BEFORE THE FIX:
+
+            AssertionError: 170.0 != 10.0 : the accounting grace was counted as route runtime
+
+        Seen RUNNING, gone from ``squeue`` 10 s later, and only 160 s after that does
+        accounting report the end. The job ran for at most those 10 s; the wait for
+        accounting is not route time, just as the grace's own FAULT stops the clock there.
+        """
+        clock = _Clock()
+        with unittest.mock.patch("time.time", clock):
+            _, backend, _, attempt = self.submitted(
+                ["sacct_never_issued", "sacct_failed_exit3"],
+                squeue=("squeue_running", "squeue_gone_recent"))
+            start = clock.now
+            self.assertFalse(backend.poll(attempt))  # RUNNING: the route clock starts
+            clock.now = start + 10.0
+            self.assertFalse(backend.poll(attempt))  # gone, no accounting yet
+            clock.now = start + 170.0
+            self.assertTrue(backend.poll(attempt))
+
+        self.assertIs(attempt.outcome, AttemptOutcome.EXITED)
+        self.assertEqual(attempt.duration_s, 10.0,
+                         "the accounting grace was counted as route runtime")
+        self.assertEqual(attempt.detail, "SLURM state FAILED")
+
     def test_kill_during_the_grace_settles_on_confirmed_cancellation(self):
         """RED BEFORE THE FIX:
 
@@ -1427,6 +1453,93 @@ class TestSqueueErrors(SlurmBackendBase):
         _, backend, _, attempt = self.submitted(["sacct_running"])
         self.assertFalse(backend.poll(attempt))
         self.assertIsNone(attempt.outcome)
+
+
+class TestInheritedSqueueSettings(SlurmBackendBase):
+    """``squeue`` reads ``SQUEUE_*`` variables from the environment as if they were options.
+
+    A user with ``SQUEUE_STATES=PENDING`` in their shell profile sees only pending jobs, so a
+    RUNNING job prints nothing and reads as gone. The fake ``squeue`` here is synthetic: it
+    applies that one filter the way squeue(1) documents it and otherwise prints the captured
+    ``RUNNING`` reply, or this submission's tagged row for the name lookup.
+    """
+
+    TAG = "oodbench:9b17e4c2a05d4f3e8c6b2d1a7f904e55"
+
+    def setUp(self):
+        super().setUp()
+        env_patch = unittest.mock.patch.dict(os.environ, {"SQUEUE_STATES": "PENDING"})
+        env_patch.start()
+        self.addCleanup(env_patch.stop)
+        self.tool("squeue", f'''
+            import os, sys
+            if os.environ.get("SQUEUE_STATES", "RUNNING") == "RUNNING":
+                print("141229|{self.TAG}" if "%i|%k" in sys.argv else "RUNNING")
+        ''')
+
+    def test_a_running_job_is_not_lost_to_an_inherited_state_filter(self):
+        """RED BEFORE THE FIX:
+
+            AssertionError: True is not false : a RUNNING job hidden by SQUEUE_STATES was
+            settled as a fault
+        """
+        self.replay("sbatch", "sbatch_parsable")
+        self.replay("sacct", "sacct_never_issued")
+        self.replay("scancel", "scancel_ok")
+        clock = _Clock()
+        with unittest.mock.patch("time.time", clock):
+            # Long enough that 180 s RUNNING is not a route timeout.
+            _, backend, task = self.backend_and_task(
+                execution={"route_timeout_s": 3600}, slurm={"submit_interval_s": 0})
+            attempt = backend.submit(task, worker=0)
+            start = clock.now
+            self.assertFalse(backend.poll(attempt))
+            clock.now = start + 180.0
+            self.assertFalse(backend.poll(attempt),
+                             "a RUNNING job hidden by SQUEUE_STATES was settled as a fault")
+
+        self.assertIsNone(attempt.outcome)
+        self.assertEqual(self.calls("scancel"), [])
+
+    def test_the_tag_lookup_is_not_narrowed_by_an_inherited_state_filter(self):
+        """RED BEFORE THE FIX:
+
+            SlurmBackendError: sbatch accepted a job but returned no recoverable job identity;
+            ... There is no job of yours named oodbench-route_1_a ...
+        """
+        self.replay("sbatch", "sbatch_without_parsable")
+        self.replay("sacct", "sacct_running")
+        self.replay("scancel", "scancel_ok")
+        tag_patch = unittest.mock.patch("oodbench.backends.slurm._submission_tag",
+                                        return_value=self.TAG)
+        tag_patch.start()
+        self.addCleanup(tag_patch.stop)
+        _, backend, task = self.backend_and_task(slurm={"submit_interval_s": 0})
+
+        attempt = backend.submit(task, worker=0)
+
+        self.assertEqual(attempt.handle, "141229")
+        self.assertIsNone(attempt.outcome)
+
+    def test_scheduler_connection_settings_still_reach_squeue(self):
+        """Only the ``SQUEUE_*`` defaults are dropped; ``SLURM_CONF`` and the rest pass."""
+        seen = self.site.root / "squeue.env"
+        self.tool("squeue", f'''
+            import json, os
+            from pathlib import Path
+            kept = {{k: v for k, v in os.environ.items() if k in ("SLURM_CONF", "SQUEUE_STATES")}}
+            Path({str(seen)!r}).write_text(json.dumps(kept), encoding="utf-8")
+            print("RUNNING")
+        ''')
+        self.replay("sbatch", "sbatch_parsable")
+        with unittest.mock.patch.dict(os.environ, {"SLURM_CONF": "/etc/slurm/other.conf"}):
+            _, backend, task = self.backend_and_task(slurm={"submit_interval_s": 0})
+            attempt = backend.submit(task, worker=0)
+            self.assertFalse(backend.poll(attempt))
+
+        env = json.loads(seen.read_text(encoding="utf-8"))
+        self.assertEqual(env.get("SLURM_CONF"), "/etc/slurm/other.conf")
+        self.assertNotIn("SQUEUE_STATES", env)
 
 
 class TestUnsettledJobMarker(SlurmBackendBase):
