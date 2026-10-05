@@ -7,21 +7,41 @@
     "name": "smoke",
     "tier": "all",
     "path": "SMOKE_SPLIT.tsv",
-    "sha256": "a906fbd8a4cfdb3a872006f312a459625acf42d642fb59150bb9a51cfb586040",
+    "sha256": "dff918c375bc07a41df660d164bae00e73c85724d46618adf6e1ba042993eee4",
     "n_routes": 9
   },
   "reference_agent": {
     "name": "pdmlite",
-    "version": "f6cbfb63de16192ac7742918377a9ee20a846354"
+    "version": "carla_garage@beb3433407f42c1adced312b877a61fe04f338ba team_code/data_agent.py",
+    "repo": "https://github.com/autonomousvision/carla_garage",
+    "commit": "beb3433407f42c1adced312b877a61fe04f338ba",
+    "entrypoint": "team_code/data_agent.py",
+    "entrypoint_sha256": "594e4e3a40777d55f91dc5174d993e8c42592ff23429ed5be8f0ef7662fe837a",
+    "env": {
+      "DATAGEN": "0",
+      "PYTHON_EGG_CACHE": "/tmp/farrosalferro-egg-cache-golden_v3",
+      "REPETITION": "0",
+      "TOWN": "smoke"
+    }
   },
   "environment": {
     "carla_version": "0.9.15",
     "content_pack_version": "v0.9",
-    "content_pack_sha256": "c9378dcb5758339aebfba536c47c847dcc7f5645cfb3a1949b83fe92a4d7f735",
-    "gpu": "NVIDIA GeForce RTX 3090, driver 580.82.09",
-    "os": "Linux-5.15.0-139-generic-x86_64-with-glibc2.31",
+    "content_pack_sha256": "79dcc31ac829993bc92bad7d2434318ab294c3c012ea33f5ef7370fd607de9d7",
+    "content_pack_archives": {
+      "ood-perceptionbench-props-v0.9.tar.gz": "30b1fa471a3068c6d070a8486fa9e169f7d89081639b14236ee11915cfdfe451",
+      "ood-perceptionbench-walkers-ccby-v0.9.tar.gz": "bb07ac81bac8cff26acd28e0e942672041d8511af550c7bdc28b58b7ec7d3b67",
+      "ood-perceptionbench-walkers-ccbync-v0.9.tar.gz": "0a0e4c185dc29f1536f8e02cfbdac745be9c72d911b39e4257c90b48a7a3c20a"
+    },
+    "gpu": "NVIDIA RTX 6000 Ada Generation, driver 570.211.01",
+    "os": "Linux-6.8.0-138-generic-x86_64-with-glibc2.39",
     "python": "3.10.15",
-    "runner_version": "991591ac8534b1ee822ec8dc40d43f4ed313715c"
+    "python_packages": {
+      "numpy": "1.23.5",
+      "scipy": "1.14.1",
+      "carla": "0.9.15"
+    },
+    "runner_version": "52f6df41db3b6f7aff39be5de70a5f0c7a739f25"
   },
   "protocol": {
     "seed": 42,
@@ -34,10 +54,10 @@
     "max_observed_spread": 0.0
   },
   "generated": {
-    "utc": "2026-08-12T06:07:22Z",
+    "utc": "2026-10-05T03:38:04Z",
     "by": "tests/make_golden.py",
     "procedure": "tests/goldens/GENERATING.md",
-    "notes": null
+    "notes": "environment.content_pack_sha256 = sha256 of the canonical SHA256SUMS text of environment.content_pack_archives ('<sha256>  <name>\\n' per archive, sorted by name)."
   },
   "routes": {
     "static/construction_obstacle/base/route_24795_trafficwarning.xml": {
@@ -118,6 +138,44 @@
     },
     "static/construction_obstacle/geometric_shift/route_24795_roadclosedbarricade.xml": {
       "route_sha256": "1b015b9d2d7193c431c2ef9659b9186b3dfab94453022ab6a8e6faa1d109c0d8",
+      "expected_blueprint_id": "static.prop.roadclosedbarricade",
+      "observed_agent_type": "static.prop.roadclosedbarricade",
+      "status": "Completed",
+      "driving_score": 100.0,
+      "route_completion": 100,
+      "infraction_penalty": 1.0,
+      "replicates": [
+        {
+          "replicate": "replicate_1",
+          "status": "Completed",
+          "driving_score": 100.0,
+          "route_completion": 100,
+          "infraction_penalty": 1.0,
+          "observed_agent_type": "static.prop.roadclosedbarricade"
+        },
+        {
+          "replicate": "replicate_2",
+          "status": "Completed",
+          "driving_score": 100.0,
+          "route_completion": 100,
+          "infraction_penalty": 1.0,
+          "observed_agent_type": "static.prop.roadclosedbarricade"
+        },
+        {
+          "replicate": "replicate_3",
+          "status": "Completed",
+          "driving_score": 100.0,
+          "route_completion": 100,
+          "infraction_penalty": 1.0,
+          "observed_agent_type": "static.prop.roadclosedbarricade"
+        }
+      ],
+      "ds_spread": 0.0,
+      "published_seed42_driving_score": 100.0,
+      "published_seed42_delta": 0.0
+    },
+    "static/construction_obstacle/geometric_shift/route_2513_roadclosedbarricade.xml": {
+      "route_sha256": "9dd57daaf6a1954998705874472a01341ecf5f0661c7d3f5526c9828c809c2ef",
       "expected_blueprint_id": "static.prop.roadclosedbarricade",
       "observed_agent_type": "static.prop.roadclosedbarricade",
       "status": "Completed",
@@ -262,44 +320,6 @@
           "route_completion": 100,
           "infraction_penalty": 1.0,
           "observed_agent_type": "walker.pedestrian.firefighter"
-        }
-      ],
-      "ds_spread": 0.0,
-      "published_seed42_driving_score": 100.0,
-      "published_seed42_delta": 0.0
-    },
-    "pedestrian/dynamic_object_crossing/geometric_shift/route_24224_boar.xml": {
-      "route_sha256": "7a9071fb86a6a62913dea1318af3d0aad0ec03db04234971e7a7304a73cfc7b1",
-      "expected_blueprint_id": "walker.pedestrian.boar",
-      "observed_agent_type": "walker.pedestrian.boar",
-      "status": "Completed",
-      "driving_score": 100.0,
-      "route_completion": 100,
-      "infraction_penalty": 1.0,
-      "replicates": [
-        {
-          "replicate": "replicate_1",
-          "status": "Completed",
-          "driving_score": 100.0,
-          "route_completion": 100,
-          "infraction_penalty": 1.0,
-          "observed_agent_type": "walker.pedestrian.boar"
-        },
-        {
-          "replicate": "replicate_2",
-          "status": "Completed",
-          "driving_score": 100.0,
-          "route_completion": 100,
-          "infraction_penalty": 1.0,
-          "observed_agent_type": "walker.pedestrian.boar"
-        },
-        {
-          "replicate": "replicate_3",
-          "status": "Completed",
-          "driving_score": 100.0,
-          "route_completion": 100,
-          "infraction_penalty": 1.0,
-          "observed_agent_type": "walker.pedestrian.boar"
         }
       ],
       "ds_spread": 0.0,

@@ -127,5 +127,7 @@ checks the sha256 each time. Run the self-tests with `python3 tests/selftest.py`
    `cut_in_vehicle_model`, `parked_vehicle_model` or `blueprint_name`.
 3. **Scenario families**: 2 of the 12 canonical scenarios; `tools/check_route_coverage.py` checks
    that every scenario class resolves.
-4. **Cross-machine spread**: the bundle comes from one RTX 3090 host; the ±1.0 floor is not yet
-   confirmed on a second hardware/driver stack.
+4. **Cross-machine spread**: the bundle comes from one host (RTX 6000 Ada, driver 570.211.01).
+   Eight of its nine routes were also in the previous split's bundle, measured on an RTX 3090
+   (driver 580.82.09), and scored 100.0 in all three replicates there too. The ±1.0 floor itself
+   has not been measured across machines.
