@@ -4,7 +4,7 @@ These notebooks check a prop's shift class mechanically. Each takes a candidate 
 box, compares it with the reference-prop cluster for its category, and returns `visual` or
 `geometric`. It is the same rule that assigned every prop in the paper.
 
-They matter most for the **twelve props we cannot ship**. Those are specified by their dimensions
+They matter most for the **thirteen props we cannot ship**. Those are specified by their dimensions
 (paper appendix + [`../docs/replacing-props.md`](../docs/replacing-props.md)). Use these
 notebooks to confirm that a substitute you sourced lands in the same class. A substitute that
 lands in a different class is not a substitute: it changes what the route measures.

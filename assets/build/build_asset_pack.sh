@@ -2,7 +2,7 @@
 # =============================================================================
 # OOD-PerceptionBench v0.9 — asset pack builder
 #
-# Assembles the SIX redistributable cooked CARLA assets into three tarballs that
+# Assembles the FIVE redistributable cooked CARLA assets into three tarballs that
 # install with `ImportAssets.sh` over an official CARLA 0.9.15 Linux build.
 #
 # Reads a CARLA build READ-ONLY. Writes only into --out.
@@ -40,18 +40,11 @@ mkdir -p "$STAGE" "$DIST"
 
 # --- group -> content dirs ---------------------------------------------------
 PROPS="ConcreteRoadBarrier RoadClosedBarricade"
-WALKERS_CCBY="Astronaut DeliveryRobot Boar"
+WALKERS_CCBY="Astronaut DeliveryRobot"
 WALKERS_NC="Firefighter"
 
 # --- exclusions (verified unreferenced; see build/EXCLUSIONS.tsv) -------------
 EXCLUDES=(
-  "Boar/Animations/Boar__000_SK_Boar_LOD0_Anim_Armature_alerted.uasset"
-  "Boar/Animations/Boar__000_SK_Boar_LOD0_Anim_Armature_digging_feeding.uasset"
-  "Boar/Animations/Boar__000_SK_Boar_LOD0_Anim_Armature_observing.uasset"
-  "Boar/Animations/Boar__000_SK_Boar_LOD0_Anim_Armature_sniffing.uasset"
-  "Boar/Animations/Boar__000_SK_Boar_LOD0_Anim_Armature_trot.uasset"
-  "Boar/Animations/Boar__000_SK_Boar_LOD0_Anim_Armature_wake_up.uasset"
-  "Boar/Animations/Boar__000_SK_Boar_LOD0_Anim_Armature_wound.uasset"
   "Firefighter/Blueprints/BP_FireFighter.uasset"
   "Firefighter/Blueprints/BP_FireFighter.uexp"
 )
@@ -85,7 +78,7 @@ for n in $WALKERS_CCBY; do stage_dir "$n" walkers-ccby; done
 for n in $WALKERS_NC;   do stage_dir "$n" walkers-ccbync; done
 
 # --- WalkerFactory -----------------------------------------------------------
-# The four walkers do NOT self-register from their own Package.json. Their
+# The three walkers do NOT self-register from their own Package.json. Their
 # blueprint IDs live in the cooked base-content WalkerFactory, so it must ship.
 # See ../README.md ("Two things that will bite you") for the consequence.
 WF_SRC="$CONTENT/Carla/Blueprints/Walkers"

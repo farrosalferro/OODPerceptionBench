@@ -30,7 +30,7 @@ import unreal
 def parse_args():
     ap = argparse.ArgumentParser()
     ap.add_argument("--asset_name", required=True, help="new walker name W")
-    ap.add_argument("--clone_from", required=True, help="template walker name, e.g. Boar")
+    ap.add_argument("--clone_from", required=True, help="template walker name, e.g. DeliveryRobot")
     ap.add_argument("--dest_root", default="/Game", help="root for the NEW walker /<W>/Blueprints")
     ap.add_argument("--clone_root", default=None,
                     help="root the TEMPLATE lives under (default = dest_root; real content is /Game)")

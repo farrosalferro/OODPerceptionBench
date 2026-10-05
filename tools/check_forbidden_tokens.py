@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fail if the repository names the upstream source of a non-redistributable prop.
 
-Twelve of the eighteen OOD props are not in this release. Two of them are absent
+Thirteen of the eighteen OOD props are not in this release. Two of them are absent
 because their upstream meshes were third-party game IP, uploaded to a free model
 site under a licence the uploader had no right to grant. Removing the assets was
 the point; naming their source slugs anywhere in the repository would put the

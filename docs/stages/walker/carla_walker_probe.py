@@ -98,7 +98,7 @@ def main():
     ap = argparse.ArgumentParser()
     _site_config.add_config_arg(ap)
     ap.add_argument("--walker_name", required=True)
-    ap.add_argument("--blueprint_id", required=True, help="e.g. walker.pedestrian.boar")
+    ap.add_argument("--blueprint_id", required=True, help="e.g. walker.pedestrian.deliveryrobot")
     ap.add_argument("--gate_dir", required=True, help="dir to write the RGB gate renders")
     ap.add_argument("--out", required=True, help="JSON verdict path (the verdict IS the output)")
     ap.add_argument("--host", default="localhost")

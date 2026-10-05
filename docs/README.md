@@ -13,9 +13,10 @@ OOD-PerceptionBench evaluates driving policies against *visual* (appearance) and
 (shape/size) out-of-distribution shifts. Those shifts are carried by 18 custom CARLA blueprints —
 6 static props, 6 pedestrians, 6 vehicles.
 
-**Only 6 of the 18 can be redistributed.** The other 12 are third-party marketplace assets whose
-licences do not permit us to ship them, in any form, inside a content pack. For those, the
-reproduction path is *specification plus procedure*: the benchmark publishes the dimensional
+**Only 5 of the 18 can be redistributed.** The other 13 cannot be shipped, in any form, inside a
+content pack: ten are paid marketplace assets, two are third-party game IP, and one is a free
+model whose creator limits it to personal use (reasons in [`../NOTICE`](../NOTICE) §3). For
+those, the reproduction path is *specification plus procedure*: the benchmark publishes the dimensional
 envelope each prop must satisfy, and these documents tell you how to turn a mesh you have licensed
 yourself into a working CARLA blueprint that satisfies it.
 

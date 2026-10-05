@@ -105,10 +105,10 @@ carla_garage
 
 
 ================================================================================
-2. REDISTRIBUTED 3D ASSETS — the six shipped OOD props
+2. REDISTRIBUTED 3D ASSETS — the five shipped OOD props
 ================================================================================
 
-Six of the eighteen OOD props used in the paper are redistributable and are
+Five of the eighteen OOD props used in the paper are redistributable and are
 included in the content pack under assets/. Each is attributed below with its
 author and licence, as its licence requires.
 
@@ -117,7 +117,6 @@ author and licence, as its licence requires.
   ---------------------------------------------------------------------------
   walker.pedestrian.astronaut         Antropik            CC BY 4.0
   walker.pedestrian.deliveryrobot     Bento (@gostbento)  CC BY 4.0
-  walker.pedestrian.boar              AnimalMesh 3D       CC BY 4.0
   static.prop.concreteroadbarrier     widthRider          CC BY 4.0
   static.prop.roadclosedbarricade     exiS7-Gs            CC BY 4.0
   walker.pedestrian.firefighter       KIFIR               CC BY-NC 4.0  <-- NC
@@ -141,12 +140,6 @@ walker.pedestrian.deliveryrobot
   Licence: Creative Commons Attribution 4.0 International (CC BY 4.0)
   Notes:   Original modelling, not a derivative of any commercial product.
            Attribution: "Delivery Robot by Bento (gostbento), CC BY 4.0."
-
-walker.pedestrian.boar
-  Author:  AnimalMesh 3D
-  Licence: Creative Commons Attribution 4.0 International (CC BY 4.0)
-  Notes:   Original wildlife model.
-           Attribution: "Animated Realistic Boar by AnimalMesh 3D, CC BY 4.0."
 
 static.prop.concreteroadbarrier
   Author:  widthRider
@@ -174,19 +167,19 @@ walker.pedestrian.firefighter                                    *** NC ASSET **
 
 
 ================================================================================
-3. NOT REDISTRIBUTED — the twelve remaining OOD props
+3. NOT REDISTRIBUTED — the thirteen remaining OOD props
 ================================================================================
 
-Twelve of the eighteen OOD props are NOT redistributable and are NOT in this
+Thirteen of the eighteen OOD props are NOT redistributable and are NOT in this
 repository, in any form — no meshes, no textures, no cooked packages.
 
   vehicle.ood.sedan          vehicle.ood.hatchback      vehicle.ood.suv
   vehicle.ood.armoredvan     vehicle.ood.dumptruck      vehicle.ood.roadroller
-  walker.pedestrian.soldier  walker.pedestrian.wheelchair
+  walker.pedestrian.soldier  walker.pedestrian.wheelchair  walker.pedestrian.boar
   static.prop.trafficmessageboard   static.prop.trafficarrowboard
   static.prop.europianarrowboardtrailer   static.prop.roadclosedsign
 
-Two distinct reasons:
+Three distinct reasons:
 
   (a) Ten are paid marketplace assets whose licences prohibit standalone
       redistribution AND separately prohibit AI use. A seller granting
@@ -197,7 +190,11 @@ Two distinct reasons:
       the uploader had no right to grant. They are not redistributable by
       anyone, including us.
 
-These twelve are specified DIMENSIONALLY instead — the paper's appendix gives
+  (c) One, walker.pedestrian.boar, is a free model whose listing is labelled
+      CC BY 4.0, but whose creator's description says that free version is for
+      personal use only. The two terms conflict, so we do not redistribute it.
+
+These thirteen are specified DIMENSIONALLY instead — the paper's appendix gives
 each prop's bounding box and its shift class, and the classifier rule that
 assigns a prop to the visual or geometric class is published. See
 docs/replacing-props.md. We deliberately do NOT name the marketplace listings:
@@ -217,7 +214,7 @@ No trademark claim is made or implied by any identifier in this repository.
 ================================================================================
 
   1. Keep this NOTICE file intact.
-  2. Keep the six per-asset attributions in section 2.
+  2. Keep the five per-asset attributions in section 2.
   3. Keep the CARLA CC-BY attribution in section 1.
   4. Do not use walker.pedestrian.firefighter commercially.
-  5. Do not add any of the twelve props in section 3 back into the pack.
+  5. Do not add any of the thirteen props in section 3 back into the pack.

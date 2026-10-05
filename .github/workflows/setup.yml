@@ -115,10 +115,10 @@ jobs:
           print("CITATION.cff and VERSION agree on version", c["version"])
           PY
 
-      - name: NOTICE lists all six shipped assets, and flags the NonCommercial one
+      - name: NOTICE lists all five shipped assets, and flags the NonCommercial one
         run: |
           set -euo pipefail
-          for a in astronaut deliveryrobot boar concreteroadbarrier roadclosedbarricade firefighter; do
+          for a in astronaut deliveryrobot concreteroadbarrier roadclosedbarricade firefighter; do
             grep -q "$a" NOTICE || { echo "::error::NOTICE is missing asset $a"; exit 1; }
           done
           grep -q "CC BY-NC 4.0" NOTICE || { echo "::error::NOTICE must state the NonCommercial term"; exit 1; }
@@ -126,12 +126,12 @@ jobs:
           echo "NOTICE OK"
 
       - name: No marketplace purchase recipe
-        # The rule is "do not send users to buy the twelve props we cannot ship" — ten of them
+        # The rule is "do not send users to buy the props we cannot ship" — ten of them
         # additionally carry an AI-use prohibition, so pointing an AI benchmark's users at those
         # listings walks them into the same restriction that closed the path for us.
         #
         # It is NOT "no source links anywhere": CC BY 4.0 *requires* attribution with a link to
-        # the source, and all six shipped assets are free Sketchfab downloads. Those six links
+        # the source, and all five shipped assets are free Sketchfab downloads. Those five links
         # live in assets/ATTRIBUTION.md and are checked separately, by name, below.
         run: |
           set -euo pipefail
@@ -149,11 +149,11 @@ jobs:
             exit 1
           fi
           n=$(grep -c 'sketchfab\.com/3d-models' assets/ATTRIBUTION.md)
-          if [ "$n" -ne 6 ]; then
-            echo "::error file=assets/ATTRIBUTION.md::expected exactly 6 source links (one per shipped asset), found $n"
+          if [ "$n" -ne 5 ]; then
+            echo "::error file=assets/ATTRIBUTION.md::expected exactly 5 source links (one per shipped asset), found $n"
             exit 1
           fi
-          echo "no purchase recipe found; 6 attribution links, all in assets/ATTRIBUTION.md"
+          echo "no purchase recipe found; 5 attribution links, all in assets/ATTRIBUTION.md"
 
       - name: No source token for a non-redistributable prop
         # Belt and braces on the check above: the two unlicensable walkers are free Sketchfab

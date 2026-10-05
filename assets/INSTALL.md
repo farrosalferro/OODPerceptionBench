@@ -50,15 +50,15 @@ ls /path/to/CARLA_0.9.15/CarlaUE4/Content/Carla/Maps/ | grep -E '^Town1[123]$'
 | Tarball | Contents | Licence | Download |
 |---|---|---|---|
 | `ood-perceptionbench-props-v0.9.tar.gz` | `static.prop.concreteroadbarrier`, `static.prop.roadclosedbarricade` | CC BY 4.0 | 15.8 MB |
-| `ood-perceptionbench-walkers-ccby-v0.9.tar.gz` | `walker.pedestrian.astronaut`, `.deliveryrobot`, `.boar` **+ `WalkerFactory`** | CC BY 4.0 | 38.4 MB |
+| `ood-perceptionbench-walkers-ccby-v0.9.tar.gz` | `walker.pedestrian.astronaut`, `.deliveryrobot` **+ `WalkerFactory`** | CC BY 4.0 | 32.4 MB |
 | `ood-perceptionbench-walkers-ccbync-v0.9.tar.gz` | `walker.pedestrian.firefighter` | **CC BY-NC 4.0** | 112.3 MB |
 
-**166.6 MB to download, 185.5 MB on disk, 195 files.**
+**160.5 MB to download, 175.6 MB on disk, 162 files.**
 
 The props tarball touches nothing outside its own content directories and is safe to
 install anywhere. The two walker tarballs are useless without `WalkerFactory`, which is in
 the `walkers-ccby` tarball: **if you want the firefighter you must also install
-`walkers-ccby`**, even if you do not want the other three walkers.
+`walkers-ccby`**, even if you do not want the other two walkers.
 
 If your use is commercial, skip `walkers-ccbync` (see [`ATTRIBUTION.md`](ATTRIBUTION.md)).
 
@@ -108,9 +108,17 @@ whose modification time is *older* than the file already on disk. Members in thi
 dated 2026; stock CARLA 0.9.15 content is dated 2023-11-10, so extraction proceeds
 normally. But if you have previously copied files into `Content/Carla/Blueprints/Walkers/`
 by hand and given them a current timestamp, `WalkerFactory` will not be replaced, no error
-will be printed, and none of the four walkers will register. **Step 3 below catches this.**
+will be printed, and none of the three walkers will register. **Step 3 below catches this.**
 Tested: installing over a stand-in "stock" `WalkerFactory` dated 2023-11-10 replaces it
 correctly (post-install sha256 matches the pack's).
+
+### Upgrading from an earlier download
+
+Copies of the pack downloaded before 2026-10-05 also contained a boar, which turned out not to
+be redistributable ([`../NOTICE`](../NOTICE) §3). Download `walkers-ccby` again and reinstall
+it as above: its `WalkerFactory` is dated 2026-10-05, newer than the old one, so it replaces
+it. Then delete `CarlaUE4/Content/Boar`. While the old factory is still in place, the verifier
+below fails on `walker.pedestrian.boar`.
 
 ---
 
@@ -135,14 +143,14 @@ python3 tools/verify_pack.py --port 2000          # add --without-nc if you skip
 Expected tail:
 
 ```
-VERIFY OK — all six shipped assets registered, spawned and matched reference dimensions;
+VERIFY OK — all five shipped assets registered, spawned and matched reference dimensions;
 no unshipped walker ID is registered.
 ```
 
 Exit code 0 means installed correctly. Anything else: stop, fix, re-verify.
 
-The verifier checks that each of the six IDs **spawns**, not merely that it is registered.
-That distinction matters: the four walkers are registered by `WalkerFactory`, and a
+The verifier checks that each of the five IDs **spawns**, not merely that it is registered.
+That distinction matters: the three walkers are registered by `WalkerFactory`, and a
 `WalkerFactory` entry with no content behind it still appears in the blueprint library.
 It also fails if a walker ID this pack does not ship (`soldier`, `wheelchair`, …) is
 registered: the shipped `WalkerFactory` registers none of them, so one showing up means the
@@ -152,21 +160,21 @@ factory in use is not this pack's.
 
 ## 4. What you can run with this pack
 
-**237 of the benchmark's 475 routes.**
+**219 of the benchmark's 475 routes.**
 
 | Category | Runnable | Total | What is missing |
 |---|---|---|---|
 | static | **30** | 70 | 40 routes need 4 non-redistributable props |
-| pedestrian | **126** | 162 | 36 routes need `soldier` / `wheelchair` |
+| pedestrian | **108** | 162 | 54 routes need `soldier` / `wheelchair` / `boar` |
 | vehicle | **81** | 243 | 162 routes need 6 non-redistributable vehicles |
 
 The 145 `base`-level routes need no pack at all — they use native CARLA blueprints
 (`walker.pedestrian.0001/0014/0028`, `static.prop.trafficwarning`,
-`vehicle.*.cooper_s_2021/coupe_2020/mkz_2020`). The pack adds the 92 shift-level routes
-covered by its six assets: 18 each for astronaut, firefighter, boar and deliveryrobot;
+`vehicle.*.cooper_s_2021/coupe_2020/mkz_2020`). The pack adds the 74 shift-level routes
+covered by its five assets: 18 each for astronaut, firefighter and deliveryrobot;
 10 each for concreteroadbarrier and roadclosedbarricade.
 
-The remaining 238 routes are **not runnable at v0.9** and running them anyway will produce
+The remaining 256 routes are **not runnable at v0.9** and running them anyway will produce
 substituted-actor results that look normal and are not comparable to anything. Replacement
 assets and a re-run are the v1.0 scope.
 
@@ -174,9 +182,9 @@ assets and a re-run are the v1.0 scope.
 
 ## 5. Uninstall
 
-Delete the six content directories, then restore `WalkerFactory` from a pristine CARLA
-0.9.15 (there is no copy of the original in this pack — take one before you install if you
-care):
+Delete the five content directories (and `Boar`, if an earlier download put it there), then
+restore `WalkerFactory` from a pristine CARLA 0.9.15 (there is no copy of the original in this
+pack — take one before you install if you care):
 
 ```bash
 rm -rf CarlaUE4/Content/{Astronaut,Firefighter,DeliveryRobot,Boar,ConcreteRoadBarrier,RoadClosedBarricade}

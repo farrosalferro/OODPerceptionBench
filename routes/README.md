@@ -48,12 +48,13 @@ non-zero with a message per failure. `--rename-map <path>` also cross-checks the
 
 ## Assets — read before running anything
 
-The XMLs use **7 stock CARLA blueprints** plus **18 new OOD blueprints**. Only **6** of the 18
+The XMLs use **7 stock CARLA blueprints** plus **18 new OOD blueprints**. Only **5** of the 18
 are redistributable (`walker.pedestrian.astronaut`, `walker.pedestrian.firefighter`,
-`walker.pedestrian.boar`, `walker.pedestrian.deliveryrobot`, `static.prop.concreteroadbarrier`,
-`static.prop.roadclosedbarricade`). The other **12 are not**: marketplace terms forbid
-redistribution and, for several, AI use. v0.9 does not ship them; they are specified by size
-instead, and replacements are v1.0 work. The six vehicle blueprints use a neutral
+`walker.pedestrian.deliveryrobot`, `static.prop.concreteroadbarrier`,
+`static.prop.roadclosedbarricade`). The other **13 are not**: ten are marketplace assets whose
+terms forbid redistribution and AI use, two are third-party game IP, and one (the boar) is a free
+model whose creator limits it to personal use ([`../NOTICE`](../NOTICE) §3). v0.9 does not ship
+them; they are specified by size instead, and replacements for twelve of them are v1.0 work. The six vehicle blueprints use a neutral
 `vehicle.ood.*` namespace, so a v1.0 mesh swap does not change these XMLs.
 
 > **A missing blueprint fails silently.** `try_spawn_actor` returns `None`, the prop never

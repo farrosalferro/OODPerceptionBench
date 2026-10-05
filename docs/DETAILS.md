@@ -170,21 +170,21 @@ silently measures nothing is worse than one that crashes.
 
 ## What you can actually run at v0.9 — the honest table
 
-Twelve of the eighteen OOD props are **not redistributable** (see
-[Licensing](#licensing-and-the-twelve-missing-props)). They are not in this repository in any
+Thirteen of the eighteen OOD props are **not redistributable** (see
+[Licensing](#licensing-and-the-thirteen-missing-props)). They are not in this repository in any
 form. So a fresh install can run this much:
 
 | Category | Routes runnable | Total | Usable for the paired comparison? |
 |---|---:|---:|---|
-| **Pedestrian** | **126** | 162 | **Yes** — 2 of 3 props at each level; reduced statistical power |
+| **Pedestrian** | **108** | 162 | **Yes**, with reduced power: visual 2 of 3 props, geometric 1 of 3 (the delivery robot) |
 | **Static** | **30** | 70 | Partly — geometric 2 of 3, **visual 0 of 3 → no visual comparison** |
 | **Vehicle** | **81** | 243 | **No** — base level only |
-| **Total** | **237** | **475** | |
+| **Total** | **219** | **475** | |
 
 All **145 base-level route files** run without any content pack at all, because every reference
 prop is a native CARLA asset. (Those 145 files cover the **55 distinct base routes** — 27
 vehicle, 18 pedestrian, 10 static — at one file per reference prop.) The content pack adds the
-other 92: 18 each for `astronaut`, `firefighter`, `boar` and `deliveryrobot`, 10 each for
+other 74: 18 each for `astronaut`, `firefighter` and `deliveryrobot`, 10 each for
 `concreteroadbarrier` and `roadclosedbarricade`.
 
 Concretely, at v0.9 you can reproduce the paper's central *visual-vs-geometric* contrast on the
@@ -213,7 +213,7 @@ records/      per-route baseline records for 17 models + PDM-Lite, seeds 42/43/4
 runner/       portable serial + local multi-GPU runner, and a de-hardcoded SLURM example
 config/       machine configuration; every path a user must supply lives here
 patches/      the overlay: our changes to the pinned upstream, one patch per file
-assets/       install/verify/attribution for the 6 redistributable OOD props
+assets/       install/verify/attribution for the 5 redistributable OOD props
               (the cooked binaries themselves are hosted separately — see assets/README.md)
 classifier/   the three notebooks implementing the visual/geometric admissibility rule
 docs/         asset-import procedures, asset traps, and the prop-replacement rule
@@ -224,8 +224,8 @@ setup.sh      clone pinned upstream, apply patches, verify
 
 Each directory has its own `README.md` stating exactly what belongs there.
 
-> **The asset binaries are not in this repository.** The six cooked content directories are
-> ~167 MB packaged, which is past what a git repository should carry, so they are hosted
+> **The asset binaries are not in this repository.** The five cooked content directories are
+> ~161 MB packaged, which is past what a git repository should carry, so they are hosted
 > separately and `assets/` holds the installer, the checksums, the attributions and the
 > verifier. See [`assets/README.md`](../assets/README.md) for the download location.
 
@@ -273,28 +273,30 @@ and carla_garage use. In short:
    comparable merely by sharing the route paths. If no compatible golden is available, the
    harness must end at exit **3 (INCONCLUSIVE)**. A failure of A1 (`blueprint_spawned`) still
    exits 1 and still means stop.
-4. Report which route subset you ran. With the v0.9 content pack that is 237 of 475, and a
+4. Report which route subset you ran. With the v0.9 content pack that is 219 of 475, and a
    number computed over a different subset is not comparable to ours.
 
 Full interface details and the config schema: [`runner/README.md`](../runner/README.md).
 
 ---
 
-## Licensing, and the twelve missing props
+## Licensing, and the thirteen missing props
 
 Our code is **MIT** ([`LICENSE`](../LICENSE)). The assets are not uniform — read
 [`NOTICE`](../NOTICE).
 
-**Six OOD props ship**, five under CC BY 4.0 and **one, `walker.pedestrian.firefighter`, under
+**Five OOD props ship**, four under CC BY 4.0 and **one, `walker.pedestrian.firefighter`, under
 CC BY-NC 4.0 — NonCommercial.** The content pack is therefore mixed-licence with a
 non-commercial component. If your use is commercial you must exclude that asset and the routes
 that reference it. (Bench2Drive is itself CC BY-NC-ND, so a non-commercial term is consistent
 with this benchmark's lineage — but it has to be stated, not buried.)
 
-**Twelve OOD props do not ship.** Ten are paid marketplace assets whose licences prohibit
+**Thirteen OOD props do not ship.** Ten are paid marketplace assets whose licences prohibit
 standalone redistribution *and*, separately, prohibit AI use — so seller permission alone could
 not have fixed it. Two are third-party game IP that was uploaded to a free model site under a
-licence the uploader had no right to grant; nobody can redistribute those.
+licence the uploader had no right to grant; nobody can redistribute those. One, the boar, is a
+free model labelled CC BY 4.0 whose creator's description says personal use only, so we do not
+ship it.
 
 **We deliberately do not tell you where to buy them.** Ten carry an explicit AI-use
 prohibition, and pointing users at those listings so they can run an AI benchmark would walk

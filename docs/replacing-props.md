@@ -9,8 +9,8 @@ that lands, this document gets a v1.0 stamp and the targets change with it.
 
 ## What this document is for
 
-Twelve of the eighteen OOD blueprints used in the paper are **not redistributable** and are not in
-this repository in any form. This document is the reproduction path for those twelve. It gives, for
+Thirteen of the eighteen OOD blueprints used in the paper are **not redistributable** and are not
+in this repository in any form. This document is the reproduction path for those thirteen. It gives, for
 each one:
 
 - the **bounding-box target** `(L, W, H)` and the **shift class** it must reproduce,
@@ -25,7 +25,7 @@ approach.
 
 ---
 
-## 1. The twelve, and why they are missing
+## 1. The thirteen, and why they are missing
 
 | Blueprint ID | Category | Level | Reason not shipped |
 |---|---|---|---|
@@ -37,12 +37,13 @@ approach.
 | `vehicle.ood.roadroller` | vehicle | geometric | paid marketplace asset — no standalone redistribution **and** no AI use |
 | `walker.pedestrian.soldier` | pedestrian | visual | third-party **game IP**, uploaded to a free model site under a licence the uploader had no right to grant |
 | `walker.pedestrian.wheelchair` | pedestrian | geometric | third-party **game IP**, same situation |
+| `walker.pedestrian.boar` | pedestrian | geometric | free model whose listing says CC BY 4.0 but whose creator's description says **personal use only** |
 | `static.prop.trafficmessageboard` | static | visual | paid marketplace asset — no standalone redistribution **and** no AI use |
 | `static.prop.trafficarrowboard` | static | visual | paid marketplace asset — no standalone redistribution **and** no AI use |
 | `static.prop.europianarrowboardtrailer` | static | visual | paid marketplace asset — no standalone redistribution **and** no AI use |
 | `static.prop.roadclosedsign` | static | geometric | paid marketplace asset — no standalone redistribution **and** no AI use |
 
-Two distinct failure modes, and they are not interchangeable:
+Three distinct failure modes, and they are not interchangeable:
 
 **Ten are paid marketplace assets.** Nine sit under one marketplace's standard licence, one under
 another's royalty-free licence. Both prohibit redistributing the content on a standalone basis, and
@@ -55,14 +56,18 @@ licence, but the uploader did not own the underlying character and could not gra
 in one case the uploader's own description credits the game studio. Nobody can redistribute those,
 including the site they came from, and including us.
 
-The six that *do* ship are listed in [`../assets/README.md`](../assets/README.md); one of them is
+**One has conflicting terms.** The boar is a free download whose listing carries CC BY 4.0, but
+whose creator's description says that free version is for personal use only. We cannot rely on
+the permissive label when the creator says otherwise, so we do not ship it.
+
+The five that *do* ship are listed in [`../assets/README.md`](../assets/README.md); one of them is
 **NonCommercial**, which makes the pack mixed-licence. Full terms: [`../NOTICE`](../NOTICE).
 
 ### Why there is no shopping list
 
 We do not name the listings, link them, or describe how to buy them.
 
-Ten of the twelve carry an explicit **AI-use prohibition**. Telling you where to purchase an asset
+Ten of the thirteen carry an explicit **AI-use prohibition**. Telling you where to purchase an asset
 whose licence forbids AI use, so that you can run it through an *AI perception benchmark*, would
 walk you into exactly the restriction that closed that path for us — while looking like helpful
 documentation. The honest version of "here is how to reproduce this" is a **specification**: the
@@ -198,7 +203,7 @@ anchors, not because they need replacing.
 | `walker.pedestrian.firefighter` | visual | 0.38 | 0.38 | 1.86 | 0.0% | 6.80 | ships (NonCommercial) |
 | **`walker.pedestrian.wheelchair`** | **geometric** | **0.88** | **0.88** | **1.40** | 131.6% | 7.17 | **replace** |
 | `walker.pedestrian.deliveryrobot` | geometric | 0.86 | 0.86 | 1.30 | 127.3% | 6.89 | ships |
-| `walker.pedestrian.boar` | geometric | 0.94 | 0.94 | 1.22 | 147.4% | 8.17 | ships |
+| **`walker.pedestrian.boar`** | **geometric** | **0.94** | **0.94** | **1.22** | 147.4% | 8.17 | **replace** |
 
 Note the visual walkers all read *geometric* against the child cluster (`Z ≈ 6.8`) and pass through
 the adult mold. That is the union rule doing its job, not an error.
@@ -423,7 +428,7 @@ So the last step of every import is an assertion, not a successful cook:
 3. Only then run routes.
 
 Goldens in [`../tests/`](../tests/) cover the **base level** at v0.9, because no user could
-reproduce a shifted-level golden without the twelve props. Your substitute will not match a shifted
+reproduce a shifted-level golden without the thirteen props. Your substitute will not match a shifted
 golden and is not expected to.
 
 ---
@@ -439,15 +444,15 @@ Re-running is only needed for the routes that reference the prop you replaced.
 | static | 10 | 2 | ~1.4 | ~24 |
 
 Basis: ≈0.14 GPU-h per route, one seed (measured 0.136 for one model over the 70-route static
-category; see [`runner/STATUS.md`](../runner/STATUS.md) H8). Replacing all twelve and re-running
-all seventeen published baselines is ≈566 GPU-h. Replacing all twelve for **your own model only**
-is ≈33 GPU-h.
+category; see [`runner/STATUS.md`](../runner/STATUS.md) H8). Replacing all thirteen and re-running
+all seventeen published baselines is ≈609 GPU-h. Replacing all thirteen for **your own model only**
+is ≈36 GPU-h.
 
 You do not need to re-run our seventeen published baselines unless you want cross-model comparison
 *on your substituted props* — our records for those props were produced with different meshes and
 are not comparable to yours. This is the practical cost of substitution, and it is the reason v1.0 exists:
-it will ship licence-clean replacements plus a full re-run, so the comparison is restored for
-everyone at once.
+it will ship licence-clean replacements for twelve of the thirteen (not the boar) plus a full
+re-run, so the comparison is restored for everyone at once.
 
 ---
 
@@ -482,5 +487,5 @@ everyone at once.
 - [`../classifier/`](../classifier/) — the three dimension checkers
 - [`../routes/MANIFEST.tsv`](../routes/MANIFEST.tsv) · [`../routes/EXCLUSIONS.md`](../routes/EXCLUSIONS.md)
 - [`../tests/`](../tests/) — acceptance harness and goldens
-- [`../assets/README.md`](../assets/README.md) — the six props that do ship
+- [`../assets/README.md`](../assets/README.md) — the five props that do ship
 - [`../NOTICE`](../NOTICE) — per-asset licences and attribution obligations

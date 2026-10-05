@@ -12,8 +12,8 @@ silently meaningless number.
 
 WHAT IT CHECKS
 --------------
-1. Each of the six shipped blueprint IDs is registered.
-2. Each one actually SPAWNS. This is the load-bearing check: the four walkers are
+1. Each of the five shipped blueprint IDs is registered.
+2. Each one actually SPAWNS. This is the load-bearing check: the three walkers are
    registered by the cooked WalkerFactory, which the pack overwrites. A WalkerFactory
    entry whose content directory is missing still shows up in the blueprint library but
    returns None from try_spawn_actor. Registration alone therefore proves nothing.
@@ -21,7 +21,7 @@ WHAT IT CHECKS
 4. The bounding box matches the recorded reference within tolerance, which catches a
    blueprint ID that resolved to the wrong mesh.
 5. Walker IDs this pack does NOT ship are NOT registered. The shipped WalkerFactory
-   registers only the four shipped walkers plus CARLA's native ones, so any of these
+   registers only the three shipped walkers plus CARLA's native ones, so any of these
    being registered means the WalkerFactory in use is not the one this pack ships. A
    registered blueprint whose content is missing does not crash; the route finishes
    with a plausible score.
@@ -46,13 +46,12 @@ except ImportError:  # pragma: no cover
              "PythonAPI wheel/egg shipped with your CARLA 0.9.15 build first.")
 
 # ---------------------------------------------------------------------------
-# The six assets this pack ships. bbox_extent is the half-extent (x, y, z) in
+# The five assets this pack ships. bbox_extent is the half-extent (x, y, z) in
 # metres reported by actor.bounding_box.extent, measured on CARLA 0.9.15.
 # ---------------------------------------------------------------------------
 SHIPPED = {
     "walker.pedestrian.astronaut":        {"group": "walkers-ccby",   "extent": None},
     "walker.pedestrian.deliveryrobot":    {"group": "walkers-ccby",   "extent": None},
-    "walker.pedestrian.boar":             {"group": "walkers-ccby",   "extent": None},
     "walker.pedestrian.firefighter":      {"group": "walkers-ccbync", "extent": None},
     "static.prop.concreteroadbarrier":    {"group": "props",          "extent": None},
     "static.prop.roadclosedbarricade":    {"group": "props",          "extent": None},
@@ -63,8 +62,9 @@ SHIPPED = {
 # none of them. If one is registered, the factory in use is not this pack's -- or you
 # deliberately registered your own substitute under that ID (docs/replacing-props.md).
 MUST_NOT_REGISTER = [
-    "walker.pedestrian.soldier",       # not redistributable (see ASSETS.tsv)
-    "walker.pedestrian.wheelchair",    # not redistributable (see ASSETS.tsv)
+    "walker.pedestrian.soldier",       # not redistributable (see NOTICE section 3)
+    "walker.pedestrian.wheelchair",    # not redistributable (see NOTICE section 3)
+    "walker.pedestrian.boar",          # not redistributable (see NOTICE section 3)
     "walker.pedestrian.ball",          # unrelated experiment, not part of the benchmark
     "walker.pedestrian.caneman",
     "walker.pedestrian.cow",
@@ -221,7 +221,7 @@ def main() -> int:
         print("\nDo not run the benchmark until these are resolved: a missing prop does "
               "not fail the route, it silently changes what was measured.")
         return 1
-    print("VERIFY OK — all six shipped assets registered, spawned and matched reference "
+    print("VERIFY OK — all five shipped assets registered, spawned and matched reference "
           "dimensions; no unshipped walker ID is registered.")
     return 0
 

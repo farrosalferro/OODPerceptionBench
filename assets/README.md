@@ -2,12 +2,12 @@
 
 **Bundle version:** v0.9 · **Binds to:** arXiv v1
 
-The six OOD props we are allowed to redistribute: how to get them, install them, verify them,
+The five OOD props we are allowed to redistribute: how to get them, install them, verify them,
 and attribute them.
 
 > ### The binaries are not in this repository
 >
-> The three cooked tarballs are **166.6 MB** packaged (185.5 MB installed, 195 files), which is
+> The three cooked tarballs are **160.5 MB** packaged (175.6 MB installed, 162 files), which is
 > past what a git repository should carry. They are hosted separately:
 >
 > **Download:** `https://huggingface.co/datasets/farrosalferro24/OODPerceptionBench`
@@ -24,12 +24,11 @@ and attribute them.
 | `walker.pedestrian.astronaut` | walker | visual | Antropik | CC BY 4.0 |
 | `walker.pedestrian.firefighter` | walker | visual | KIFIR | ⚠ **CC BY-NC 4.0** |
 | `walker.pedestrian.deliveryrobot` | walker | geometric | Bento (`@gostbento`) | CC BY 4.0 |
-| `walker.pedestrian.boar` | walker | geometric | AnimalMesh 3D | CC BY 4.0 |
 | `static.prop.concreteroadbarrier` | static | geometric | widthRider | CC BY 4.0 |
 | `static.prop.roadclosedbarricade` | static | geometric | exiS7-Gs | CC BY 4.0 |
 
 Plus one modified CARLA base-content asset, `WalkerFactory` (CC BY, © the CARLA authors). Walker
-blueprint IDs live in this cooked file, not in JSON, so the four walkers cannot register without
+blueprint IDs live in this cooked file, not in JSON, so the three walkers cannot register without
 it. It registers only the shipped walkers and CARLA's native ones, so a route that needs a
 non-shipped walker fails loudly instead of running without it.
 
@@ -44,12 +43,12 @@ non-shipped walker fails loudly instead of running without it.
 | Category | Runnable | Total |
 |---|---:|---:|
 | static | **30** | 70 |
-| pedestrian | **126** | 162 |
+| pedestrian | **108** | 162 |
 | vehicle | **81** | 243 |
-| **total** | **237** | **475** |
+| **total** | **219** | **475** |
 
-145 of those 237 are `base`-level route files that need no pack at all. The pack unlocks the
-other 92 shift-level routes. The remaining 238 routes are **not runnable at v0.9** — see
+145 of those 219 are `base`-level route files that need no pack at all. The pack unlocks the
+other 74 shift-level routes. The remaining 256 routes are **not runnable at v0.9** — see
 [`../NOTICE`](../NOTICE) §3 and [`../docs/replacing-props.md`](../docs/replacing-props.md).
 
 ## Files here
@@ -61,12 +60,12 @@ other 92 shift-level routes. The remaining 238 routes are **not runnable at v0.9
 | [`SHA256SUMS`](SHA256SUMS) | checksums of the three tarballs — verify before installing |
 | [`MANIFEST.tsv`](MANIFEST.tsv) | every shipped file: path, sha256, size, owning asset, licence |
 | [`tools/verify_pack.py`](tools/verify_pack.py) | post-install verification against a live CARLA server. **Run it.** |
-| [`tools/goldens.json`](tools/goldens.json) | reference bounding boxes for the six assets |
+| [`tools/goldens.json`](tools/goldens.json) | reference bounding boxes for the five assets |
 | [`build/`](build/) | reproduces the pack from a CARLA build; `EXCLUSIONS.tsv` records what was deliberately not shipped |
 
 ## What does not belong here
 
-The other twelve props, in any form — no meshes, no textures, no cooked packages, **no download
+The other thirteen props, in any form — no meshes, no textures, no cooked packages, **no download
 links and no purchase instructions**. Ten of them carry an explicit AI-use prohibition, so
 pointing a user at those listings so they can run an AI benchmark would walk them into the same
 restriction that closed the path for us. See [`../NOTICE`](../NOTICE) §3 for the reasoning and
@@ -84,5 +83,6 @@ restriction that closed the path for us. See [`../NOTICE`](../NOTICE) §3 for th
    [`../tests/`](../tests/) are the only things that distinguish a correct install from a
    confident wrong one.
 
-**Version stamp:** the v0.9 pack contains 6 of 18 props. The v1.0 pack adds licence-clean
-replacements for the rest, and records from the two are **not** comparable on the replaced props.
+**Version stamp:** the v0.9 pack contains 5 of 18 props. The v1.0 pack adds licence-clean
+replacements for twelve of the rest (not the boar), and records from the two are **not**
+comparable on the replaced props.

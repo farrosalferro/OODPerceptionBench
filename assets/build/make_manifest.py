@@ -18,9 +18,6 @@ ASSET_META = {
     "DeliveryRobot": (
         "walker.pedestrian.deliveryrobot", "pedestrian", "geometric_shift",
         "Bento (gostbento)", "CC BY 4.0", "https://creativecommons.org/licenses/by/4.0/"),
-    "Boar": (
-        "walker.pedestrian.boar", "pedestrian", "geometric_shift",
-        "AnimalMesh 3D", "CC BY 4.0", "https://creativecommons.org/licenses/by/4.0/"),
     "Firefighter": (
         "walker.pedestrian.firefighter", "pedestrian", "visual_shift",
         "KIFIR", "CC BY-NC 4.0", "https://creativecommons.org/licenses/by-nc/4.0/"),

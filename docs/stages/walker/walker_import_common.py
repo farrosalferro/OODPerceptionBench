@@ -198,7 +198,7 @@ class WalkerImportManifest:
     clip_speed_map: Optional[dict] = None
     blendspace_axis: Optional[dict] = None
     # assemble template
-    clone_from: Optional[str] = None                 # nearest body-plan walker (e.g. Boar)
+    clone_from: Optional[str] = None                 # nearest body-plan walker (e.g. DeliveryRobot)
     # WalkerFactory params
     gender: str = "Other"
     age: str = "Adult"

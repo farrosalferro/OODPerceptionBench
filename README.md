@@ -23,7 +23,7 @@ or size).**
 |---|---|---|
 | `base` | nothing: a native CARLA object | a standard adult pedestrian |
 | `visual_shift` | new **appearance**, familiar **shape** | an astronaut-suited pedestrian |
-| `geometric_shift` | new **shape or size** | a boar; a delivery robot |
+| `geometric_shift` | new **shape or size** | a delivery robot |
 
 ## Contents
 
@@ -92,24 +92,25 @@ Column definitions and checks: [`records/README.md`](records/README.md).
 
 ## What v0.9 includes
 
-Twelve of the 18 new objects cannot be redistributed for licensing reasons
-([`NOTICE`](NOTICE)). So a fresh install can run 237 of the 475 routes:
+Thirteen of the 18 new objects cannot be redistributed for licensing reasons
+([`NOTICE`](NOTICE)). So a fresh install can run 219 of the 475 routes:
 
 | Category | Runnable routes | Total |
 |---|---:|---:|
-| Pedestrian | 126 | 162 |
+| Pedestrian | 108 | 162 |
 | Static | 30 | 70 |
 | Vehicle | 81 (base level only) | 243 |
-| **Total** | **237** | **475** |
+| **Total** | **219** | **475** |
 
-v0.9 matches arXiv v1 of the paper. v1.0 will match arXiv v2 and replace the missing objects.
+v0.9 matches arXiv v1 of the paper. v1.0 will match arXiv v2 and replace most of the missing
+objects.
 **Never mix v0.9 and v1.0 scores in one table.**
 
 | | v0.9 (this version) | v1.0 (later) |
 |---|---|---|
 | Route definitions | 475 | 475 (only replaced objects change) |
 | Baseline records | 17 models, seeds 42/43/44 | re-run for replaced objects |
-| Content pack | 6 of 18 new objects | replacements for the other 12 |
+| Content pack | 5 of 18 new objects | replacements for 12 of the other 13 (not the boar) |
 | Acceptance goldens | measured PDM-Lite bundle for the 9-route smoke split | regenerate for v1.0 |
 
 ## Protocol
@@ -136,7 +137,7 @@ The statistical tests are in [`docs/DETAILS.md`](docs/DETAILS.md#protocol--do-no
 
 ## License and citation
 
-Our code is MIT ([`LICENSE`](LICENSE)). Five shipped objects are CC BY 4.0 and one,
+Our code is MIT ([`LICENSE`](LICENSE)). Four shipped objects are CC BY 4.0 and one,
 `walker.pedestrian.firefighter`, is CC BY-NC 4.0 (non-commercial). See [`NOTICE`](NOTICE).
 
 Please cite the paper and this software ([`CITATION.cff`](CITATION.cff)), and also

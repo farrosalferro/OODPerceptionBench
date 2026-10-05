@@ -8,13 +8,12 @@ Attribution is required for every asset here; one of them is additionally restri
 
 ---
 
-## 1. The six 3D assets
+## 1. The five 3D assets
 
 | Blueprint ID | Author | Licence | Source | Tarball |
 |---|---|---|---|---|
 | `walker.pedestrian.astronaut` | **Antropik** | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [Sketchfab](https://sketchfab.com/3d-models/astronaut-482bf87662fd4b378bcb3a2931d59ca3) | `walkers-ccby` |
 | `walker.pedestrian.deliveryrobot` | **Bento** (`@gostbento`) | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [Sketchfab](https://sketchfab.com/3d-models/delivery-robot-4dbac67355174751801fb1f6e8dc6230) | `walkers-ccby` |
-| `walker.pedestrian.boar` | **AnimalMesh 3D** | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [Sketchfab](https://sketchfab.com/3d-models/animated-realistic-boar-3d-animal-model-f672a7fd93e84997b80a54ba30956111) | `walkers-ccby` |
 | `static.prop.concreteroadbarrier` | **widthRider** | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [Sketchfab](https://sketchfab.com/3d-models/concrete-road-barrier-photoscanned-a09622c043724a1b92e7920b22edb6bf) | `props` |
 | `static.prop.roadclosedbarricade` | **exiS7-Gs** | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [Sketchfab](https://sketchfab.com/3d-models/road-closed-sign-0b8e907e8508406e8560a7adf495d1de) | `props` |
 | `walker.pedestrian.firefighter` | **KIFIR** | ⚠ **[CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/)** | [Sketchfab](https://sketchfab.com/3d-models/firefighter-tip-b-c62321ea381245f59145efff91c439f4) | `walkers-ccbync` |
@@ -63,15 +62,15 @@ OOD-PerceptionBench paper. A `CITATION.cff` ships with the code repository.
 
 Minimal inline form:
 
-> 3D assets: astronaut © Antropik, delivery robot © Bento (@gostbento), boar © AnimalMesh 3D,
+> 3D assets: astronaut © Antropik, delivery robot © Bento (@gostbento),
 > concrete road barrier © widthRider, road-closed barricade © exiS7-Gs — all CC BY 4.0;
 > firefighter © KIFIR — CC BY-NC 4.0. Simulator content © CARLA Simulator authors, CC BY.
 
 ---
 
-## 4. The twelve assets that are *not* here
+## 4. The thirteen assets that are *not* here
 
-Twelve of the eighteen OOD props used in the paper are not redistributable and are
+Thirteen of the eighteen OOD props used in the paper are not redistributable and are
 **specified dimensionally instead** — the Appendix tables give their measurements, and the
 classifier notebooks (`classifier/{static,pedestrian,vehicle}_dimension_checker.ipynb` in
 the code repository) let you check any substitute you source yourself against the same
@@ -84,5 +83,7 @@ Reasons, in brief:
 - **One** (CGTrader) is Royalty-Free with both redistribution and AI-use restrictions.
 - **Two** free downloads were tagged CC-BY by uploaders who did not own the underlying IP.
   They are not licensable by anyone and are being replaced.
+- **One** free download, the boar, is labelled CC BY 4.0, but its creator's description says
+  that version is for personal use only. The terms conflict, so it is not shipped.
 
-The twelve are listed, with these reasons, in `NOTICE` §3 of the code repository.
+The thirteen are listed, with these reasons, in `NOTICE` §3 of the code repository.
