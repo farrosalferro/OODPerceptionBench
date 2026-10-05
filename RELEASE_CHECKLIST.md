@@ -32,7 +32,7 @@ is below; this file carries the parts a script cannot judge.
 - [x] `records/` — 24,700 rows × 64 columns, CSV + `load.py`, seeds 42/43/44, 17 models + PDM-Lite (PDM-Lite seed 42)
 - [x] `runner/` — `run_benchmark.py`, worker pool, resume, SLURM backend (**222 tests green**;
       local backend exercised against real CARLA; multi-GPU/full-scale open and SLURM broken —
-      see `runner/STATUS.md`). *As of that date. Since then: 376 tests, and the SLURM backend
+      see `runner/STATUS.md`). *As of that date. Since then: 377 tests, and the SLURM backend
       validated on a real scheduler at two-way concurrency, one GPU per job, with three rare
       fault paths fixed on 2026-10-04 and partly re-checked on a real scheduler on 2026-10-05;
       full scale and local multi-GPU still unmeasured (`runner/STATUS.md` §2).*

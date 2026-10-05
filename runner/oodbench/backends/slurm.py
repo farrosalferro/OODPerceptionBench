@@ -939,13 +939,20 @@ def _user() -> Optional[str]:
         return None
 
 
+# squeue settings that choose which clusters of a federation it asks; dropping them could make
+# a job on a sibling cluster look gone.
+_SQUEUE_ROUTING_ENV = frozenset({"SQUEUE_FEDERATION", "SQUEUE_LOCAL", "SQUEUE_SIBLING"})
+
+
 def _squeue_env() -> Dict[str, str]:
     """This process's environment without the ``SQUEUE_*`` defaults squeue reads as options.
 
-    A user's ``SQUEUE_STATES=PENDING`` would hide a RUNNING job, which then reads as gone.
-    ``SLURM_*`` settings such as ``SLURM_CONF`` still pass through.
+    A user's ``SQUEUE_STATES=PENDING`` would hide a RUNNING job, which then reads as gone; the
+    other settings change which jobs or rows are printed. Only the cluster routing settings
+    are kept. ``SLURM_*`` settings such as ``SLURM_CONF`` still pass through.
     """
-    return {k: v for k, v in os.environ.items() if not k.startswith("SQUEUE_")}
+    return {k: v for k, v in os.environ.items()
+            if not k.startswith("SQUEUE_") or k in _SQUEUE_ROUTING_ENV}
 
 
 def _own_jobs(name: str, tag: str) -> Tuple[Optional[List[str]], str]:

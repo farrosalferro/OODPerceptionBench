@@ -1666,6 +1666,38 @@ class TestInheritedSqueueSettings(SlurmBackendBase):
         self.assertEqual(env.get("SLURM_CONF"), "/etc/slurm/other.conf")
         self.assertNotIn("SQUEUE_STATES", env)
 
+    def test_cluster_routing_settings_still_reach_squeue(self):
+        """RED BEFORE THE FIX:
+
+            AssertionError: {} != {'SQUEUE_FEDERATION': '1', 'SQUEUE_LOCAL': '1', ...} :
+            squeue lost the settings that choose which clusters it asks
+
+        ``SQUEUE_FEDERATION``, ``SQUEUE_LOCAL`` and ``SQUEUE_SIBLING`` choose which clusters of a
+        federation squeue asks; dropping them could make a job on a sibling cluster look gone.
+        Every other ``SQUEUE_*`` setting changes which jobs or rows are printed and is dropped.
+        """
+        routing = {"SQUEUE_FEDERATION": "1", "SQUEUE_LOCAL": "1", "SQUEUE_SIBLING": "1"}
+        others = {"SQUEUE_PRIORITY": "1", "SQUEUE_ARRAY": "1", "SQUEUE_PARTITION": "debug"}
+        seen = self.site.root / "squeue.env"
+        self.tool("squeue", f'''
+            import json, os
+            from pathlib import Path
+            kept = {{k: v for k, v in os.environ.items()
+                     if k in {sorted(set(routing) | set(others) | {"SQUEUE_STATES"})!r}}}
+            Path({str(seen)!r}).write_text(json.dumps(kept), encoding="utf-8")
+            print("RUNNING")
+        ''')
+        self.replay("sbatch", "sbatch_parsable")
+        with unittest.mock.patch.dict(os.environ, {**routing, **others}):
+            _, backend, task = self.backend_and_task(slurm={"submit_interval_s": 0})
+            attempt = backend.submit(task, worker=0)
+            self.assertFalse(backend.poll(attempt))
+
+        env = json.loads(seen.read_text(encoding="utf-8"))
+        self.assertEqual({k: v for k, v in env.items() if k in routing}, routing,
+                         "squeue lost the settings that choose which clusters it asks")
+        self.assertEqual({k: v for k, v in env.items() if k not in routing}, {})
+
 
 class TestUnsettledJobMarker(SlurmBackendBase):
     """A route with no old checkpoint to set aside is held by a ``<checkpoint>.unsettled-<ns>``

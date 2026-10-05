@@ -7,7 +7,7 @@
 
 A production runner for this benchmark includes scale and multi-GPU evidence that this release
 does not yet have. What exists now is the part that is expensive to change later — the design
-decisions in `DESIGN.md` — plus a working local implementation whose *logic* is covered by 376
+decisions in `DESIGN.md` — plus a working local implementation whose *logic* is covered by 377
 automated tests and whose *simulator interaction* was exercised against CARLA 0.9.15 on
 2026-08-11 and 2026-08-12. Single-route execution, two-worker one-GPU stacking, exact port
 isolation, real Ctrl-C/reaping/resume, failure accounting, and a nine-route PDM-Lite golden were
@@ -252,7 +252,7 @@ All of these run with no GPU, no CARLA, no network and no third-party packages (
 shipped-template tests need PyYAML and are skipped without it):
 
 ```
-python -m unittest discover -s tests -t .    ->  376 tests, OK, ~102 s
+python -m unittest discover -s tests -t .    ->  377 tests, OK, ~102 s
 ```
 
 | Area | Covered by | Notes |
@@ -362,7 +362,9 @@ observed;
 >   for 180 s, nothing shows the job has ended, so the run stops with an error naming the job
 >   rather than retry the route beside it. `squeue` runs without the caller's `SQUEUE_*`
 >   variables: a `SQUEUE_STATES` default in a user's shell would hide a running job, which
->   would then look gone.
+>   would then look gone. The three that choose which federation clusters it asks
+>   (`SQUEUE_FEDERATION`, `SQUEUE_LOCAL`, `SQUEUE_SIBLING`) are kept; this has not been tried
+>   on a federated cluster.
 > - **Queue time is no longer recorded as runtime.** Runtime counts only while `squeue` shows
 >   the job `RUNNING`. It stops when the job is paused, or at the first poll that no longer
 >   finds the job in `squeue`, and restarts only if `squeue` shows it `RUNNING` again. A
