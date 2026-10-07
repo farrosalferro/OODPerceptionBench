@@ -21,8 +21,10 @@
 # Names/paths/anchors are pulled FROM the shared contract (common.py via
 # names_for); nothing the contract already defines is hardcoded here.
 #
-# --reuse-existing : skip `make package` if Dist tar already present (cook is
-#                    minutes; never redo needlessly -- spec sec 5).
+# --reuse-existing : skip `make package` if the Dist tar is present AND an earlier
+#                    run of this script cooked it and passed the shader gate (a
+#                    <tar>.shader_gate_ok marker holding the tar's sha256). Any
+#                    other tar is re-cooked (cook is minutes; never redo needlessly).
 # --dry-run        : write ONLY the Package.json to a temp path, print that path,
 #                    and exit 0. (Used by the self-test; no cook, no ingest.)
 # =============================================================================
@@ -76,6 +78,8 @@ done
 if [[ -z "$ASSET" ]]; then
   usage; exit 2
 fi
+# Absolute --out: the script cd's into CARLA_UE_ROOT and SERVER_ROOT before it writes.
+if [[ -n "$OUT" && "$OUT" != /* ]]; then OUT="$PWD/$OUT"; fi
 
 # --- derive everything from the shared contract (never hardcode) -------------
 # Pull names_for(...) + path constants out of common.py in one shot. Tab-sep KEY\tVALUE.
@@ -132,6 +136,7 @@ CONFIG_DIR="${CONTENT_FOLDER}/Config"
 PACKAGE_JSON="${CONFIG_DIR}/${ASSET}.Package.json"
 DIST_TAR_PATH="${CARLA_DIST}/${DIST_TAR}"
 DIST_BUILD_DIR="${DIST_TAR_PATH%.tar.gz}"   # uncooked iterative output dir the cook reuses with -iterate
+GATE_MARKER="${DIST_TAR_PATH}.shader_gate_ok"   # sha256 of a tar that passed the shader gate
 IMPORTED_TAR_PATH="${CARLA_IMPORT_DIR}/${DIST_TAR}"
 SERVER_CONTENT="${SERVER_ROOT}/CarlaUE4/Content/${ASSET}"
 CONDA_SH="${CONDA_ROOT}/etc/profile.d/conda.sh"
@@ -156,11 +161,14 @@ emit_verdict() {
   fi
 }
 
+json_esc() { local v="${1//\\/\\\\}"; printf '%s' "${v//\"/\\\"}"; }
+
 data_blob() {
-  # Stable data object reflecting the derived plan/results.
-  printf '{"asset": "%s", "sm_name": "%s", "package_json": "%s", "sm_package_path": "%s", "dist_tar": "%s", "imported_tar": "%s", "server_content": "%s", "reuse_existing": %s}' \
-    "$ASSET" "$SM_NAME" "$PACKAGE_JSON" "$SM_PACKAGE_PATH" "$DIST_TAR_PATH" "$IMPORTED_TAR_PATH" "$SERVER_CONTENT" "$REUSE_EXISTING" \
-    | sed "s|}\$|, \"cook_log\": \"${COOK_LOG}\"}|"
+  # Stable data object reflecting the derived plan/results. Paths are JSON-escaped.
+  printf '{"asset": "%s", "sm_name": "%s", "package_json": "%s", "sm_package_path": "%s", "dist_tar": "%s", "imported_tar": "%s", "server_content": "%s", "reuse_existing": %s, "cook_log": "%s"}' \
+    "$(json_esc "$ASSET")" "$(json_esc "$SM_NAME")" "$(json_esc "$PACKAGE_JSON")" "$(json_esc "$SM_PACKAGE_PATH")" \
+    "$(json_esc "$DIST_TAR_PATH")" "$(json_esc "$IMPORTED_TAR_PATH")" "$(json_esc "$SERVER_CONTENT")" \
+    "$REUSE_EXISTING" "$(json_esc "$COOK_LOG")"
 }
 
 fail() {
@@ -243,16 +251,26 @@ write_package_json "$PACKAGE_JSON"
 # =============================================================================
 if [[ "$CLEAN" -eq 1 ]]; then
   echo "[cook_package] Step 1b: --clean -> removing iterative cooked output + stale ingest"
-  rm -rf "$DIST_BUILD_DIR" "$DIST_TAR_PATH" "$SERVER_CONTENT" "$IMPORTED_TAR_PATH"
+  rm -rf "$DIST_BUILD_DIR" "$DIST_TAR_PATH" "$GATE_MARKER" "$SERVER_CONTENT" "$IMPORTED_TAR_PATH"
 fi
 
 # =============================================================================
 # Step 3: cook -- cd CARLA_UE_ROOT; activate the CARLA build environment; make package.
 #   conda activate trips `set -u`; unset -u around it (repo convention).
 # =============================================================================
-if [[ "$REUSE_EXISTING" -eq 1 && -f "$DIST_TAR_PATH" ]]; then
-  echo "[cook_package] Step 3: --reuse-existing and Dist tar present -> skipping 'make package'"
+gate_passed_tar() {  # true iff the Dist tar is the one an earlier run gated OK
+  [[ -f "$DIST_TAR_PATH" && -f "$GATE_MARKER" ]] || return 1
+  [[ "$(sha256sum "$DIST_TAR_PATH" | cut -d' ' -f1)" == "$(cat "$GATE_MARKER")" ]]
+}
+COOKED=0
+if [[ "$REUSE_EXISTING" -eq 1 ]] && gate_passed_tar; then
+  echo "[cook_package] Step 3: --reuse-existing and a shader-gated Dist tar present -> skipping 'make package'"
 else
+  if [[ "$REUSE_EXISTING" -eq 1 && -f "$DIST_TAR_PATH" ]]; then
+    echo "[cook_package] Step 3: --reuse-existing but the Dist tar has no matching shader-gate marker -> re-cooking"
+  fi
+  rm -f "$GATE_MARKER"
+  COOKED=1
   echo "[cook_package] Step 3: cooking with 'make package ARGS=\"--packages=${ASSET}\"'"
   [[ -d "$CARLA_UE_ROOT" ]] || fail "CARLA_UE_ROOT not found: $CARLA_UE_ROOT"
   [[ -f "$CONDA_SH" ]]      || fail "conda.sh not found: $CONDA_SH"
@@ -278,6 +296,7 @@ else
               | grep -oE "/[^ :]*/Content/${ASSET}/[^ :]*|/Game/${ASSET}/[^ :]*" | sort -u || true)"
   if [[ -n "$BAD_MATS" ]]; then
     grep -E "Sampler type is|\(Node [A-Za-z]+\)" "$COOK_LOG" | grep -F "/Game/${ASSET}/" | sort -u | head -20 >&2 || true
+    rm -f "$DIST_TAR_PATH"   # never leave a grey package for a later --reuse-existing to install
     fail "material(s) failed to compile in the cook (the Default Material would render grey): $(echo $BAD_MATS | tr '\n' ' '). See $COOK_LOG. Fix the material, then re-run with --clean."
   fi
 fi
@@ -287,6 +306,9 @@ fi
 # =============================================================================
 echo "[cook_package] Step 4: verifying ${DIST_TAR_PATH}"
 [[ -f "$DIST_TAR_PATH" ]] || fail "cook produced no Dist tar: $DIST_TAR_PATH"
+if [[ "$COOKED" -eq 1 ]]; then
+  sha256sum "$DIST_TAR_PATH" | cut -d' ' -f1 > "$GATE_MARKER"
+fi
 
 # =============================================================================
 # Step 5: copy tar into the standalone CARLA Import/, ingest, verify Content.
