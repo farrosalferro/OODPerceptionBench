@@ -7,6 +7,9 @@
 #   2. SAFETY: abort if a CarlaUE4 / UE4Editor server or editor is running --
 #      cook + ingest MUST run with the server OFF.
 #   3. cd CARLA_UE_ROOT; activate the CARLA build environment; make package ARGS="--packages=<A>".
+#   3b. Shader gate: fail if the cook log has "Failed to compile Material" for any
+#      material of <A>. UE then cooks the engine default material (grey prop) but
+#      'make package' still exits 0, so the exit code alone is not a pass.
 #   4. Verify Dist/<A>_0.9.15-dirty.tar.gz exists.
 #   5. Copy that tar into the standalone CARLA Import/, run ImportAssets.sh,
 #      verify the server's CarlaUE4/Content/<A> now exists.
@@ -132,6 +135,8 @@ DIST_BUILD_DIR="${DIST_TAR_PATH%.tar.gz}"   # uncooked iterative output dir the 
 IMPORTED_TAR_PATH="${CARLA_IMPORT_DIR}/${DIST_TAR}"
 SERVER_CONTENT="${SERVER_ROOT}/CarlaUE4/Content/${ASSET}"
 CONDA_SH="${CONDA_ROOT}/etc/profile.d/conda.sh"
+# full 'make package' output, kept next to the verdict (or a temp file) for the shader gate
+if [[ -n "$OUT" ]]; then COOK_LOG="$(dirname "$OUT")/cook_make_package.log"; else COOK_LOG=""; fi
 
 # --- verdict emitter (bash heredoc, no python; common.make_verdict shape) ----
 # {stage, ok, data:{...}, error, ts}.  data_json is a pre-built JSON object.
@@ -154,7 +159,8 @@ emit_verdict() {
 data_blob() {
   # Stable data object reflecting the derived plan/results.
   printf '{"asset": "%s", "sm_name": "%s", "package_json": "%s", "sm_package_path": "%s", "dist_tar": "%s", "imported_tar": "%s", "server_content": "%s", "reuse_existing": %s}' \
-    "$ASSET" "$SM_NAME" "$PACKAGE_JSON" "$SM_PACKAGE_PATH" "$DIST_TAR_PATH" "$IMPORTED_TAR_PATH" "$SERVER_CONTENT" "$REUSE_EXISTING"
+    "$ASSET" "$SM_NAME" "$PACKAGE_JSON" "$SM_PACKAGE_PATH" "$DIST_TAR_PATH" "$IMPORTED_TAR_PATH" "$SERVER_CONTENT" "$REUSE_EXISTING" \
+    | sed "s|}\$|, \"cook_log\": \"${COOK_LOG}\"}|"
 }
 
 fail() {
@@ -256,7 +262,24 @@ else
   source "$CONDA_SH"
   conda activate "$COOK_CONDA_ENV"
   set -u
-  make package ARGS="--packages=${ASSET}" || fail "'make package' failed for ${ASSET}"
+  [[ -n "$COOK_LOG" ]] || COOK_LOG="$(mktemp -t "${ASSET}.cook.XXXXXX.log")"
+  mkdir -p "$(dirname "$COOK_LOG")"
+  make package ARGS="--packages=${ASSET}" 2>&1 | tee "$COOK_LOG" || fail "'make package' failed for ${ASSET}"
+
+  # ---------------------------------------------------------------------------
+  # Step 3b: shader gate. A material that fails to compile is cooked as the engine
+  # default (grey) while the cook exits 0. Typical cause: a TextureSample sampler
+  # type that does not match a VirtualTextureStreaming texture ("Sampler type is X,
+  # should be Virtual Y"). Fail BEFORE ingest so a grey prop never reaches the server.
+  # Trailing '/' keeps <A> from matching a longer asset name sharing its prefix.
+  # ---------------------------------------------------------------------------
+  echo "[cook_package] Step 3b: checking the cook log for material compile failures"
+  BAD_MATS="$(grep -F "Failed to compile Material" "$COOK_LOG" | grep -E "/Content/${ASSET}/|/Game/${ASSET}/" \
+              | grep -oE "/[^ :]*/Content/${ASSET}/[^ :]*|/Game/${ASSET}/[^ :]*" | sort -u || true)"
+  if [[ -n "$BAD_MATS" ]]; then
+    grep -E "Sampler type is|\(Node [A-Za-z]+\)" "$COOK_LOG" | grep -F "/Game/${ASSET}/" | sort -u | head -20 >&2 || true
+    fail "material(s) failed to compile in the cook (the Default Material would render grey): $(echo $BAD_MATS | tr '\n' ' '). See $COOK_LOG. Fix the material, then re-run with --clean."
+  fi
 fi
 
 # =============================================================================

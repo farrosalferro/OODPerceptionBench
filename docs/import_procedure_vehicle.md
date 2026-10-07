@@ -306,7 +306,8 @@ step says "copy from an existing vehicle", it means that one:
 
 5. **Wire the body materials** — Albedo → Base Color, Normal → Normal, Roughness → Roughness,
    Metalness → Metallic, AO → Ambient Occlusion, Emissive → Emissive Color, for every material
-   instance the asset uses. **If a texture-sampler error appears, disconnect Metallic**
+   instance the asset uses. **If a sampler-type error appears, set the node's Sampler Type to the
+   one the error names; if roughness landed on Metallic, move it to Roughness**
    (`ASSET_TRAPS.md` §5).
 
 6. **Glass and lights do not get hand-authored materials.** Copy the Lincoln's two material

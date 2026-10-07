@@ -38,8 +38,9 @@ def parse_args():
     ap.add_argument("--no_fallback", action="store_true")
     # FIX (B): when set, let UE's FBX importer CREATE the material(s)+texture(s) natively
     # (same provenance as the working reference prop DutchCrashAttenuator) instead of
-    # building a material programmatically via MaterialEditingLibrary (which cooks to an
-    # invalid shader -> grey checkerboard). --master is ignored in this mode.
+    # building a material programmatically via MaterialEditingLibrary. --master is ignored
+    # in this mode. (Both paths cook correctly now; the old grey checkerboard was a VT
+    # sampler-type mismatch, see required_sampler(), not the MEL path itself.)
     ap.add_argument("--native_material", action="store_true")
     # ignore unknown UE flags
     args, _ = ap.parse_known_args(av)
@@ -65,6 +66,7 @@ SLOT_TEX_SETTINGS = {
 }
 
 # Self-contained material graph (built per-prop, in-package). slot -> (sampler, output pin, material property).
+# The sampler column is only the non-VT default; the graph uses required_sampler(tex).
 _ST = unreal.MaterialSamplerType
 
 
@@ -89,6 +91,162 @@ SLOT_GRAPH = {
 }
 
 
+# ------------------------------------------------------------- VT-aware sampler types
+# Root cause of the old grey-checkerboard / GATE 2 (confirmed 2026-10-07): with
+# r.VirtualTextures=True and AutoVTSize=4096, every texture >= 4096^2 is imported with
+# VirtualTextureStreaming=True. UE 4.26 then requires a Virtual* sampler on every
+# TextureSample that uses it (UMaterialExpressionTextureBase::GetSamplerTypeForTexture);
+# any mismatch is a material compile error at cook ("Sampler type is X, should be
+# Virtual Y" -> "Default Material will be used in game"), the cook still exits 0, and the
+# prop renders grey. The GUI never hit this because assigning a texture in the editor
+# auto-sets the sampler. required_sampler() mirrors GetSamplerTypeForTexture.
+def _st_norm(n):
+    return n.replace("_", "").lower()
+
+
+_ST_BY_NORM = {_st_norm(n): getattr(_ST, n) for n in dir(_ST) if n.upper().startswith("SAMPLERTYPE")}
+
+
+def _st(name):
+    return _ST_BY_NORM[_st_norm("SAMPLERTYPE_" + name)]
+
+
+def required_sampler(tex):
+    """The sampler type UE requires for `tex` (VT-aware); anything else fails to compile."""
+    vt = bool(tex.get_editor_property("virtual_texture_streaming"))
+    lod = str(tex.get_editor_property("lod_group")).upper()
+    if "8BIT_DATA" in lod or "16BIT_DATA" in lod:
+        return _st("Data")
+    comp = str(tex.get_editor_property("compression_settings")).upper()
+    srgb = bool(tex.get_editor_property("srgb"))
+    v = "Virtual" if vt else ""
+    if "TC_NORMALMAP" in comp:
+        return _st(v + "Normal")
+    if "TC_GRAYSCALE" in comp:
+        return _st(v + ("Grayscale" if srgb else "LinearGrayscale"))
+    if "TC_ALPHA" in comp:
+        return _st(v + "Alpha")
+    if "TC_MASKS" in comp:
+        return _st(v + "Masks")
+    if "TC_DISTANCE_FIELD_FONT" in comp:
+        return _st("DistanceFieldFont")
+    return _st(v + ("Color" if srgb else "LinearColor"))
+
+
+_ALL_MP = [getattr(_MP, n) for n in dir(_MP) if n.upper().startswith("MP_") and "MAX" not in n.upper()]
+
+
+def _texture_exprs(mat):
+    """(expression, material property) for every texture expression reachable from the
+    material outputs."""
+    MEL = unreal.MaterialEditingLibrary
+    seen, out, stack = set(), [], []
+    for p in _ALL_MP:
+        try:
+            n = MEL.get_material_property_input_node(mat, p)
+        except Exception:
+            n = None
+        if n is not None:
+            stack.append((n, str(p)))
+    while stack:
+        n, via = stack.pop()
+        key = n.get_path_name()
+        if key in seen:
+            continue
+        seen.add(key)
+        if isinstance(n, unreal.MaterialExpressionTextureBase):
+            out.append((n, via))
+        try:
+            for i in (MEL.get_inputs_for_material_expression(mat, n) or []):
+                if i is not None:
+                    stack.append((i, via))
+        except Exception:
+            pass
+    return out
+
+
+def resync_samplers(mat_paths, fix=True):
+    """Make every texture expression's sampler_type match its texture (required_sampler).
+    Must run AFTER any texture sRGB/compression change. With fix=False only reports.
+    Returns [{material, mismatches:[{expr, via, texture, from, to}]}]."""
+    eal = unreal.EditorAssetLibrary
+    MEL = unreal.MaterialEditingLibrary
+    report = []
+    for p in mat_paths:
+        if not p or not eal.does_asset_exist(p):
+            continue
+        mat = eal.load_asset(p)
+        if not isinstance(mat, unreal.Material):
+            report.append({"material": p, "skipped": "not a UMaterial"})
+            continue
+        mism = []
+        for n, via in _texture_exprs(mat):
+            tex = n.get_editor_property("texture")
+            if tex is None:
+                continue
+            want = required_sampler(tex)
+            have = n.get_editor_property("sampler_type")
+            if have != want:
+                if fix:
+                    n.set_editor_property("sampler_type", want)
+                mism.append({"expr": n.get_name(), "via": via, "texture": tex.get_path_name(),
+                             "from": str(have), "to": str(want)})
+        if fix and mism:
+            MEL.recompile_material(mat)
+        report.append({"material": p, "mismatches": mism})
+    return report
+
+
+def count_sampler_mismatches(mat_paths):
+    return sum(len(r.get("mismatches", [])) for r in resync_samplers(mat_paths, fix=False))
+
+
+def rewire_fbx_shininess(mat_paths):
+    """UE's FBX importer links FBX sShininess -> Metallic (FbxMaterialImport.cpp), and
+    Blender's FBX exporter writes the Principled *roughness* texture to ShininessExponent
+    (metallic goes to ReflectionFactor, which UE ignores). So on a native import the
+    roughness map always lands on Metallic. Move it to Roughness and pin Metallic to 0
+    (the unconnected default; 4.26 MEL has no disconnect). Skipped if Roughness is
+    already driven. Returns a report list."""
+    eal = unreal.EditorAssetLibrary
+    MEL = unreal.MaterialEditingLibrary
+    report = []
+    for p in mat_paths:
+        if not p or not eal.does_asset_exist(p):
+            continue
+        mat = eal.load_asset(p)
+        if not isinstance(mat, unreal.Material):
+            continue
+        met = MEL.get_material_property_input_node(mat, _MP.MP_METALLIC)
+        if not (isinstance(met, unreal.MaterialExpressionTextureBase) and met.get_editor_property("texture")):
+            report.append({"material": p, "action": "none (Metallic not texture-driven)"})
+            continue
+        if MEL.get_material_property_input_node(mat, _MP.MP_ROUGHNESS) is not None:
+            report.append({"material": p, "action": "none (Roughness already connected)"})
+            continue
+        to_rough = bool(MEL.connect_material_property(met, "R", _MP.MP_ROUGHNESS))
+        zero = MEL.create_material_expression(mat, unreal.MaterialExpressionConstant, -300, -210)
+        zero.set_editor_property("r", 0.0)
+        met_zeroed = bool(MEL.connect_material_property(zero, "", _MP.MP_METALLIC))
+        MEL.recompile_material(mat)
+        report.append({"material": p, "texture": met.get_editor_property("texture").get_path_name(),
+                       "action": "Metallic->Roughness", "roughness_connected": to_rough,
+                       "metallic_zeroed": met_zeroed})
+    return report
+
+
+def pin_material_search_local(ui):
+    """UFbxImportUI's constructor loads the GUI's saved options from
+    Saved/Config/<Platform>/EditorPerProjectUserSettings.ini. If that file holds
+    MaterialSearchLocation=AllAssets (one GUI import does it), an FBX material named like one in ANOTHER prop
+    (e.g. every Blender export's 'OOD_Material') is then silently reused and re-saved
+    across packages. Pin it to the import folder. Runs even with import_materials=False."""
+    tid = ui.texture_import_data
+    tid.set_editor_property("material_search_location", unreal.MaterialSearchLocation.LOCAL)
+    ui.texture_import_data = tid
+    return str(ui.texture_import_data.get_editor_property("material_search_location"))
+
+
 def import_static_mesh(fbx, dest_path, sm_name):
     task = unreal.AssetImportTask()
     task.filename = fbx
@@ -109,11 +267,12 @@ def import_static_mesh(fbx, dest_path, sm_name):
     smid.set_editor_property("auto_generate_collision", True)
     smid.set_editor_property("combine_meshes", True)
     smid.set_editor_property("import_uniform_scale", 1.0)
+    search = pin_material_search_local(ui)
     task.options = ui
 
     tools = unreal.AssetToolsHelpers.get_asset_tools()
     tools.import_asset_tasks([task])
-    return list(task.imported_object_paths or [])
+    return list(task.imported_object_paths or []), search
 
 
 def import_static_mesh_native(fbx, dest_path, sm_name):
@@ -141,11 +300,12 @@ def import_static_mesh_native(fbx, dest_path, sm_name):
     smid.set_editor_property("auto_generate_collision", True)
     smid.set_editor_property("combine_meshes", True)
     smid.set_editor_property("import_uniform_scale", 1.0)
+    search = pin_material_search_local(ui)
     task.options = ui
 
     tools = unreal.AssetToolsHelpers.get_asset_tools()
     tools.import_asset_tasks([task])
-    return list(task.imported_object_paths or [])
+    return list(task.imported_object_paths or []), search
 
 
 def _texture_role(name):
@@ -405,7 +565,7 @@ def main():
             # Let UE's FBX importer build + auto-assign the material and create the
             # textures (same provenance as the working reference prop). No
             # MaterialEditingLibrary, no separate texture import, no M_<A>.
-            imported = import_static_mesh_native(a.fbx, dest_path, sm_name)
+            imported, data["material_search_location"] = import_static_mesh_native(a.fbx, dest_path, sm_name)
             sm, sm_path = find_static_mesh(imported, dest_path, sm_name)
             if sm is None:
                 raise RuntimeError(f"static mesh not found after import; imported={imported}")
@@ -418,6 +578,13 @@ def main():
             tex_report, tex_paths = fix_imported_textures(imported, dest_path=dest_path)
             data["textures"] = tex_report
             data["imported_texture_paths"] = tex_paths
+
+            # roughness map: FBX sShininess -> Metallic on import; move it to Roughness.
+            data["shininess_rewire"] = rewire_fbx_shininess(assigned_material_paths(sm))
+            # fix_imported_textures changes compression AFTER the sampler nodes exist, so
+            # re-derive every sampler type now (else e.g. Roughness stays VirtualColor but
+            # needs VirtualLinearGrayscale -> compile error at cook -> grey prop).
+            data["sampler_resync"] = resync_samplers(assigned_material_paths(sm))
 
             # CRITICAL: persist the material + textures UE created during native import.
             # import_asset_tasks(save=True) only reliably saves the PRIMARY asset (the SM);
@@ -453,9 +620,16 @@ def main():
                 raise RuntimeError(
                     "assigned material(s) not saved to disk after native import: "
                     f"{missing_mats}. Cook would fall back to WorldGridMaterial (grey).")
+            # a material outside the prop package would not be cooked with it (and means
+            # the FBX import reused another prop's material).
+            foreign = [p for p in mat_paths if p and not p.startswith(f"/Game/{A}/")]
+            data["foreign_material_assets"] = foreign
+            if foreign:
+                raise RuntimeError(f"assigned material(s) outside /Game/{A}/: {foreign}")
+            check_paths = mat_paths
         else:
             # ---- import SM ----
-            imported = import_static_mesh(a.fbx, dest_path, sm_name)
+            imported, data["material_search_location"] = import_static_mesh(a.fbx, dest_path, sm_name)
             sm, sm_path = find_static_mesh(imported, dest_path, sm_name)
             if sm is None:
                 raise RuntimeError(f"static mesh not found after import; imported={imported}")
@@ -501,17 +675,21 @@ def main():
             for slot, tex in tex_assets.items():
                 if slot not in SLOT_GRAPH:
                     continue
-                sampler, pin, prop = SLOT_GRAPH[slot]
+                _, pin, prop = SLOT_GRAPH[slot]
                 node = MEL.create_material_expression(mat, unreal.MaterialExpressionTextureSample, -450, y)
                 node.set_editor_property("texture", tex)
+                # VT-aware: a hardcoded non-virtual sampler on a VT texture fails to compile.
+                sampler = required_sampler(tex)
                 node.set_editor_property("sampler_type", sampler)
                 connected = MEL.connect_material_property(node, pin, prop)
-                graph.append({"slot": slot, "pin": pin, "connected": bool(connected)})
+                graph.append({"slot": slot, "pin": pin, "connected": bool(connected),
+                              "sampler": str(sampler)})
                 y += 230
             MEL.recompile_material(mat)
             eal.save_loaded_asset(mat)
             data["material_path"] = mat_path
             data["material_graph"] = graph
+            check_paths = [mat_path]
 
             # ---- assign the in-package material to all SM material slots ----
             static_materials = sm.get_editor_property("static_materials")
@@ -545,8 +723,16 @@ def main():
         tier1["pass"] = bool(tier1["has_collision"] and coverage_ok)
         data["tier1"] = tier1
 
-        ok = tier1["pass"]
-        err = None if ok else "Tier-1 collision verification failed (see data.tier1)."
+        # ---- material verify: any sampler mismatch left = grey prop after cook ----
+        data["sampler_mismatches_after"] = count_sampler_mismatches(check_paths)
+
+        ok = tier1["pass"] and data["sampler_mismatches_after"] == 0
+        err = None
+        if not tier1["pass"]:
+            err = "Tier-1 collision verification failed (see data.tier1)."
+        elif not ok:
+            err = ("TextureSample sampler type(s) still mismatched after resync "
+                   "(see data.sampler_resync); the material would fail to compile at cook.")
         write_verdict(a.out, ok, data, err)
         unreal.log(f"UE_IMPORT_DONE ok={ok} {sm_path}")
     except Exception as e:

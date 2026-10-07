@@ -166,9 +166,12 @@ Working directory: `$CARLA_SRC`. Open the editor with
        --textures_dir <src/textures> --out_dir <normalized/> --out <verdict.json>
    ```
 
-   **If the editor reports a texture-sampler error, disconnect the Metallic input.** This is the
-   single most common cause; see `ASSET_TRAPS.md` §5. The material must actually compile — an
-   uncompiled material cooks to a grey checkerboard.
+   **If the editor reports `Sampler type is X, should be Y`, set that node's Sampler Type to Y.**
+   This happens when a texture's sRGB or compression changes after it was wired, and with any
+   texture of 4096 × 4096 or larger (a virtual texture in this build). If the FBX import created
+   the material, its roughness map is wired to **Metallic**: move it to Roughness. See
+   `ASSET_TRAPS.md` §5. The material must actually compile — an uncompiled material cooks to a
+   grey checkerboard.
 
 6. **Set up collision.** In the Static Mesh editor:
    - Collision must be **convex elements** — if auto-generation produced nothing, add a convex
@@ -181,9 +184,12 @@ Working directory: `$CARLA_SRC`. Open the editor with
    them (`ASSET_TRAPS.md` §6). **Save All** (`Ctrl+Shift+S`) is the reliable way to do this by hand.
 
 > ### CHECKPOINT 2 — material and collision
-> This is the step that cannot be automated in UE 4.26: headlessly-authored materials cook to an
-> invalid shader and render as the grey `WorldGridMaterial` checkerboard. Only the interactive
-> editor compiles real shaders into the derived-data cache.
+> Steps 2–7 can also run headlessly: `stages/static/ue_import_material_collision.py` imports the
+> mesh and textures, builds the material with the right sampler types, sets collision and checks
+> it (see [`stages/README.md`](stages/README.md)). Its verdict fails if a sampler mismatch would
+> make the material fail to compile. Then open the editor only to check the pass conditions
+> below. (An earlier version of this procedure said this step could not be automated; the grey
+> checkerboard that prompted that was the sampler mismatch in `ASSET_TRAPS.md` §5.)
 >
 > **Pass when, in the editor:**
 > 1. `SM_<AssetName>` previews **textured**, not grey;
@@ -193,10 +199,10 @@ Working directory: `$CARLA_SRC`. Open the editor with
 >
 > Then **close the editor**. The cook must not run against a live editor.
 >
-> **Consequence for the cook:** because you authored the material interactively, the next cook must
-> be a **clean** cook. A warm cook reuses the empty shader cache from any earlier headless attempt,
-> logs `ShadersCompiled=0`, and the prop stays grey. A correct clean cook logs
-> `Missing cached shader map … compiling` with `ShadersCompiled > 0`.
+> **Consequence for the cook:** make the next cook a **clean** cook, so it does not reuse anything
+> cached from an earlier failed attempt. `make package` exits 0 even when a material fails to
+> compile, so check its log for `Failed to compile Material` with your asset's path;
+> `stages/static/cook_package.sh` does this check and stops before installing.
 >
 > A non-interactive re-verification of the collision half is available and worth running on resume:
 > ```bash
@@ -284,7 +290,8 @@ through it.
    make package ARGS="--packages=<AssetName>"      # --packages takes the CONTENT FOLDER name
    ```
 
-   Because CHECKPOINT 2 authored the material interactively, make this a **clean** cook.
+   Make this a **clean** cook, and check its log for `Failed to compile Material` with your
+   asset's path: the cook exits 0 even when a material failed (`ASSET_TRAPS.md` §5).
 
 2. **Install** into every CARLA you will evaluate with. The cook writes
    `$CARLA_SRC/Dist/<AssetName>_0.9.15-dirty.tar.gz`:

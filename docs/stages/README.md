@@ -61,10 +61,10 @@ toolchain paths; they do not fork it. Keep the three directories together.
 | `bpy_align_export.py` | align to the anchor, uniform-scale, export FBX, render for CHECKPOINT 1 | Blender |
 | `bpy_textured_render.py` | textured preview render before the cook | Blender |
 | `build_master_material.py` | one-time: create the shared master material | Unreal (headless) |
-| `ue_import_material_collision.py` | import mesh + textures, instance the material, set collision | Unreal (headless) |
+| `ue_import_material_collision.py` | import mesh + textures, build the material with matching sampler types, set and check collision | Unreal (headless) |
 | `tier1_collision_verify.py` | re-verify collision on an already-imported mesh | Unreal (headless) |
 | `carla_probe_test.py` | CHECKPOINT 4: spawn, assert `type_id`, drive a probe into it | python + `carla` |
-| `cook_package.sh` | `make package` + install into `carla_pkg` | bash |
+| `cook_package.sh` | `make package`, stop if the cook log shows a material compile failure, install into `carla_pkg` | bash |
 | `mark_state.py` | update the resumable state file | any python |
 
 ### `walker/`

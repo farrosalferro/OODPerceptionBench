@@ -133,8 +133,9 @@ Open the editor with `cd "$CARLA_SRC" && make launch`.
 5. **Wire the material** — Albedo → Base Color, Normal → Normal, Roughness → Roughness,
    Metalness → Metallic, AO → Ambient Occlusion, Emissive → Emissive Color. Packed `ORM` /
    `metallicRoughness` maps should be split into single channels first
-   (`stages/static/texture_classify.py` does this). **If you get a sampler error, disconnect
-   Metallic** — see `ASSET_TRAPS.md` §5.
+   (`stages/static/texture_classify.py` does this). **If you get a sampler-type error, set the
+   node's Sampler Type to the one the error names; if roughness landed on Metallic, move it to
+   Roughness** — see `ASSET_TRAPS.md` §5.
 
 6. **Import the animations** into `Animations`. Standalone clip FBXs are imported onto
    `<AssetName>_Skeleton`; clips that arrived inside the mesh FBX are simply moved into the folder.

@@ -126,16 +126,37 @@ only a running server settles registration.
 
 ---
 
-## 5. GATE-2 sampler error: disconnect Metallic
+## 5. Material compile errors: sampler type, and roughness on Metallic
 
-When wiring textures into the material, a recurring editor error names a texture sampler and
-refuses to compile. In every case we saw, the cause was the **Metallic** input: source assets
-frequently ship a packed ORM/roughness map that is not a valid single-channel metallic input, and
-the material graph will not resolve it.
+A material that does not compile still cooks, and `make package` still **exits 0**; the prop
+then renders with the grey **WorldGridMaterial checkerboard** (see §6). Two causes account for
+every case we saw.
 
-**Disconnect the Metallic input.** The prop renders correctly without it. This is not a
-workaround for a cosmetic problem — while the sampler error stands, the material does not compile,
-and an uncompiled material cooks to grey (see §6).
+**Sampler type does not match the texture.** Each TextureSample node has a sampler type that must
+match its texture: Color for an sRGB colour map, Linear Grayscale for a single-channel map with
+sRGB off, Normal for a normal map, and so on. In this CARLA build (`r.VirtualTextures=True`,
+`AutoVTSize=4096`), a texture of 4096 × 4096 or larger is imported as a *virtual* texture, and
+then needs the matching `Virtual*` sampler type. The editor sets the sampler type when you
+assign a texture, but not when you change the texture's sRGB or compression afterwards. A script
+that sets a fixed sampler type gets it wrong for every large texture. The error reads
+`Sampler type is Color, should be Virtual Color`, and the cook log then has
+`Failed to compile Material … Default Material will be used in game`. **Fix:** set the node's
+Sampler Type to the one the error names (re-assigning the texture in the editor does this).
+
+**Roughness ends up on Metallic.** Blender's FBX exporter writes the roughness texture to the
+FBX shininess slot, and UE's FBX importer connects that slot to **Metallic**. A material created
+by the FBX import therefore has the roughness map driving Metallic. Wire that texture to
+**Roughness** and leave Metallic unconnected (or a constant 0). The older advice here was to
+disconnect Metallic; that cleared the error but threw the roughness map away, so props made that
+way look darker and rougher than a correctly wired import of the same asset. Keep this in mind
+before comparing the look of props imported different ways.
+
+`stages/static/ue_import_material_collision.py` handles both for static props: it sets every
+sampler type from its texture, moves an FBX roughness map from Metallic to Roughness
+(`--native_material`), and fails if any mismatch remains. `stages/static/cook_package.sh` fails
+before install if the cook log reports a compile failure for the asset. The walker script
+`stages/walker/ue_walker_import.py` still sets fixed sampler types, so check its materials by
+hand when a walker texture is 4096 × 4096 or larger.
 
 ---
 
@@ -157,12 +178,12 @@ Nothing failed. The material package was simply never written, so the cook had n
 the material(s), and every texture. If you are scripting this, treat "no material package found for
 this mesh" as a **hard failure**, not a warning; there is no downstream check that will catch it.
 
-A related consequence in this UE 4.26 build: **headlessly-authored materials cook to an invalid
-shader** and also render as the grey checkerboard. Only the interactive editor compiles real
-shaders into the derived-data cache. If you author a material in the GUI after a previous headless
-attempt, the following cook must be a **clean** cook — otherwise it reuses the empty shader cache
-(`ShadersCompiled=0`) and the asset stays grey. A successful clean cook logs
-`Missing cached shader map … compiling` with `ShadersCompiled > 0`.
+A material that fails to compile also renders as the grey checkerboard, and the cook also exits
+0 (§5). An earlier version of this page said materials authored headlessly can never compile in
+this UE 4.26 build. That was wrong: the failures were the sampler-type mismatch in §5, and a
+headless script that sets the right sampler types cooks a textured prop. After fixing a material,
+make the next cook a **clean** cook, so it does not reuse anything cached from the failed attempt,
+and search its log for `Failed to compile Material` with your asset's path.
 
 ---
 
