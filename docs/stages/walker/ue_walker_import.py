@@ -12,8 +12,9 @@ scaffolding, verdict envelope and save-everything (grey-shader) discipline; DROP
 collision / Tier-1 half. Imports a skeletal mesh (+ new skeleton + physics asset), renames the
 three to the gold convention, imports each armature-only clip as an AnimSequence on that
 skeleton, imports the T_<W>_* textures with correct sRGB/compression, builds + assigns a
-per-asset material M_<W>, then saves everything. Material may still cook grey until the human
-fixes it at G2 (same UE-4.26 limitation as the static pipeline).
+per-asset material M_<W>, then saves everything. Sampler types are FIXED (non-virtual): a
+texture of 4096x4096 or larger imports as a virtual texture, the material then fails to compile
+and cooks grey, so check M_<W> in the editor at G2 (see docs/ASSET_TRAPS.md section 5).
 
 Success = the JSON verdict ok:true on disk, NOT the exit code (UE segfaults on teardown).
 Self-contained (UE python 3.7; the runbook operator resolves names in the client interpreter and passes argv).
