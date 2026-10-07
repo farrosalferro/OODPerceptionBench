@@ -146,10 +146,14 @@ Sampler Type to the one the error names (re-assigning the texture in the editor 
 **Roughness ends up on Metallic.** Blender's FBX exporter writes the roughness texture to the
 FBX shininess slot, and UE's FBX importer connects that slot to **Metallic**. A material created
 by the FBX import therefore has the roughness map driving Metallic. Wire that texture to
-**Roughness** and leave Metallic unconnected (or a constant 0). The older advice here was to
-disconnect Metallic; that cleared the error but threw the roughness map away, so props made that
-way look darker and rougher than a correctly wired import of the same asset. Keep this in mind
-before comparing the look of props imported different ways.
+**Roughness** and leave Metallic unconnected (or a constant 0). Blender does not export a separate
+metallic map in a form UE reads, so a material made by the FBX import has no metalness at all;
+that suits mostly non-metal props.
+
+Props made before this was understood can differ in look from a correct import of the same asset.
+If the roughness map was left on Metallic, the prop looks darker and grimier. If Metallic was
+simply disconnected (the older advice here), the roughness map is not used at all. Keep this in
+mind before comparing the look of props imported different ways.
 
 `stages/static/ue_import_material_collision.py` handles both for static props: it sets every
 sampler type from its texture, moves an FBX roughness map from Metallic to Roughness

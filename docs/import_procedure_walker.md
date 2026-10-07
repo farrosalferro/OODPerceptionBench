@@ -143,8 +143,9 @@ Open the editor with `cd "$CARLA_SRC" && make launch`.
 7. **Save every package the import created** — mesh, skeleton, physics asset, material, every
    texture, every clip. **Save All** (`Ctrl+Shift+S`).
 
-   A scripted version of steps 2–7 exists and is worth using as a starting point; the material
-   still needs the interactive pass at CHECKPOINT 2:
+   A scripted version of steps 2–7 exists and is worth using as a starting point. Check its
+   material in the editor at CHECKPOINT 2: the script sets fixed sampler types, which fail to
+   compile for any texture of 4096 × 4096 or larger (`ASSET_TRAPS.md` §5):
 
    ```bash
    "$UE4_ROOT/Engine/Binaries/Linux/UE4Editor-Cmd" "$CARLA_SRC/Unreal/CarlaUE4/CarlaUE4.uproject" \
@@ -165,8 +166,10 @@ Open the editor with `cd "$CARLA_SRC" && make launch`.
 > 3. every animation clip opens and plays on `<AssetName>_Skeleton` without a retarget warning;
 > 4. **Save All** is done and no package shows an unsaved marker.
 >
-> As with props, an interactively-authored material means the eventual cook must be a **clean**
-> cook — a warm cook reuses an empty shader cache and the walker stays grey.
+> As with props, make the eventual cook a **clean** cook, so it does not reuse anything cached
+> from an earlier failed attempt. The cook exits 0 even when a material fails to compile and the
+> walker then renders grey, so search its log for `Failed to compile Material` with your asset's
+> path (`ASSET_TRAPS.md` §5).
 
 ---
 

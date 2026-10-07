@@ -358,7 +358,9 @@ step says "copy from an existing vehicle", it means that one:
 > 3. `SM_<AssetName>` exists;
 > 4. **Save All** is done.
 >
-> Because the material was authored interactively, the eventual cook must be a **clean** cook.
+> Make the eventual cook a **clean** cook, so it does not reuse anything cached from an earlier
+> failed attempt, and search its log for `Failed to compile Material` with your asset's path: the
+> cook exits 0 even when a material fails to compile (`ASSET_TRAPS.md` §5).
 
 ## Stage 5 — Blueprints
 
